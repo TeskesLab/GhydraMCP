@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **Missing Data Name Filters**: Although name and name_contains were documented for data endpoints, they weren't actually implemented until now.
 
+### Changed
+- **Breaking: Ghidra 12.0.1 Update**: Updated Ghidra to 12.0.1.
+- **Breaking: Use Symbol FQN**: All endpoints now use fully-qualified symbol names to avoid collisions.
+  - Function lookups now supports granular searches for namespaced functions.
+  - Function renaming now supports moving the function to other namespaces.
+
 ## [2.0.0] - 2025-11-11
 
 ### Added
@@ -111,7 +117,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Initial release of GhydraMCP bridge
 - Basic Ghidra instance management tools
-- Function analysis tools 
+- Function analysis tools
 - Variable manipulation tools
 
 ## [1.0] - 2025-03-24
