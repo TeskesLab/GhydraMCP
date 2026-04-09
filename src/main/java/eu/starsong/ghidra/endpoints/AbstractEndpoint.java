@@ -5,11 +5,15 @@ import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpExchange;
 import eu.starsong.ghidra.api.GhidraJsonEndpoint;
 import eu.starsong.ghidra.api.ResponseBuilder; // Import ResponseBuilder
+import eu.starsong.ghidra.util.DecompilerCache;
 import eu.starsong.ghidra.util.GhidraUtil; // Import GhidraUtil
 import eu.starsong.ghidra.util.HttpUtil; // Import HttpUtil
 import ghidra.app.services.ProgramManager;
 import ghidra.framework.plugintool.PluginTool;
+import ghidra.program.model.data.Pointer;
+import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.symbol.Symbol;
 import ghidra.util.Msg;
 import java.io.IOException;
 import java.util.HashMap;
@@ -86,14 +90,24 @@ public abstract class AbstractEndpoint implements GhidraJsonEndpoint {
         return applyPagination(items, offset, limit, builder, basePath, null);
     }
 
-    protected final Gson gson = new Gson(); // Keep Gson if needed for specific object handling
+    protected final Gson gson = new Gson();
     protected Program currentProgram;
-    protected int port; // Add port field
+    protected int port;
+    protected DecompilerCache decompilerCache;
 
-    // Constructor to receive Program and Port
     public AbstractEndpoint(Program program, int port) {
         this.currentProgram = program;
         this.port = port;
+    }
+
+    public AbstractEndpoint(Program program, int port, DecompilerCache decompilerCache) {
+        this.currentProgram = program;
+        this.port = port;
+        this.decompilerCache = decompilerCache;
+    }
+
+    protected DecompilerCache getDecompilerCache() {
+        return decompilerCache;
     }
     
     // Get the current program - dynamically checks for program availability at runtime
@@ -179,4 +193,29 @@ public abstract class AbstractEndpoint implements GhidraJsonEndpoint {
     }
     
     // Add other common Ghidra related utilities here or call GhidraUtil directly
+
+    /**
+     * Safely resolve a symbol name, avoiding infinite recursion from pointer-to-pointer chains.
+     *
+     * Dynamic symbols compute their names from data types at their address. When data is a
+     * pointer to another pointer with a dynamic symbol, this creates a cycle:
+     * SymbolDB.getName() -> PointerDataType.getLabelString() -> SymbolUtilities.getDynamicName() -> SymbolDB.getName()
+     *
+     * For dynamic symbols at pointer addresses, we skip name resolution entirely and use the
+     * address. A try-catch on StackOverflowError acts as a safety net for unforeseen cases.
+     */
+    protected String safeGetSymbolName(Symbol symbol, Program program) {
+        try {
+            if (symbol.isDynamic()) {
+                Data data = program.getListing().getDefinedDataAt(symbol.getAddress());
+                if (data != null && data.getDataType() instanceof Pointer) {
+                    return symbol.getAddress().toString();
+                }
+            }
+            return symbol.getName();
+        } catch (StackOverflowError e) {
+            Msg.warn(this, "StackOverflow resolving symbol name at " + symbol.getAddress());
+            return symbol.getAddress().toString();
+        }
+    }
 }

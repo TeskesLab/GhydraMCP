@@ -4,6 +4,7 @@ package eu.starsong.ghidra;
 import eu.starsong.ghidra.api.*;
 import eu.starsong.ghidra.endpoints.*;
 import eu.starsong.ghidra.util.*;
+import eu.starsong.ghidra.util.DecompilerCache;
 import eu.starsong.ghidra.model.*;
 
 import java.io.IOException;
@@ -15,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 // For JSON response handling
 import com.google.gson.Gson;
@@ -52,6 +54,7 @@ public class GhydraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     private HttpServer server;
     private int port;
     private boolean isBaseInstance = false;
+    private DecompilerCache decompilerCache;
 
     /**
      * Constructor for GhydraMCP Plugin.
@@ -69,6 +72,8 @@ public class GhydraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
                 Msg.info(this, "Starting as base instance on port " + port);
             }
         }
+
+        this.decompilerCache = new DecompilerCache();
 
         Msg.info(this, "GhydraMCPPlugin loaded on port " + port);
         System.out.println("[GhydraMCP] Plugin loaded on port " + port);
@@ -90,8 +95,11 @@ public class GhydraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     private void startServer() throws IOException {
         server = HttpServer.create(new InetSocketAddress(port), 0);
         
-        // Use a cached thread pool for better performance with multiple concurrent requests
-        server.setExecutor(Executors.newCachedThreadPool());
+        // Use a cached thread pool with larger stack size to handle deep B-tree
+        // traversals in Ghidra's database (large binaries have deep index trees)
+        final long STACK_SIZE = 4 * 1024 * 1024; // 4 MB
+        ThreadFactory threadFactory = r -> new Thread(null, r, "GhydraMCP-handler", STACK_SIZE);
+        server.setExecutor(Executors.newCachedThreadPool(threadFactory));
 
         // --- Register Endpoints ---
         Program currentProgram = getCurrentProgram(); // Get program once
@@ -132,8 +140,8 @@ public class GhydraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         Program currentProgram = getCurrentProgram();
         Msg.info(this, "Current program at registration time: " + (currentProgram != null ? currentProgram.getName() : "none"));
         
-        new FunctionEndpoints(currentProgram, port, tool).registerEndpoints(server);
-        new VariableEndpoints(currentProgram, port, tool).registerEndpoints(server);
+        new FunctionEndpoints(currentProgram, port, tool, decompilerCache).registerEndpoints(server);
+        new VariableEndpoints(currentProgram, port, tool, decompilerCache).registerEndpoints(server);
         new ClassEndpoints(currentProgram, port, tool).registerEndpoints(server);
         new SegmentEndpoints(currentProgram, port, tool).registerEndpoints(server);
         new SymbolEndpoints(currentProgram, port, tool).registerEndpoints(server);
@@ -143,8 +151,9 @@ public class GhydraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         new MemoryEndpoints(currentProgram, port, tool).registerEndpoints(server);
         new XrefsEndpoints(currentProgram, port, tool).registerEndpoints(server);
         new AnalysisEndpoints(currentProgram, port, tool).registerEndpoints(server);
+        new ProjectManagementEndpoints(currentProgram, port, tool).registerEndpoints(server);
         new ProgramEndpoints(currentProgram, port, tool).registerEndpoints(server);
-        
+
         Msg.info(this, "Registered program-dependent endpoints. Programs will be checked at runtime.");
     }
     
@@ -447,8 +456,11 @@ public class GhydraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
      */
     @Override
     public void dispose() {
+        if (decompilerCache != null) {
+            decompilerCache.dispose();
+        }
         if (server != null) {
-            server.stop(0); // Stop immediately
+            server.stop(0);
             Msg.info(this, "GhydraMCP HTTP server stopped on port " + port);
             System.out.println("[GhydraMCP] HTTP server stopped on port " + port);
         }

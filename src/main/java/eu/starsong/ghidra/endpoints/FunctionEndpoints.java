@@ -5,7 +5,9 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import eu.starsong.ghidra.api.ResponseBuilder;
 import eu.starsong.ghidra.model.FunctionInfo;
+import eu.starsong.ghidra.util.DecompilerCache;
 import eu.starsong.ghidra.util.GhidraUtil;
+import eu.starsong.ghidra.util.HttpUtil;
 import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
@@ -42,9 +44,14 @@ public class FunctionEndpoints extends AbstractEndpoint {
     public FunctionEndpoints(Program program, int port) {
         super(program, port);
     }
-    
+
     public FunctionEndpoints(Program program, int port, PluginTool tool) {
         super(program, port);
+        this.tool = tool;
+    }
+
+    public FunctionEndpoints(Program program, int port, PluginTool tool, DecompilerCache cache) {
+        super(program, port, cache);
         this.tool = tool;
     }
     
@@ -56,16 +63,17 @@ public class FunctionEndpoints extends AbstractEndpoint {
     @Override
     public void registerEndpoints(HttpServer server) {
         // Register endpoints in order from most specific to least specific to ensure proper URL path matching
-        
+        // Use safeHandler wrapper to catch StackOverflowError and other critical errors
+
         // Specifically handle sub-resource endpoints first (these are the most specific)
-        server.createContext("/functions/by-name/", this::handleFunctionByName);
-        
+        server.createContext("/functions/by-name/", HttpUtil.safeHandler(this::handleFunctionByName, port));
+
         // Then handle address-based endpoints with clear pattern matching
-        server.createContext("/functions/", this::handleFunctionByAddress);
-        
+        server.createContext("/functions/", HttpUtil.safeHandler(this::handleFunctionByAddress, port));
+
         // Base endpoint last as it's least specific
-        server.createContext("/functions", this::handleFunctions);
-        
+        server.createContext("/functions", HttpUtil.safeHandler(this::handleFunctions, port));
+
         // Register function-specific endpoints
         registerAdditionalEndpoints(server);
     }
@@ -94,10 +102,10 @@ public class FunctionEndpoints extends AbstractEndpoint {
             // Get the current program
             Program program = getCurrentProgram();
             if (program == null) {
-                sendErrorResponse(exchange, 503, "No program is currently loaded", "NO_PROGRAM_LOADED");
+                sendErrorResponse(exchange, 400, "No program is currently loaded", "NO_PROGRAM_LOADED");
                 return;
             }
-            
+
             // Extract function address from path
             String functionAddress = path.substring("/functions/".length());
             
@@ -403,7 +411,7 @@ public class FunctionEndpoints extends AbstractEndpoint {
         if (newName != null && !newName.isEmpty() && !newName.equals(function.getName())) {
             // Rename function
             try {
-                TransactionHelper.executeInTransaction(program, "Rename Function", () -> {
+                TransactionHelper.executeInTransaction(program, "Rename function to " + newName, () -> {
                     function.setName(newName, ghidra.program.model.symbol.SourceType.USER_DEFINED);
                     return null;
                 });
@@ -413,14 +421,13 @@ public class FunctionEndpoints extends AbstractEndpoint {
                 return;
             }
         }
-        
+
         if (signature != null && !signature.isEmpty()) {
-            // Update function signature using our utility method
             try {
-                boolean success = TransactionHelper.executeInTransaction(program, "Set Function Signature", () -> {
+                boolean success = TransactionHelper.executeInTransaction(program, "Set function signature for " + function.getName(), () -> {
                     return GhidraUtil.setFunctionSignature(function, signature);
                 });
-                
+
                 if (!success) {
                     sendErrorResponse(exchange, 400, "Failed to set function signature: invalid signature format", "SIGNATURE_FAILED");
                     return;
@@ -431,11 +438,10 @@ public class FunctionEndpoints extends AbstractEndpoint {
                 return;
             }
         }
-        
+
         if (comment != null) {
-            // Update comment
             try {
-                TransactionHelper.executeInTransaction(program, "Set Function Comment", () -> {
+                TransactionHelper.executeInTransaction(program, "Set comment on function " + function.getName(), () -> {
                     function.setComment(comment);
                     return null;
                 });
@@ -445,24 +451,24 @@ public class FunctionEndpoints extends AbstractEndpoint {
                 return;
             }
         }
-        
+
         if (!changed) {
             sendErrorResponse(exchange, 400, "No changes specified", "NO_CHANGES");
             return;
         }
-        
+
         // Return updated function with RESTful response structure
         FunctionInfo info = buildFunctionInfo(function);
-        
+
         ResponseBuilder builder = new ResponseBuilder(exchange, port)
             .success(true)
             .result(info);
-        
+
         // Add HATEOAS links
         builder.addLink("self", "/programs/current/functions/" + function.getEntryPoint());
         builder.addLink("by_name", "/programs/current/functions/by-name/" + function.getName());
         builder.addLink("program", "/programs/current");
-        
+
         sendJsonResponse(exchange, builder.build(), 200);
     }
     
@@ -521,81 +527,38 @@ public class FunctionEndpoints extends AbstractEndpoint {
             return;
         }
         
-        // Attempt to disassemble the code at the specified address before creating a function
+        // Use CreateFunctionCmd — same as pressing F in the UI
         try {
-            TransactionHelper.executeInTransaction(program, "Disassemble Before Function Creation", () -> {
-                // Check if there's already a defined instruction at the address
-                if (program.getListing().getInstructionAt(address) == null) {
-                    // Attempt to directly disassemble at the address
-                    try {
-                        ghidra.app.cmd.disassemble.DisassembleCommand cmd = 
-                            new ghidra.app.cmd.disassemble.DisassembleCommand(address, null, true);
-                        cmd.applyTo(program);
-                    } catch (Exception ex) {
-                        Msg.warn(this, "Basic disassembly failed: " + ex.getMessage());
-                    }
+            Function function = TransactionHelper.executeInTransaction(program, "Create function at " + addressStr, () -> {
+                ghidra.app.cmd.function.CreateFunctionCmd cmd =
+                    new ghidra.app.cmd.function.CreateFunctionCmd(address);
+                if (!cmd.applyTo(program)) {
+                    throw new Exception(cmd.getStatusMsg());
                 }
-                return null;
+                return program.getFunctionManager().getFunctionAt(address);
             });
-        } catch (Exception e) {
-            // Log the error but proceed with function creation attempt anyway
-            Msg.warn(this, "Disassembly before function creation failed: " + e.getMessage());
-        }
-        
-        // Create function
-        Function function;
-        try {
-            function = TransactionHelper.executeInTransaction(program, "Create Function", () -> {
-                return program.getFunctionManager().createFunction(null, address, null, null);
-            });
-        } catch (Exception e) {
-            // If function creation initially fails, try a different approach
-            try {
-                Msg.info(this, "Initial function creation failed, attempting with code unit clearing");
-                
-                // Clear any existing data at this location and try disassembling again
-                TransactionHelper.executeInTransaction(program, "Clear and Disassemble", () -> {
-                    // Clear existing data at the address
-                    program.getListing().clearCodeUnits(address, address, false);
-                    
-                    // Try disassembling again
-                    ghidra.app.cmd.disassemble.DisassembleCommand cmd = 
-                        new ghidra.app.cmd.disassemble.DisassembleCommand(address, null, true);
-                    cmd.applyTo(program);
-                    return null;
-                });
-                
-                // Try creating the function again
-                function = TransactionHelper.executeInTransaction(program, "Create Function Retry", () -> {
-                    return program.getFunctionManager().createFunction(null, address, null, null);
-                });
-            } catch (Exception e2) {
-                // Both attempts failed, return the error
-                sendErrorResponse(exchange, 400, "Failed to create function after multiple attempts: " + e.getMessage(), "CREATE_FAILED");
+
+            if (function == null) {
+                sendErrorResponse(exchange, 500, "Function created but not found at address", "CREATE_FAILED");
                 return;
             }
+
+            FunctionInfo info = buildFunctionInfo(function);
+
+            ResponseBuilder builder = new ResponseBuilder(exchange, port)
+                .success(true)
+                .result(info);
+
+            builder.addLink("self", "/functions/" + function.getEntryPoint());
+            builder.addLink("by_name", "/functions/by-name/" + function.getName());
+            builder.addLink("program", "/program");
+            builder.addLink("decompile", "/functions/" + function.getEntryPoint() + "/decompile");
+            builder.addLink("disassembly", "/functions/" + function.getEntryPoint() + "/disassembly");
+
+            sendJsonResponse(exchange, builder.build(), 201);
+        } catch (Exception e) {
+            sendErrorResponse(exchange, 400, "Failed to create function: " + e.getMessage(), "CREATE_FAILED");
         }
-        
-        if (function == null) {
-            sendErrorResponse(exchange, 500, "Failed to create function", "CREATE_FAILED");
-            return;
-        }
-        
-        // Return created function with RESTful response structure
-        FunctionInfo info = buildFunctionInfo(function);
-        
-        ResponseBuilder builder = new ResponseBuilder(exchange, port)
-            .success(true)
-            .result(info);
-        
-        // Add HATEOAS links
-        builder.addLink("self", "/programs/current/functions/" + function.getEntryPoint());
-        builder.addLink("by_name", "/programs/current/functions/by-name/" + function.getName());
-        builder.addLink("program", "/programs/current");
-        builder.addLink("decompile", "/programs/current/functions/" + function.getEntryPoint() + "/decompile");
-        builder.addLink("disassembly", "/programs/current/functions/" + function.getEntryPoint() + "/disassembly");
-        
-        sendJsonResponse(exchange, builder.build(), 201);
     }
 
     /**
@@ -606,10 +569,10 @@ public class FunctionEndpoints extends AbstractEndpoint {
             // Always check for program availability first
             Program program = getCurrentProgram();
             if (program == null) {
-                sendErrorResponse(exchange, 503, "No program is currently loaded", "NO_PROGRAM_LOADED");
+                sendErrorResponse(exchange, 400, "No program is currently loaded", "NO_PROGRAM_LOADED");
                 return;
             }
-            
+
             if ("GET".equals(exchange.getRequestMethod())) {
                 Map<String, String> params = parseQueryParams(exchange);
                 int offset = parseIntOrDefault(params.get("offset"), 0);
@@ -618,45 +581,98 @@ public class FunctionEndpoints extends AbstractEndpoint {
                 String nameContainsFilter = params.get("name_contains");
                 String nameRegexFilter = params.get("name_matches_regex");
                 String addrFilter = params.get("addr");
-                
+                String containingAddrFilter = params.get("containing_addr");
+
                 List<Map<String, Object>> functions = new ArrayList<>();
-                
-                // Get all functions
-                for (Function f : program.getFunctionManager().getFunctions(true)) {
-                    // Apply filters
-                    if (nameFilter != null && !f.getName().equals(nameFilter)) {
-                        continue;
+
+                // Handle special case: if containing_addr is specified, find the function containing that address
+                if (containingAddrFilter != null && !containingAddrFilter.isEmpty()) {
+                    try {
+                        Address containingAddr = program.getAddressFactory().getAddress(containingAddrFilter);
+                        Function containingFunc = program.getFunctionManager().getFunctionContaining(containingAddr);
+
+                        if (containingFunc != null) {
+                            // Apply other filters to the found function
+                            boolean matches = true;
+
+                            if (nameFilter != null && !containingFunc.getName().equals(nameFilter)) {
+                                matches = false;
+                            }
+
+                            if (nameContainsFilter != null && !containingFunc.getName().toLowerCase().contains(nameContainsFilter.toLowerCase())) {
+                                matches = false;
+                            }
+
+                            if (nameRegexFilter != null && !containingFunc.getName().matches(nameRegexFilter)) {
+                                matches = false;
+                            }
+
+                            if (addrFilter != null && !containingFunc.getEntryPoint().toString().equals(addrFilter)) {
+                                matches = false;
+                            }
+
+                            if (matches) {
+                                Map<String, Object> func = new HashMap<>();
+                                func.put("name", containingFunc.getName());
+                                func.put("address", containingFunc.getEntryPoint().toString());
+
+                                // Add HATEOAS links (fixed to use proper URL paths)
+                                Map<String, Object> links = new HashMap<>();
+                                Map<String, String> selfLink = new HashMap<>();
+                                selfLink.put("href", "/functions/" + containingFunc.getEntryPoint());
+                                links.put("self", selfLink);
+
+                                Map<String, String> programLink = new HashMap<>();
+                                programLink.put("href", "/program");
+                                links.put("program", programLink);
+
+                                func.put("_links", links);
+
+                                functions.add(func);
+                            }
+                        }
+                    } catch (Exception e) {
+                        sendErrorResponse(exchange, 400, "Invalid containing_addr format: " + containingAddrFilter, "INVALID_PARAMETER");
+                        return;
                     }
-                    
-                    if (nameContainsFilter != null && !f.getName().toLowerCase().contains(nameContainsFilter.toLowerCase())) {
-                        continue;
+                } else {
+                    // Get all functions
+                    for (Function f : program.getFunctionManager().getFunctions(true)) {
+                        // Apply filters
+                        if (nameFilter != null && !f.getName().equals(nameFilter)) {
+                            continue;
+                        }
+
+                        if (nameContainsFilter != null && !f.getName().toLowerCase().contains(nameContainsFilter.toLowerCase())) {
+                            continue;
+                        }
+
+                        if (nameRegexFilter != null && !f.getName().matches(nameRegexFilter)) {
+                            continue;
+                        }
+
+                        if (addrFilter != null && !f.getEntryPoint().toString().equals(addrFilter)) {
+                            continue;
+                        }
+
+                        Map<String, Object> func = new HashMap<>();
+                        func.put("name", f.getName());
+                        func.put("address", f.getEntryPoint().toString());
+
+                        // Add HATEOAS links (fixed to use proper URL paths)
+                        Map<String, Object> links = new HashMap<>();
+                        Map<String, String> selfLink = new HashMap<>();
+                        selfLink.put("href", "/functions/" + f.getEntryPoint());
+                        links.put("self", selfLink);
+
+                        Map<String, String> programLink = new HashMap<>();
+                        programLink.put("href", "/program");
+                        links.put("program", programLink);
+
+                        func.put("_links", links);
+
+                        functions.add(func);
                     }
-                    
-                    if (nameRegexFilter != null && !f.getName().matches(nameRegexFilter)) {
-                        continue;
-                    }
-                    
-                    if (addrFilter != null && !f.getEntryPoint().toString().equals(addrFilter)) {
-                        continue;
-                    }
-                    
-                    Map<String, Object> func = new HashMap<>();
-                    func.put("name", f.getName());
-                    func.put("address", f.getEntryPoint().toString());
-                    
-                    // Add HATEOAS links (fixed to use proper URL paths)
-                    Map<String, Object> links = new HashMap<>();
-                    Map<String, String> selfLink = new HashMap<>();
-                    selfLink.put("href", "/functions/" + f.getEntryPoint());
-                    links.put("self", selfLink);
-                    
-                    Map<String, String> programLink = new HashMap<>();
-                    programLink.put("href", "/program");
-                    links.put("program", programLink);
-                    
-                    func.put("_links", links);
-                    
-                    functions.add(func);
                 }
                 
                 // Apply pagination
@@ -837,7 +853,7 @@ public class FunctionEndpoints extends AbstractEndpoint {
     public void handleGetFunction(HttpExchange exchange, String functionName) throws IOException {
         Program program = getCurrentProgram();
         if (program == null) {
-            sendErrorResponse(exchange, 503, "No program is currently loaded", "NO_PROGRAM_LOADED");
+            sendErrorResponse(exchange, 400, "No program is currently loaded", "NO_PROGRAM_LOADED");
             return;
         }
         
@@ -875,7 +891,7 @@ public class FunctionEndpoints extends AbstractEndpoint {
     private void handleUpdateFunction(HttpExchange exchange, String functionName) throws IOException {
         Program program = getCurrentProgram();
         if (program == null) {
-            sendErrorResponse(exchange, 503, "No program is currently loaded", "NO_PROGRAM_LOADED");
+            sendErrorResponse(exchange, 400, "No program is currently loaded", "NO_PROGRAM_LOADED");
             return;
         }
         
@@ -897,7 +913,7 @@ public class FunctionEndpoints extends AbstractEndpoint {
         if (newName != null && !newName.isEmpty() && !newName.equals(function.getName())) {
             // Rename function
             try {
-                TransactionHelper.executeInTransaction(program, "Rename Function", () -> {
+                TransactionHelper.executeInTransaction(program, "Rename function to " + newName, () -> {
                     function.setName(newName, ghidra.program.model.symbol.SourceType.USER_DEFINED);
                     return null;
                 });
@@ -907,14 +923,13 @@ public class FunctionEndpoints extends AbstractEndpoint {
                 return;
             }
         }
-        
+
         if (signature != null && !signature.isEmpty()) {
-            // Update function signature using our utility method
             try {
-                boolean success = TransactionHelper.executeInTransaction(program, "Set Function Signature", () -> {
+                boolean success = TransactionHelper.executeInTransaction(program, "Set function signature for " + function.getName(), () -> {
                     return GhidraUtil.setFunctionSignature(function, signature);
                 });
-                
+
                 if (!success) {
                     sendErrorResponse(exchange, 400, "Failed to set function signature: invalid signature format", "SIGNATURE_FAILED");
                     return;
@@ -925,11 +940,10 @@ public class FunctionEndpoints extends AbstractEndpoint {
                 return;
             }
         }
-        
+
         if (comment != null) {
-            // Update comment
             try {
-                TransactionHelper.executeInTransaction(program, "Set Function Comment", () -> {
+                TransactionHelper.executeInTransaction(program, "Set comment on function " + function.getName(), () -> {
                     function.setComment(comment);
                     return null;
                 });
@@ -939,12 +953,12 @@ public class FunctionEndpoints extends AbstractEndpoint {
                 return;
             }
         }
-        
+
         if (!changed) {
             sendErrorResponse(exchange, 400, "No changes specified", "NO_CHANGES");
             return;
         }
-        
+
         // Return updated function
         FunctionInfo info = buildFunctionInfo(function);
         
@@ -972,7 +986,7 @@ public class FunctionEndpoints extends AbstractEndpoint {
     private void handleCreateFunction(HttpExchange exchange) throws IOException {
         Program program = getCurrentProgram();
         if (program == null) {
-            sendErrorResponse(exchange, 503, "No program is currently loaded", "NO_PROGRAM_LOADED");
+            sendErrorResponse(exchange, 400, "No program is currently loaded", "NO_PROGRAM_LOADED");
             return;
         }
         
@@ -1007,77 +1021,36 @@ public class FunctionEndpoints extends AbstractEndpoint {
             return;
         }
 
-        // Attempt to disassemble the code at the specified address before creating a function
+        // Use CreateFunctionCmd — same as pressing F in the UI
         try {
-            TransactionHelper.executeInTransaction(program, "Disassemble Before Function Creation", () -> {
-                // Check if there's already a defined instruction at the address
-                if (program.getListing().getInstructionAt(address) == null) {
-                    // Attempt to directly disassemble at the address
-                    try {
-                        ghidra.app.cmd.disassemble.DisassembleCommand cmd = 
-                            new ghidra.app.cmd.disassemble.DisassembleCommand(address, null, true);
-                        cmd.applyTo(program);
-                    } catch (Exception ex) {
-                        Msg.warn(this, "Basic disassembly failed: " + ex.getMessage());
-                    }
+            Function function = TransactionHelper.executeInTransaction(program, "Create function at " + addressStr, () -> {
+                ghidra.app.cmd.function.CreateFunctionCmd cmd =
+                    new ghidra.app.cmd.function.CreateFunctionCmd(address);
+                if (!cmd.applyTo(program)) {
+                    throw new Exception(cmd.getStatusMsg());
                 }
-                return null;
+                return program.getFunctionManager().getFunctionAt(address);
             });
-        } catch (Exception e) {
-            // Log the error but proceed with function creation attempt anyway
-            Msg.warn(this, "Disassembly before function creation failed: " + e.getMessage());
-        }
-        
-        // Create function
-        Function function;
-        try {
-            function = TransactionHelper.executeInTransaction(program, "Create Function", () -> {
-                return program.getFunctionManager().createFunction(null, address, null, null);
-            });
-        } catch (Exception e) {
-            // If function creation initially fails, try a different approach
-            try {
-                Msg.info(this, "Initial function creation failed, attempting with code unit clearing");
-                
-                // Clear any existing data at this location and try disassembling again
-                TransactionHelper.executeInTransaction(program, "Clear and Disassemble", () -> {
-                    // Clear existing data at the address
-                    program.getListing().clearCodeUnits(address, address, false);
-                    
-                    // Try disassembling again
-                    ghidra.app.cmd.disassemble.DisassembleCommand cmd = 
-                        new ghidra.app.cmd.disassemble.DisassembleCommand(address, null, true);
-                    cmd.applyTo(program);
-                    return null;
-                });
-                
-                // Try creating the function again
-                function = TransactionHelper.executeInTransaction(program, "Create Function Retry", () -> {
-                    return program.getFunctionManager().createFunction(null, address, null, null);
-                });
-            } catch (Exception e2) {
-                // Both attempts failed, return the error
-                sendErrorResponse(exchange, 400, "Failed to create function after multiple attempts: " + e.getMessage(), "CREATE_FAILED");
+
+            if (function == null) {
+                sendErrorResponse(exchange, 500, "Function created but not found at address", "CREATE_FAILED");
                 return;
             }
+
+            FunctionInfo info = buildFunctionInfo(function);
+
+            ResponseBuilder builder = new ResponseBuilder(exchange, port)
+                .success(true)
+                .result(info);
+
+            builder.addLink("self", "/functions/" + function.getEntryPoint());
+            builder.addLink("by_name", "/functions/by-name/" + function.getName());
+            builder.addLink("program", "/program");
+
+            sendJsonResponse(exchange, builder.build(), 201);
+        } catch (Exception e) {
+            sendErrorResponse(exchange, 400, "Failed to create function: " + e.getMessage(), "CREATE_FAILED");
         }
-        
-        if (function == null) {
-            sendErrorResponse(exchange, 500, "Failed to create function", "CREATE_FAILED");
-            return;
-        }
-        
-        // Return created function
-        FunctionInfo info = buildFunctionInfo(function);
-        
-        ResponseBuilder builder = new ResponseBuilder(exchange, port)
-            .success(true)
-            .result(info);
-        
-        // Add HATEOAS links
-        builder.addLink("self", "/functions/" + function.getName());
-        
-        sendJsonResponse(exchange, builder.build(), 201);
     }
 
     /**
@@ -1089,6 +1062,7 @@ public class FunctionEndpoints extends AbstractEndpoint {
             boolean syntaxTree = Boolean.parseBoolean(params.getOrDefault("syntax_tree", "false"));
             String style = params.getOrDefault("style", "normalize");
             String format = params.getOrDefault("format", "structured");
+            boolean showConstants = Boolean.parseBoolean(params.getOrDefault("show_constants", "true"));
             int timeout = parseIntOrDefault(params.get("timeout"), 30);
 
             // Line filtering parameters for context management
@@ -1096,8 +1070,14 @@ public class FunctionEndpoints extends AbstractEndpoint {
             int endLine = parseIntOrDefault(params.get("end_line"), -1);
             int maxLines = parseIntOrDefault(params.get("max_lines"), -1);
 
-            // Decompile function
-            String decompilation = GhidraUtil.decompileFunction(function);
+            // Decompile function — use cache if available, fall back to static method
+            String decompilation;
+            DecompilerCache cache = getDecompilerCache();
+            if (cache != null) {
+                decompilation = cache.getDecompiledCode(function, timeout);
+            } else {
+                decompilation = GhidraUtil.decompileFunction(function, showConstants, timeout);
+            }
 
             // Apply line filtering if requested
             String filteredDecompilation = decompilation;
@@ -1181,31 +1161,32 @@ public class FunctionEndpoints extends AbstractEndpoint {
      */
     public void handleDisassembleFunction(HttpExchange exchange, Function function) throws IOException {
         if ("GET".equals(exchange.getRequestMethod())) {
-            List<Map<String, Object>> disassembly = new ArrayList<>();
-            
+            Map<String, String> params = parseQueryParams(exchange);
+            int offset = parseIntOrDefault(params.get("offset"), 0);
+            int limit = parseIntOrDefault(params.get("limit"), 0);
+
+            List<Map<String, Object>> allInstructions = new ArrayList<>();
+
             Program program = function.getProgram();
             if (program != null) {
                 try {
-                    // Get actual disassembly from the program
                     Address startAddr = function.getEntryPoint();
                     Address endAddr = function.getBody().getMaxAddress();
-                    
+
                     ghidra.program.model.listing.Listing listing = program.getListing();
-                    ghidra.program.model.listing.InstructionIterator instrIter = 
+                    ghidra.program.model.listing.InstructionIterator instrIter =
                         listing.getInstructions(startAddr, true);
-                    
-                    while (instrIter.hasNext() && disassembly.size() < 100) {
+
+                    while (instrIter.hasNext()) {
                         ghidra.program.model.listing.Instruction instr = instrIter.next();
-                        
-                        // Stop if we've gone past the end of the function
+
                         if (instr.getAddress().compareTo(endAddr) > 0) {
                             break;
                         }
-                        
+
                         Map<String, Object> instrMap = new HashMap<>();
                         instrMap.put("address", instr.getAddress().toString());
-                        
-                        // Get actual bytes
+
                         byte[] bytes = new byte[instr.getLength()];
                         program.getMemory().getBytes(instr.getAddress(), bytes);
                         StringBuilder hexBytes = new StringBuilder();
@@ -1213,19 +1194,17 @@ public class FunctionEndpoints extends AbstractEndpoint {
                             hexBytes.append(String.format("%02X", b & 0xFF));
                         }
                         instrMap.put("bytes", hexBytes.toString());
-                        
-                        // Get mnemonic and operands
+
                         instrMap.put("mnemonic", instr.getMnemonicString());
                         instrMap.put("operands", instr.toString().substring(instr.getMnemonicString().length()).trim());
-                        
-                        disassembly.add(instrMap);
+
+                        allInstructions.add(instrMap);
                     }
                 } catch (Exception e) {
                     Msg.error(this, "Error getting disassembly for function: " + function.getName(), e);
                 }
-                
-                // If we couldn't get real instructions, add placeholder
-                if (disassembly.isEmpty()) {
+
+                if (allInstructions.isEmpty()) {
                     Address addr = function.getEntryPoint();
                     for (int i = 0; i < 5; i++) {
                         Map<String, Object> instruction = new HashMap<>();
@@ -1233,34 +1212,56 @@ public class FunctionEndpoints extends AbstractEndpoint {
                         instruction.put("mnemonic", "???");
                         instruction.put("operands", "???");
                         instruction.put("bytes", "????");
-                        disassembly.add(instruction);
+                        allInstructions.add(instruction);
                         addr = addr.add(2);
                     }
                 }
             }
-            
+
+            int totalCount = allInstructions.size();
+
+            // Apply pagination: offset/limit. limit=0 means return all.
+            int startIndex = Math.min(offset, totalCount);
+            int endIndex = (limit > 0) ? Math.min(startIndex + limit, totalCount) : totalCount;
+            List<Map<String, Object>> page = allInstructions.subList(startIndex, endIndex);
+
             Map<String, Object> functionInfo = new HashMap<>();
             functionInfo.put("address", function.getEntryPoint().toString());
             functionInfo.put("name", function.getName());
             functionInfo.put("signature", function.getSignature().toString());
-            
+
             Map<String, Object> result = new HashMap<>();
             result.put("function", functionInfo);
-            result.put("instructions", disassembly);
-            
+            result.put("instructions", page);
+            result.put("totalInstructions", totalCount);
+            result.put("offset", startIndex);
+            result.put("limit", limit);
+            result.put("returned", page.size());
+
             ResponseBuilder builder = new ResponseBuilder(exchange, port)
                 .success(true)
                 .result(result);
-            
-            // Update to use the correct paths
+
             String functionPath = "/functions/" + function.getEntryPoint().toString();
-            
-            builder.addLink("self", functionPath + "/disassembly");
+            String basePath = functionPath + "/disassembly";
+
+            if (limit > 0) {
+                builder.addLink("self", basePath + "?offset=" + startIndex + "&limit=" + limit);
+                if (endIndex < totalCount) {
+                    builder.addLink("next", basePath + "?offset=" + endIndex + "&limit=" + limit);
+                }
+                if (startIndex > 0) {
+                    int prevOffset = Math.max(0, startIndex - limit);
+                    builder.addLink("prev", basePath + "?offset=" + prevOffset + "&limit=" + limit);
+                }
+            } else {
+                builder.addLink("self", basePath);
+            }
             builder.addLink("function", functionPath);
             builder.addLink("decompile", functionPath + "/decompile");
             builder.addLink("variables", functionPath + "/variables");
             builder.addLink("program", "/program");
-            
+
             sendJsonResponse(exchange, builder.build(), 200);
         } else {
             sendErrorResponse(exchange, 405, "Method Not Allowed", "METHOD_NOT_ALLOWED");
@@ -1272,7 +1273,15 @@ public class FunctionEndpoints extends AbstractEndpoint {
      */
     public void handleFunctionVariables(HttpExchange exchange, Function function) throws IOException {
         if ("GET".equals(exchange.getRequestMethod())) {
-            List<Map<String, Object>> variables = GhidraUtil.getFunctionVariables(function);
+            List<Map<String, Object>> variables;
+            DecompilerCache cache = getDecompilerCache();
+            if (cache != null) {
+                DecompileResults results = cache.getDecompileResults(function, 30);
+                HighFunction hf = (results != null && results.decompileCompleted()) ? results.getHighFunction() : null;
+                variables = GhidraUtil.getFunctionVariables(function, hf);
+            } else {
+                variables = GhidraUtil.getFunctionVariables(function);
+            }
             
             Map<String, Object> functionInfo = new HashMap<>();
             functionInfo.put("address", function.getEntryPoint().toString());
@@ -1339,30 +1348,40 @@ public class FunctionEndpoints extends AbstractEndpoint {
                 return;
             }
             
-            boolean success = TransactionHelper.executeInTransaction(program, "Update Variable", () -> {
+            // Get DecompileResults — prefer cache
+            DecompilerCache cache = getDecompilerCache();
+            DecompileResults decompResults;
+            if (cache != null) {
+                decompResults = cache.getDecompileResults(function, 30);
+            } else {
+                DecompInterface decomp = new DecompInterface();
                 try {
-                    // This requires a decompile operation to get the HighFunction
-                    DecompInterface decomp = new DecompInterface();
-                    try {
-                        decomp.openProgram(program);
-                        DecompileResults results = decomp.decompileFunction(function, 30, new ConsoleTaskMonitor());
-                        
-                        if (results.decompileCompleted()) {
-                            HighFunction highFunc = results.getHighFunction();
-                            if (highFunc != null) {
-                                // Find the variable in the high function
-                                for (Iterator<HighSymbol> symbolIter = highFunc.getLocalSymbolMap().getSymbols(); symbolIter.hasNext();) {
-                                    HighSymbol symbol = symbolIter.next();
-                                    if (symbol.getName().equals(variableName)) {
-                                        // Rename the variable using HighFunctionDBUtil
-                                        HighFunctionDBUtil.updateDBVariable(symbol, newName, null, SourceType.USER_DEFINED);
-                                        return true;
-                                    }
-                                }
-                            }
+                    decomp.openProgram(program);
+                    decompResults = decomp.decompileFunction(function, 30, new ConsoleTaskMonitor());
+                } finally {
+                    decomp.dispose();
+                }
+            }
+
+            if (decompResults == null || !decompResults.decompileCompleted()) {
+                sendErrorResponse(exchange, 500, "Decompilation failed for " + function.getName(), "DECOMPILE_FAILED");
+                return;
+            }
+
+            HighFunction highFunc = decompResults.getHighFunction();
+            if (highFunc == null) {
+                sendErrorResponse(exchange, 500, "No high function available", "DECOMPILE_FAILED");
+                return;
+            }
+
+            boolean success = TransactionHelper.executeInTransaction(program, "Update variable " + variableName + " in " + function.getName(), () -> {
+                try {
+                    for (Iterator<HighSymbol> symbolIter = highFunc.getLocalSymbolMap().getSymbols(); symbolIter.hasNext();) {
+                        HighSymbol symbol = symbolIter.next();
+                        if (symbol.getName().equals(variableName)) {
+                            HighFunctionDBUtil.updateDBVariable(symbol, newName, null, SourceType.USER_DEFINED);
+                            return true;
                         }
-                    } finally {
-                        decomp.dispose();
                     }
                     return false;
                 } catch (Exception e) {
@@ -1370,6 +1389,11 @@ public class FunctionEndpoints extends AbstractEndpoint {
                     return false;
                 }
             });
+
+            // Invalidate cache entry after write
+            if (cache != null) {
+                cache.invalidate(function.getEntryPoint());
+            }
             
             if (success) {
                 // Create a successful response
@@ -1415,10 +1439,14 @@ public class FunctionEndpoints extends AbstractEndpoint {
         if (program == null) {
             return null;
         }
-        
+
         try {
             ghidra.program.model.address.Address address = program.getAddressFactory().getAddress(addressString);
-            return program.getFunctionManager().getFunctionAt(address);
+            Function func = program.getFunctionManager().getFunctionAt(address);
+            if (func == null) {
+                func = program.getFunctionManager().getFunctionContaining(address);
+            }
+            return func;
         } catch (Exception e) {
             return null;
         }

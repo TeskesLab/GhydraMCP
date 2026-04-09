@@ -7,6 +7,7 @@
 # ///
 # GhydraMCP Bridge for Ghidra HATEOAS API - Optimized for MCP integration
 # Provides namespaced tools for interacting with Ghidra's reverse engineering capabilities
+import functools
 import os
 import signal
 import sys
@@ -31,8 +32,10 @@ DEFAULT_GHIDRA_HOST = "localhost"
 QUICK_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT, DEFAULT_GHIDRA_PORT+10)
 FULL_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT, DEFAULT_GHIDRA_PORT+20)
 
-BRIDGE_VERSION = "v2.1.0"
-REQUIRED_API_VERSION = 2010
+BRIDGE_VERSION = "v2.2.0"
+REQUIRED_API_VERSION = 2020
+
+DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "10"))
 
 current_instance_port = DEFAULT_GHIDRA_PORT
 
@@ -52,6 +55,12 @@ The API is organized into namespaces for different types of operations:
 - memory_* : For memory access
 - xrefs_* : For cross-references
 - analysis_* : For program analysis
+- classes_* : For listing classes and namespaces
+- symbols_* : For symbols, imports, and exports
+- segments_* : For memory segments/blocks
+- namespaces_* : For namespace hierarchy
+- variables_* : For global and local variables
+- datatypes_* : For data type management
 """
 
 mcp = FastMCP("GhydraMCP", version=BRIDGE_VERSION, instructions=instructions)
@@ -97,7 +106,7 @@ def validate_origin(headers: dict) -> bool:
         origin_base = f"{parsed.scheme}://{parsed.hostname}"
         if parsed.port:
             origin_base += f":{parsed.port}"
-    except:
+    except (ValueError, AttributeError):
         return False
 
     return origin_base in ALLOWED_ORIGINS
@@ -144,7 +153,7 @@ def _make_request(method: str, port: int, endpoint: str, params: dict = None,
             json=json_data,
             data=data,
             headers=request_headers,
-            timeout=10
+            timeout=DEFAULT_TIMEOUT
         )
 
         try:
@@ -253,6 +262,638 @@ def safe_patch(port: int, endpoint: str, data: dict) -> dict:
 def safe_delete(port: int, endpoint: str) -> dict:
     """Perform a DELETE request to a specific Ghidra instance"""
     return _make_request("DELETE", port, endpoint)
+
+
+# ================= Text Formatters =================
+# Format API responses as plain text for efficient LLM consumption
+
+def format_error(response: dict) -> str:
+    """Format an error response as plain text"""
+    if isinstance(response, dict) and "error" in response:
+        err = response["error"]
+        if isinstance(err, dict):
+            return f"Error: {err.get('message', 'Unknown error')}"
+        return f"Error: {err}"
+    return "Error: Unknown error"
+
+
+def format_functions_list(response: dict, offset: int = 0, limit: int = 100, **kwargs) -> str:
+    """Format function list as plain text table"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    items = response.get("result", [])
+    total = response.get("size", len(items))
+
+    lines = [f"Functions ({offset+1}-{offset+len(items)} of {total}):", ""]
+
+    for fn in items:
+        name = fn.get("name", "???")
+        addr = fn.get("address", "???")
+        sig = fn.get("signature", "")
+        if len(sig) > 60:
+            sig = sig[:57] + "..."
+        lines.append(f"  {addr}  {name:<30}  {sig}")
+
+    if offset + len(items) < total:
+        lines.append(f"\n  ... {total - offset - len(items)} more (use offset={offset+limit})")
+
+    return "\n".join(lines)
+
+
+def format_function_info(response: dict, **kwargs) -> str:
+    """Format single function info as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    fn = response.get("result", {})
+    lines = [
+        f"Function: {fn.get('name', '???')}",
+        f"Address:  {fn.get('address', '???')}",
+        f"Signature: {fn.get('signature', 'unknown')}",
+    ]
+
+    if fn.get("entryPoint"):
+        lines.append(f"Entry:    {fn.get('entryPoint')}")
+    if fn.get("returnType"):
+        lines.append(f"Returns:  {fn.get('returnType')}")
+
+    params = fn.get("parameters", [])
+    if params:
+        lines.append(f"Parameters ({len(params)}):")
+        for p in params:
+            lines.append(f"  {p.get('dataType', '?')} {p.get('name', '?')}")
+
+    local_vars = fn.get("localVariables", [])
+    if local_vars:
+        lines.append(f"Local variables ({len(local_vars)}):")
+        for v in local_vars[:10]:
+            lines.append(f"  {v.get('dataType', '?')} {v.get('name', '?')}")
+        if len(local_vars) > 10:
+            lines.append(f"  ... and {len(local_vars) - 10} more")
+
+    return "\n".join(lines)
+
+
+def format_decompile(response: dict, **kwargs) -> str:
+    """Format decompiled code - just return the code"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    code = result.get("ccode") or result.get("decompiled") or ""
+
+    if not code:
+        return "Error: No decompiled code returned"
+
+    return code
+
+
+def format_disassembly(response: dict, **kwargs) -> str:
+    """Format disassembly as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    instructions = result.get("instructions", [])
+
+    # simplify_response converts instructions list to disassembly_text
+    if not instructions and "disassembly_text" in result:
+        return result["disassembly_text"].rstrip()
+
+    if not instructions:
+        return "Error: No disassembly returned"
+
+    lines = []
+    for instr in instructions:
+        addr = instr.get("address", "")
+        bytes_hex = instr.get("bytes", "")
+        mnemonic = instr.get("mnemonic", "")
+        operands = instr.get("operands", "")
+        lines.append(f"  {addr}  {bytes_hex:<12} {mnemonic:<8} {operands}")
+
+    return "\n".join(lines)
+
+
+def format_xrefs(response: dict, to_addr: str = None, from_addr: str = None, **kwargs) -> str:
+    """Format cross-references as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    # Handle both dict (with references key) and list format
+    if isinstance(result, dict):
+        items = result.get("references", [])
+    else:
+        items = result if isinstance(result, list) else []
+
+    total = response.get("size", len(items))
+    target = to_addr or from_addr
+
+    header = f"References"
+    if target:
+        header += f" {'to' if to_addr else 'from'} {target}"
+    header += f" ({len(items)}"
+    if total > len(items):
+        header += f" of {total}"
+    header += "):"
+
+    lines = [header]
+    for xref in items:
+        from_a = xref.get("from_addr", "???")
+        ref_type = xref.get("refType", "???")
+        from_func_obj = xref.get("from_function", {})
+
+        # Extract function name if from_function is a dict
+        if isinstance(from_func_obj, dict):
+            from_func = from_func_obj.get("name", "")
+        else:
+            from_func = from_func_obj or ""
+
+        line = f"  {from_a}  {ref_type:<10}"
+        if from_func:
+            line += f"  from {from_func}"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+def format_strings(response: dict, offset: int = 0, **kwargs) -> str:
+    """Format strings list as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    items = response.get("result", [])
+    total = response.get("size", len(items))
+
+    lines = [f"Strings ({offset+1}-{offset+len(items)} of {total}):", ""]
+
+    for s in items:
+        addr = s.get("address", "???")
+        value = s.get("value", "")
+        value = repr(value)[1:-1]
+        if len(value) > 60:
+            value = value[:57] + "..."
+        lines.append(f"  {addr}  \"{value}\"")
+
+    return "\n".join(lines)
+
+
+def format_data_list(response: dict, offset: int = 0, limit: int = 100, **kwargs) -> str:
+    """Format data items list as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    items = response.get("result", [])
+    total = response.get("size", len(items))
+
+    lines = [f"Data items ({offset+1}-{offset+len(items)} of {total}):", ""]
+
+    for d in items:
+        addr = d.get("address", "???")
+        label = d.get("name", "")
+        dtype = d.get("dataType", "???")  # Java returns 'dataType' not 'type'
+        value = d.get("value", "")
+
+        line = f"  {addr}  {dtype:<16}"
+        if label and label != "(unnamed)":
+            line += f"  {label}"
+        if value:
+            val_str = str(value)
+            if len(val_str) > 30:
+                val_str = val_str[:27] + "..."
+            line += f"  = {val_str}"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+def format_instances(response: dict, **kwargs) -> str:
+    """Format instances list as plain text"""
+    # Handle both dict with 'instances' key and direct list
+    if isinstance(response, dict):
+        instances = response.get("instances", [])
+    else:
+        instances = response if isinstance(response, list) else []
+
+    if not instances:
+        return "No Ghidra instances found."
+
+    lines = [f"Ghidra instances ({len(instances)}):", ""]
+
+    for inst in instances:
+        port = inst.get("port", "???")
+        project = inst.get("project", "")
+        file = inst.get("file", "")
+
+        line = f"  :{port}"
+        if project:
+            line += f"  {project}"
+        if file:
+            line += f" / {file}"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+def format_instance_info(response: dict, **kwargs) -> str:
+    """Format single instance info as plain text"""
+    if "error" in response:
+        return format_error(response)
+
+    port = response.get("port", "???")
+    program = response.get("program_name", "unknown")
+    project = response.get("project", "")
+    lang = response.get("language", "")
+    base = response.get("base_address", "")
+    analysis = "complete" if response.get("analysis_complete") else "incomplete"
+
+    lines = [f"Instance :{port}"]
+    if project:
+        lines.append(f"Project:  {project}")
+    lines.append(f"Program:  {program}")
+    if lang:
+        lines.append(f"Language: {lang}")
+    if base:
+        lines.append(f"Base:     {base}")
+    lines.append(f"Analysis: {analysis}")
+
+    return "\n".join(lines)
+
+
+def format_memory(response: dict, **kwargs) -> str:
+    """Format memory read as hex dump"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", response)
+    addr = result.get("address", "???")
+    hex_bytes = result.get("hexBytes", "")
+    length = result.get("bytesRead", result.get("length", 0))
+
+    lines = [f"Memory at {addr} ({length} bytes):"]
+
+    if hex_bytes:
+        hex_bytes = hex_bytes.replace(" ", "")  # Strip any spaces for safety
+        byte_pairs = [hex_bytes[i:i+2] for i in range(0, len(hex_bytes), 2)]
+
+        for i in range(0, len(byte_pairs), 16):
+            chunk = byte_pairs[i:i+16]
+            hex_part = " ".join(chunk)
+
+            ascii_part = ""
+            for bp in chunk:
+                try:
+                    b = int(bp, 16)
+                    ascii_part += chr(b) if 32 <= b < 127 else "."
+                except ValueError:
+                    ascii_part += "?"
+
+            lines.append(f"  {hex_part:<48}  {ascii_part}")
+
+    return "\n".join(lines)
+
+
+def format_variables(response: dict, **kwargs) -> str:
+    """Format function variables as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    fn_name = result.get("functionName", "???")
+    params = result.get("parameters", [])
+    locals_list = result.get("localVariables", [])
+
+    lines = [f"Variables for {fn_name}:"]
+
+    if params:
+        lines.append(f"\nParameters ({len(params)}):")
+        for p in params:
+            lines.append(f"  {p.get('dataType', '?'):<20} {p.get('name', '?')}")
+
+    if locals_list:
+        lines.append(f"\nLocal variables ({len(locals_list)}):")
+        for v in locals_list:
+            storage = v.get('storage', '')
+            lines.append(f"  {v.get('dataType', '?'):<20} {v.get('name', '?'):<20} {storage}")
+
+    if not params and not locals_list:
+        lines.append("  (no variables)")
+
+    return "\n".join(lines)
+
+
+def format_callgraph(response: dict, **kwargs) -> str:
+    """Format call graph as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    root = result.get("rootFunction", "???")
+    nodes = result.get("nodes", [])
+    edges = result.get("edges", [])
+
+    lines = [f"Call graph from {root}:", f"  {len(nodes)} functions, {len(edges)} calls", ""]
+
+    calls = {}
+    for edge in edges:
+        caller = edge.get("from", "")
+        callee = edge.get("to", "")
+        if caller not in calls:
+            calls[caller] = []
+        calls[caller].append(callee)
+
+    def show_calls(fn, indent=0, seen=None):
+        if seen is None:
+            seen = set()
+        if fn in seen:
+            return [f"{'  ' * indent}{fn} (recursive)"]
+        seen.add(fn)
+        result_lines = [f"{'  ' * indent}{fn}"]
+        if fn in calls and indent < 3:
+            for callee in calls[fn][:10]:
+                result_lines.extend(show_calls(callee, indent + 1, seen.copy()))
+            if len(calls[fn]) > 10:
+                result_lines.append(f"{'  ' * (indent + 1)}... and {len(calls[fn]) - 10} more")
+        return result_lines
+
+    lines.extend(show_calls(root))
+    return "\n".join(lines)
+
+
+def format_structs_list(response: dict, offset: int = 0, **kwargs) -> str:
+    """Format struct list as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    items = response.get("result", [])
+    total = response.get("size", len(items))
+
+    lines = [f"Structs ({offset+1}-{offset+len(items)} of {total}):", ""]
+
+    for s in items:
+        name = s.get("name", "???")
+        size = s.get("size", 0)
+        fields = s.get("fieldCount", s.get("numFields", "?"))
+        lines.append(f"  {name:<40} {size:>6} bytes  {fields} fields")
+
+    return "\n".join(lines)
+
+
+def format_struct_info(response: dict, **kwargs) -> str:
+    """Format struct details as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    if isinstance(result, list):
+        result = result[0] if result else {}
+
+    name = result.get("name", "???")
+    size = result.get("size", 0)
+    fields = result.get("fields", [])
+
+    lines = [f"Struct: {name} ({size} bytes)", ""]
+
+    if fields:
+        lines.append(f"Fields ({len(fields)}):")
+        for f in fields:
+            foffset = f.get("offset", 0)
+            fname = f.get("name", "???")
+            ftype = f.get("type", "???")
+            fsize = f.get("size", "?")
+            lines.append(f"  +{foffset:<4} {ftype:<20} {fname:<20} ({fsize} bytes)")
+    else:
+        lines.append("  (no fields)")
+
+    return "\n".join(lines)
+
+
+def format_project_info(response: dict, **kwargs) -> str:
+    """Format project info as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    name = result.get("name", "???")
+    location = result.get("location", "???")
+    file_count = result.get("fileCount", "?")
+
+    return f"Project: {name}\nLocation: {location}\nFiles: {file_count}"
+
+
+def format_project_files(response: dict, **kwargs) -> str:
+    """Format project files as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    items = response.get("result", [])
+    lines = [f"Project files ({len(items)}):", ""]
+
+    for f in items:
+        path = f.get("path", f.get("name", "???"))
+        ftype = "DIR" if f.get("isFolder") else "   "
+        lines.append(f"  {ftype}  {path}")
+
+    return "\n".join(lines)
+
+
+def format_simple_result(response: dict, success_msg: str = "Done", **kwargs) -> str:
+    """Format a simple success/error response"""
+    if not response.get("success", False):
+        return format_error(response)
+    return success_msg
+
+
+def format_classes_list(response: dict, offset: int = 0, limit: int = 100, **kwargs) -> str:
+    """Format classes list as text"""
+    items = response.get("result", [])
+    total = response.get("size", len(items))
+
+    lines = [f"Classes ({offset+1}-{offset+len(items)} of {total}):", ""]
+
+    for c in items:
+        name = c.get("name", "???")
+        namespace = c.get("namespace", "")
+        simple = c.get("simpleName", name)
+        if namespace and namespace != "default":
+            lines.append(f"  {simple}  ({namespace})")
+        else:
+            lines.append(f"  {simple}")
+
+    return "\n".join(lines)
+
+
+def format_symbols_list(response: dict, offset: int = 0, limit: int = 100, **kwargs) -> str:
+    """Format symbols list as text"""
+    items = response.get("result", [])
+    total = response.get("size", len(items))
+
+    lines = [f"Symbols ({offset+1}-{offset+len(items)} of {total}):", ""]
+
+    for s in items:
+        addr = s.get("address", "???")
+        name = s.get("name", "???")
+        stype = s.get("type", "")
+        namespace = s.get("namespace", "")
+        primary = " *" if s.get("isPrimary") else ""
+        ns_str = f"  [{namespace}]" if namespace and namespace != "Global" else ""
+        lines.append(f"  {addr}  {stype:<12}  {name}{primary}{ns_str}")
+
+    return "\n".join(lines)
+
+
+def format_imports_exports(response: dict, offset: int = 0, limit: int = 100, **kwargs) -> str:
+    """Format imports/exports list as text"""
+    items = response.get("result", [])
+    total = response.get("size", len(items))
+
+    lines = [f"Entries ({offset+1}-{offset+len(items)} of {total}):", ""]
+
+    for item in items:
+        addr = item.get("address", "???")
+        name = item.get("name", "???")
+        lines.append(f"  {addr}  {name}")
+
+    return "\n".join(lines)
+
+
+def format_segments_list(response: dict, offset: int = 0, limit: int = 100, **kwargs) -> str:
+    """Format segments list as text"""
+    items = response.get("result", [])
+    total = response.get("size", len(items))
+
+    lines = [f"Segments ({offset+1}-{offset+len(items)} of {total}):", ""]
+
+    for seg in items:
+        name = seg.get("name", "???")
+        start = seg.get("start", "???")
+        end = seg.get("end", "???")
+        size = seg.get("size", 0)
+        perms = ""
+        perms += "R" if seg.get("readable") else "-"
+        perms += "W" if seg.get("writable") else "-"
+        perms += "X" if seg.get("executable") else "-"
+        init = "init" if seg.get("initialized") else "uninit"
+        lines.append(f"  {name:<16}  {start}-{end}  {size:>8} bytes  {perms}  {init}")
+
+    return "\n".join(lines)
+
+
+def format_namespaces_list(response: dict, offset: int = 0, limit: int = 100, **kwargs) -> str:
+    """Format namespaces list as text"""
+    items = response.get("result", [])
+    total = response.get("size", len(items))
+
+    lines = [f"Namespaces ({offset+1}-{offset+len(items)} of {total}):", ""]
+
+    for ns in items:
+        if isinstance(ns, str):
+            lines.append(f"  {ns}")
+        else:
+            lines.append(f"  {ns.get('name', '???')}")
+
+    return "\n".join(lines)
+
+
+def format_variables_list(response: dict, offset: int = 0, limit: int = 100, **kwargs) -> str:
+    """Format variables list as text"""
+    items = response.get("result", [])
+    total = response.get("size", response.get("total_estimate", len(items)))
+
+    lines = [f"Variables ({offset+1}-{offset+len(items)} of ~{total}):", ""]
+
+    for v in items:
+        addr = v.get("address", "???")
+        name = v.get("name", "???")
+        vtype = v.get("type", "")
+        dtype = v.get("dataType", "")
+        func = v.get("function", "")
+        loc = f"  [{func}]" if func else ""
+        lines.append(f"  {addr}  {vtype:<10}  {dtype:<16}  {name}{loc}")
+
+    return "\n".join(lines)
+
+
+def format_datatypes_list(response: dict, offset: int = 0, limit: int = 100, **kwargs) -> str:
+    """Format datatypes list as text"""
+    items = response.get("result", [])
+    total = response.get("size", len(items))
+
+    lines = [f"Data Types ({offset+1}-{offset+len(items)} of {total}):", ""]
+
+    for dt in items:
+        name = dt.get("name", "???")
+        kind = dt.get("kind", "")
+        category = dt.get("category", "/")
+        length = dt.get("length", 0)
+        extra = ""
+        if kind in ("struct", "union"):
+            extra = f"  ({dt.get('numComponents', 0)} fields)"
+        elif kind == "enum":
+            extra = f"  ({dt.get('numValues', 0)} values)"
+        lines.append(f"  {kind:<8}  {name:<24}  {length:>4}B  {category}{extra}")
+
+    return "\n".join(lines)
+
+
+# ================= Formatter Registry & Decorator =================
+
+FORMATTERS = {
+    "functions_list": format_functions_list,
+    "functions_get": format_function_info,
+    "functions_decompile": format_decompile,
+    "functions_disassemble": format_disassembly,
+    "functions_get_variables": format_variables,
+    "xrefs_list": format_xrefs,
+    "data_list": format_data_list,
+    "data_list_strings": format_strings,
+    "memory_read": format_memory,
+    "instances_list": format_instances,
+    "instances_discover": format_instances,
+    "instances_current": format_instance_info,
+    "structs_list": format_structs_list,
+    "structs_get": format_struct_info,
+    "analysis_get_callgraph": format_callgraph,
+    "project_info": format_project_info,
+    "project_list_files": format_project_files,
+    "classes_list": format_classes_list,
+    "symbols_list": format_symbols_list,
+    "symbols_imports": format_imports_exports,
+    "symbols_exports": format_imports_exports,
+    "segments_list": format_segments_list,
+    "namespaces_list": format_namespaces_list,
+    "variables_list": format_variables_list,
+    "datatypes_list": format_datatypes_list,
+    "datatypes_search": format_datatypes_list,
+}
+
+
+def text_output(func):
+    """Decorator that converts dict responses to plain text using registered formatters"""
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        response = func(*args, **kwargs)
+
+        # If already a string, pass through
+        if isinstance(response, str):
+            return response
+
+        # Check for error first
+        if isinstance(response, dict) and not response.get("success", True):
+            return format_error(response)
+
+        # Look up formatter by function name
+        formatter = FORMATTERS.get(func.__name__)
+        if formatter:
+            return formatter(response, **kwargs)
+
+        # Fallback: format_simple_result for mutation operations
+        return format_simple_result(response, "Done")
+
+    wrapper.__annotations__['return'] = str
+    return wrapper
+
 
 def simplify_response(response: dict) -> dict:
     """
@@ -1154,16 +1795,19 @@ def reverse_engineer_binary_prompt(port: int = None):
 
 # Instance management tools
 @mcp.tool()
+@text_output
 def instances_list() -> dict:
-    """List all active Ghidra instances
+    """List all known Ghidra instances with automatic discovery
 
-    This is the primary tool for working with instances. It automatically discovers
-    new instances on the default host before listing.
+    This is the PRIMARY tool for discovering instances. It automatically scans
+    for new instances on the default host (ports 8192-8201) before returning the list.
 
-    Use instances_discover(host) only if you need to scan a different host.
+    IMPORTANT: This performs discovery automatically. You do NOT need to call
+    instances_discover() separately unless scanning a different host.
 
     Returns:
-        dict: Contains 'instances' list with all available Ghidra instances
+        dict: Contains 'instances' list with all available Ghidra instances,
+              each showing port, url, project, and file
     """
     # Auto-discover new instances before listing
     _discover_instances(QUICK_DISCOVERY_RANGE, host=None, timeout=0.5)
@@ -1182,14 +1826,17 @@ def instances_list() -> dict:
         }
 
 @mcp.tool()
+@text_output
 def instances_discover(host: str = None) -> dict:
-    """Discover Ghidra instances on a specific host
+    """Scan a specific host for Ghidra instances (RARELY NEEDED)
 
-    Use this ONLY when you need to discover instances on a different host.
-    For normal usage, just use instances_list() which auto-discovers on the default host.
+    Use this ONLY when scanning a different host than the default.
+
+    For normal usage, use instances_list() instead - it performs discovery
+    automatically on the default host.
 
     Args:
-        host: Host to scan for Ghidra instances (default: configured ghidra_host)
+        host: Hostname or IP to scan (default: localhost/configured ghidra_host)
 
     Returns:
         dict: Contains 'instances' list with all available instances after discovery
@@ -1212,6 +1859,7 @@ def instances_discover(host: str = None) -> dict:
         }
 
 @mcp.tool()
+@text_output
 def instances_register(port: int, url: str = None) -> str:
     """Register a new Ghidra instance
     
@@ -1225,6 +1873,7 @@ def instances_register(port: int, url: str = None) -> str:
     return register_instance(port, url)
 
 @mcp.tool()
+@text_output
 def instances_unregister(port: int) -> str:
     """Unregister a Ghidra instance
     
@@ -1241,6 +1890,7 @@ def instances_unregister(port: int) -> str:
         return f"No instance found on port {port}"
 
 @mcp.tool()
+@text_output
 def instances_use(port: int) -> str:
     """Set the current working Ghidra instance
     
@@ -1270,16 +1920,21 @@ def instances_use(port: int) -> str:
         return f"Now using Ghidra instance on port {port} with {program} in project {project}"
 
 @mcp.tool()
+@text_output
 def instances_current() -> dict:
-    """Get information about the current working Ghidra instance
-    
+    """Get information about the current working instance set by instances_use()
+
+    Shows which Ghidra instance will be used when port is omitted from other tools.
+    The default current instance is port 8192.
+
     Returns:
-        dict: Details about the current instance and program
+        dict: Details about the current instance including port, program, and project
     """
     return ghidra_instance(port=current_instance_port)
 
 # Function tools
 @mcp.tool()
+@text_output
 def functions_list(offset: int = 0, limit: int = 100, 
                   name_contains: str = None, 
                   name_matches_regex: str = None,
@@ -1319,6 +1974,7 @@ def functions_list(offset: int = 0, limit: int = 100,
     return simplified
 
 @mcp.tool()
+@text_output
 def functions_get(name: str = None, address: str = None, port: int = None) -> dict:
     """Get detailed information about a function
     
@@ -1351,17 +2007,21 @@ def functions_get(name: str = None, address: str = None, port: int = None) -> di
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def functions_decompile(name: str = None, address: str = None,
                         syntax_tree: bool = False, style: str = "normalize",
+                        show_constants: bool = True, timeout: int = 30,
                         start_line: int = None, end_line: int = None, max_lines: int = None,
                         port: int = None) -> dict:
-    """Get decompiled code for a function with optional line filtering for context management
+    """Get decompiled code for a function with optional line filtering and configurable options
 
     Args:
         name: Function name (mutually exclusive with address)
         address: Function address in hex format (mutually exclusive with name)
         syntax_tree: Include syntax tree (default: False)
         style: Decompiler style (default: "normalize")
+        show_constants: Show actual constant values (strings, numbers) instead of placeholder addresses (default: True)
+        timeout: Decompilation timeout in seconds (default: 30)
         start_line: Start at this line number (1-indexed, optional)
         end_line: End at this line number (inclusive, optional)
         max_lines: Maximum number of lines to return (optional, takes precedence over end_line)
@@ -1395,7 +2055,9 @@ def functions_decompile(name: str = None, address: str = None,
 
     params = {
         "syntax_tree": str(syntax_tree).lower(),
-        "style": style
+        "style": style,
+        "show_constants": str(show_constants).lower(),
+        "timeout": str(timeout)
     }
 
     # Add line filtering parameters if provided
@@ -1417,14 +2079,17 @@ def functions_decompile(name: str = None, address: str = None,
     return simplified
 
 @mcp.tool()
-def functions_disassemble(name: str = None, address: str = None, port: int = None) -> dict:
+@text_output
+def functions_disassemble(name: str = None, address: str = None, offset: int = 0, limit: int = 0, port: int = None) -> dict:
     """Get disassembly for a function
-    
+
     Args:
         name: Function name (mutually exclusive with address)
         address: Function address in hex format (mutually exclusive with name)
+        offset: Number of instructions to skip (default 0)
+        limit: Maximum number of instructions to return (default 0 = all)
         port: Specific Ghidra instance port (optional)
-        
+
     Returns:
         dict: Contains function information and disassembly text
     """
@@ -1437,18 +2102,25 @@ def functions_disassemble(name: str = None, address: str = None, port: int = Non
             },
             "timestamp": int(time.time() * 1000)
         }
-    
+
     port = _get_instance_port(port)
-    
+
     if address:
         endpoint = f"functions/{address}/disassembly"
     else:
         endpoint = f"functions/by-name/{quote(name)}/disassembly"
-    
-    response = safe_get(port, endpoint)
+
+    params = {}
+    if offset > 0:
+        params["offset"] = offset
+    if limit > 0:
+        params["limit"] = limit
+
+    response = safe_get(port, endpoint, params)
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def functions_create(address: str, port: int = None) -> dict:
     """Create a new function at the specified address
     
@@ -1479,6 +2151,7 @@ def functions_create(address: str, port: int = None) -> dict:
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def functions_rename(old_name: str = None, address: str = None, new_name: str = "", port: int = None) -> dict:
     """Rename a function
     
@@ -1516,6 +2189,7 @@ def functions_rename(old_name: str = None, address: str = None, new_name: str = 
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def functions_set_signature(name: str = None, address: str = None, signature: str = "", port: int = None) -> dict:
     """Set function signature/prototype
     
@@ -1553,6 +2227,7 @@ def functions_set_signature(name: str = None, address: str = None, signature: st
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def functions_get_variables(name: str = None, address: str = None, port: int = None) -> dict:
     """Get variables for a function
     
@@ -1586,6 +2261,7 @@ def functions_get_variables(name: str = None, address: str = None, port: int = N
 
 # Memory tools
 @mcp.tool()
+@text_output
 def memory_read(address: str, length: int = 16, format: str = "hex", port: int = None) -> dict:
     """Read bytes from memory
     
@@ -1651,6 +2327,7 @@ def memory_read(address: str, length: int = 16, format: str = "hex", port: int =
     return simplified
 
 @mcp.tool()
+@text_output
 def memory_write(address: str, bytes_data: str, format: str = "hex", port: int = None) -> dict:
     """Write bytes to memory (use with caution)
     
@@ -1694,8 +2371,42 @@ def memory_write(address: str, bytes_data: str, format: str = "hex", port: int =
     response = safe_patch(port, f"programs/current/memory/{address}", payload)
     return simplify_response(response)
 
+@mcp.tool()
+@text_output
+def memory_disassemble(address: str, limit: int = 50, offset: int = 0, port: int = None) -> dict:
+    """Disassemble instructions at an arbitrary address (not tied to a function)
+
+    Args:
+        address: Start address in hex format
+        limit: Number of instructions to return (default: 50)
+        offset: Number of instructions to skip (default: 0)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Contains instructions list with address, bytes, mnemonic, operands
+    """
+    if not address:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "Address parameter is required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    port = _get_instance_port(port)
+
+    params = {"limit": limit}
+    if offset > 0:
+        params["offset"] = offset
+
+    response = safe_get(port, f"memory/{address}/disassembly", params)
+    return simplify_response(response)
+
 # Xrefs tools
 @mcp.tool()
+@text_output
 def xrefs_list(to_addr: str = None, from_addr: str = None, type: str = None,
               offset: int = 0, limit: int = 100, port: int = None) -> dict:
     """List cross-references with filtering and pagination
@@ -1748,6 +2459,7 @@ def xrefs_list(to_addr: str = None, from_addr: str = None, type: str = None,
 
 # Data tools
 @mcp.tool()
+@text_output
 def data_list(offset: int = 0, limit: int = 100, addr: str = None,
             name: str = None, name_contains: str = None, type: str = None,
             port: int = None) -> dict:
@@ -1792,6 +2504,7 @@ def data_list(offset: int = 0, limit: int = 100, addr: str = None,
     return simplified
 
 @mcp.tool()
+@text_output
 def data_create(address: str, data_type: str, size: int = None, port: int = None) -> dict:
     """Define a new data item at the specified address
     
@@ -1816,18 +2529,15 @@ def data_create(address: str, data_type: str, size: int = None, port: int = None
     
     port = _get_instance_port(port)
     
-    payload = {
-        "address": address,
-        "type": data_type
-    }
-    
+    payload = {"type": data_type}
     if size is not None:
         payload["size"] = size
-    
-    response = safe_post(port, "data", payload)
+
+    response = safe_post(port, f"data/{address}", payload)
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def data_list_strings(offset: int = 0, limit: int = 2000, filter: str = None, port: int = None) -> dict:
     """List all defined strings in the binary with their memory addresses
     
@@ -1854,6 +2564,7 @@ def data_list_strings(offset: int = 0, limit: int = 2000, filter: str = None, po
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def data_rename(address: str, name: str, port: int = None) -> dict:
     """Rename a data item
     
@@ -1876,16 +2587,12 @@ def data_rename(address: str, name: str, port: int = None) -> dict:
         }
     
     port = _get_instance_port(port)
-    
-    payload = {
-        "address": address,
-        "newName": name
-    }
-    
-    response = safe_post(port, "data", payload)
+
+    response = safe_patch(port, f"data/{address}", {"name": name})
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def data_delete(address: str, port: int = None) -> dict:
     """Delete data at the specified address
     
@@ -1907,16 +2614,12 @@ def data_delete(address: str, port: int = None) -> dict:
         }
     
     port = _get_instance_port(port)
-    
-    payload = {
-        "address": address,
-        "action": "delete"
-    }
-    
-    response = safe_post(port, "data/delete", payload)
+
+    response = safe_delete(port, f"data/{address}")
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def data_set_type(address: str, data_type: str, port: int = None) -> dict:
     """Set the data type of a data item
     
@@ -1939,17 +2642,13 @@ def data_set_type(address: str, data_type: str, port: int = None) -> dict:
         }
     
     port = _get_instance_port(port)
-    
-    payload = {
-        "address": address,
-        "type": data_type
-    }
-    
-    response = safe_post(port, "data/type", payload)
+
+    response = safe_patch(port, f"data/{address}/type", {"type": data_type})
     return simplify_response(response)
 
 # Struct tools
 @mcp.tool()
+@text_output
 def structs_list(offset: int = 0, limit: int = 100, category: str = None, port: int = None) -> dict:
     """List all struct data types in the program
 
@@ -1983,6 +2682,7 @@ def structs_list(offset: int = 0, limit: int = 100, category: str = None, port: 
     return simplified
 
 @mcp.tool()
+@text_output
 def structs_get(name: str, port: int = None) -> dict:
     """Get detailed information about a specific struct including all fields
 
@@ -2005,11 +2705,11 @@ def structs_get(name: str, port: int = None) -> dict:
 
     port = _get_instance_port(port)
 
-    params = {"name": name}
-    response = safe_get(port, "structs", params)
+    response = safe_get(port, f"structs/{quote(name)}")
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def structs_create(name: str, category: str = None, description: str = None, port: int = None) -> dict:
     """Create a new struct data type
 
@@ -2040,10 +2740,11 @@ def structs_create(name: str, category: str = None, description: str = None, por
     if description:
         payload["description"] = description
 
-    response = safe_post(port, "structs/create", payload)
+    response = safe_post(port, "structs", payload)
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def structs_add_field(struct_name: str, field_name: str, field_type: str,
                      offset: int = None, comment: str = None, port: int = None) -> dict:
     """Add a field to an existing struct
@@ -2072,19 +2773,19 @@ def structs_add_field(struct_name: str, field_name: str, field_type: str,
     port = _get_instance_port(port)
 
     payload = {
-        "struct": struct_name,
-        "fieldName": field_name,
-        "fieldType": field_type
+        "name": field_name,
+        "type": field_type
     }
     if offset is not None:
         payload["offset"] = offset
     if comment:
         payload["comment"] = comment
 
-    response = safe_post(port, "structs/addfield", payload)
+    response = safe_post(port, f"structs/{quote(struct_name)}/fields", payload)
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def structs_update_field(struct_name: str, field_name: str = None, field_offset: int = None,
                         new_name: str = None, new_type: str = None, new_comment: str = None,
                         port: int = None) -> dict:
@@ -2134,22 +2835,22 @@ def structs_update_field(struct_name: str, field_name: str = None, field_offset:
 
     port = _get_instance_port(port)
 
-    payload = {"struct": struct_name}
-    if field_name:
-        payload["fieldName"] = field_name
-    if field_offset is not None:
-        payload["fieldOffset"] = field_offset
-    if new_name:
-        payload["newName"] = new_name
-    if new_type:
-        payload["newType"] = new_type
-    if new_comment is not None:
-        payload["newComment"] = new_comment
+    # Identify field by offset (preferred) or name
+    field_id = str(field_offset) if field_offset is not None else quote(field_name)
 
-    response = safe_post(port, "structs/updatefield", payload)
+    payload = {}
+    if new_name:
+        payload["name"] = new_name
+    if new_type:
+        payload["type"] = new_type
+    if new_comment is not None:
+        payload["comment"] = new_comment
+
+    response = safe_patch(port, f"structs/{quote(struct_name)}/fields/{field_id}", payload)
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def structs_delete(name: str, port: int = None) -> dict:
     """Delete a struct data type
 
@@ -2172,12 +2873,12 @@ def structs_delete(name: str, port: int = None) -> dict:
 
     port = _get_instance_port(port)
 
-    payload = {"name": name}
-    response = safe_post(port, "structs/delete", payload)
+    response = safe_delete(port, f"structs/{quote(name)}")
     return simplify_response(response)
 
 # Analysis tools
 @mcp.tool()
+@text_output
 def analysis_run(port: int = None, analysis_options: dict = None) -> dict:
     """Run analysis on the current program
     
@@ -2194,6 +2895,7 @@ def analysis_run(port: int = None, analysis_options: dict = None) -> dict:
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def analysis_get_callgraph(name: str = None, address: str = None, max_depth: int = 3, port: int = None) -> dict:
     """Get function call graph visualization data
 
@@ -2221,6 +2923,7 @@ def analysis_get_callgraph(name: str = None, address: str = None, max_depth: int
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def analysis_get_dataflow(address: str, direction: str = "forward", max_steps: int = 50, port: int = None) -> dict:
     """Perform data flow analysis from an address
     
@@ -2255,6 +2958,7 @@ def analysis_get_dataflow(address: str, direction: str = "forward", max_steps: i
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def ui_get_current_address(port: int = None) -> dict:
     """Get the address currently selected in Ghidra's UI
 
@@ -2269,6 +2973,7 @@ def ui_get_current_address(port: int = None) -> dict:
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def ui_get_current_function(port: int = None) -> dict:
     """Get the function currently selected in Ghidra's UI
 
@@ -2283,6 +2988,7 @@ def ui_get_current_function(port: int = None) -> dict:
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def comments_set(address: str, comment: str = "", comment_type: str = "plate", port: int = None) -> dict:
     """Set a comment at the specified address
 
@@ -2314,6 +3020,7 @@ def comments_set(address: str, comment: str = "", comment_type: str = "plate", p
     return simplify_response(response)
 
 @mcp.tool()
+@text_output
 def functions_set_comment(address: str, comment: str = "", port: int = None) -> dict:
     """Set a decompiler-friendly comment (tries function comment, falls back to pre-comment)
 
@@ -2354,6 +3061,348 @@ def functions_set_comment(address: str, comment: str = "", port: int = None) -> 
     # Fallback: Set as a "pre" comment using the comments_set tool
     print(f"Falling back to setting 'pre' comment for address {address}", file=sys.stderr)
     return comments_set(address=address, comment=comment, comment_type="pre", port=port_to_use)
+
+
+# ================= Project Management =================
+
+@mcp.tool()
+@text_output
+def project_info(port: int = None) -> dict:
+    """Get information about the currently open Ghidra project
+
+    Args:
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Project information including name, location, file counts
+    """
+    port = _get_instance_port(port)
+    response = safe_get(port, "project")
+    return simplify_response(response)
+
+
+@mcp.tool()
+@text_output
+def project_list_files(folder: str = "/", recursive: bool = True,
+                       offset: int = 0, limit: int = 100, port: int = None) -> dict:
+    """List files in the current Ghidra project
+
+    Args:
+        folder: Folder path to list (default: "/")
+        recursive: Recursively list all files (default: True)
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of items to return (default: 100)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: List of project files and folders
+    """
+    port = _get_instance_port(port)
+
+    params = {
+        "folder": folder,
+        "recursive": str(recursive).lower(),
+        "offset": str(offset),
+        "limit": str(limit)
+    }
+
+    response = safe_get(port, "project/files", params)
+    return simplify_response(response)
+
+
+@mcp.tool()
+@text_output
+def project_open_file(path: str, port: int = None) -> dict:
+    """Open a file from the project in CodeBrowser
+
+    This will open the file in a new CodeBrowser window, creating a new instance.
+    Use instances_discover after opening to find the new instance port.
+
+    Args:
+        path: Path to the file in the project (e.g., "/malware.exe")
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Result of the open operation with instructions to discover new instance
+    """
+    port = _get_instance_port(port)
+
+    data = {"path": path}
+    response = safe_post(port, "project/open", data)
+    return simplify_response(response)
+
+
+# ================= Analysis =================
+
+@mcp.tool()
+@text_output
+def analysis_status(port: int = None) -> dict:
+    """Get analysis status for the current program
+
+    Args:
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Analysis status including whether analysis is running
+    """
+    port = _get_instance_port(port)
+    response = safe_get(port, "analysis/status")
+    return simplify_response(response)
+
+
+@mcp.tool()
+@text_output
+def analysis_run(background: bool = True, port: int = None) -> dict:
+    """Trigger auto-analysis on the current program
+
+    Args:
+        background: Run analysis in background (default: True)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Result of starting analysis
+    """
+    port = _get_instance_port(port)
+
+    data = {"background": str(background).lower()}
+    response = safe_post(port, "analysis/run", data)
+    return simplify_response(response)
+
+
+# ================= Classes, Symbols, Segments, Namespaces, Variables, DataTypes =================
+
+@mcp.tool()
+@text_output
+def classes_list(offset: int = 0, limit: int = 100, port: int = None) -> dict:
+    """List classes and namespaces in the program
+
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum items to return (default: 100)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: List of classes with pagination
+    """
+    port = _get_instance_port(port)
+    params = {"offset": offset, "limit": limit}
+    response = safe_get(port, "classes", params)
+    simplified = simplify_response(response)
+    if isinstance(simplified, dict) and "error" not in simplified:
+        simplified.setdefault("size", len(simplified.get("result", [])))
+        simplified.setdefault("offset", offset)
+        simplified.setdefault("limit", limit)
+    return simplified
+
+
+@mcp.tool()
+@text_output
+def symbols_list(offset: int = 0, limit: int = 100, port: int = None) -> dict:
+    """List all symbols in the program
+
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum items to return (default: 100)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: List of symbols with name, address, type, and namespace
+    """
+    port = _get_instance_port(port)
+    params = {"offset": offset, "limit": limit}
+    response = safe_get(port, "symbols", params)
+    simplified = simplify_response(response)
+    if isinstance(simplified, dict) and "error" not in simplified:
+        simplified.setdefault("size", len(simplified.get("result", [])))
+        simplified.setdefault("offset", offset)
+        simplified.setdefault("limit", limit)
+    return simplified
+
+
+@mcp.tool()
+@text_output
+def symbols_imports(offset: int = 0, limit: int = 100, port: int = None) -> dict:
+    """List imported symbols (external function references)
+
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum items to return (default: 100)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: List of imported symbols with name and address
+    """
+    port = _get_instance_port(port)
+    params = {"offset": offset, "limit": limit}
+    response = safe_get(port, "symbols/imports", params)
+    simplified = simplify_response(response)
+    if isinstance(simplified, dict) and "error" not in simplified:
+        simplified.setdefault("size", len(simplified.get("result", [])))
+        simplified.setdefault("offset", offset)
+        simplified.setdefault("limit", limit)
+    return simplified
+
+
+@mcp.tool()
+@text_output
+def symbols_exports(offset: int = 0, limit: int = 100, port: int = None) -> dict:
+    """List exported symbols
+
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum items to return (default: 100)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: List of exported symbols with name and address
+    """
+    port = _get_instance_port(port)
+    params = {"offset": offset, "limit": limit}
+    response = safe_get(port, "symbols/exports", params)
+    simplified = simplify_response(response)
+    if isinstance(simplified, dict) and "error" not in simplified:
+        simplified.setdefault("size", len(simplified.get("result", [])))
+        simplified.setdefault("offset", offset)
+        simplified.setdefault("limit", limit)
+    return simplified
+
+
+@mcp.tool()
+@text_output
+def segments_list(offset: int = 0, limit: int = 100, name: str = None, port: int = None) -> dict:
+    """List memory segments/blocks with permissions
+
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum items to return (default: 100)
+        name: Filter segments by name substring (optional)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: List of segments with name, address range, size, and RWX permissions
+    """
+    port = _get_instance_port(port)
+    params = {"offset": offset, "limit": limit}
+    if name:
+        params["name"] = name
+    response = safe_get(port, "segments", params)
+    simplified = simplify_response(response)
+    if isinstance(simplified, dict) and "error" not in simplified:
+        simplified.setdefault("size", len(simplified.get("result", [])))
+        simplified.setdefault("offset", offset)
+        simplified.setdefault("limit", limit)
+    return simplified
+
+
+@mcp.tool()
+@text_output
+def namespaces_list(offset: int = 0, limit: int = 100, port: int = None) -> dict:
+    """List namespaces in the program
+
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum items to return (default: 100)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: List of namespace names
+    """
+    port = _get_instance_port(port)
+    params = {"offset": offset, "limit": limit}
+    response = safe_get(port, "namespaces", params)
+    simplified = simplify_response(response)
+    if isinstance(simplified, dict) and "error" not in simplified:
+        simplified.setdefault("size", len(simplified.get("result", [])))
+        simplified.setdefault("offset", offset)
+        simplified.setdefault("limit", limit)
+    return simplified
+
+
+@mcp.tool()
+@text_output
+def variables_list(offset: int = 0, limit: int = 100, search: str = None,
+                   global_only: bool = False, port: int = None) -> dict:
+    """List variables in the program
+
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum items to return (default: 100)
+        search: Filter variables by name (optional)
+        global_only: Only show global variables (default: False)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: List of variables with name, address, type, and data type
+    """
+    port = _get_instance_port(port)
+    params = {"offset": offset, "limit": limit}
+    if search:
+        params["search"] = search
+    if global_only:
+        params["global_only"] = "true"
+    response = safe_get(port, "variables", params)
+    simplified = simplify_response(response)
+    if isinstance(simplified, dict) and "error" not in simplified:
+        simplified.setdefault("size", simplified.get("total_estimate", len(simplified.get("result", []))))
+        simplified.setdefault("offset", offset)
+        simplified.setdefault("limit", limit)
+    return simplified
+
+
+@mcp.tool()
+@text_output
+def datatypes_list(offset: int = 0, limit: int = 100, category: str = None,
+                   kind: str = None, port: int = None) -> dict:
+    """List data types defined in the program
+
+    Args:
+        offset: Pagination offset (default: 0)
+        limit: Maximum items to return (default: 100)
+        category: Filter by category path (optional)
+        kind: Filter by kind: "struct", "enum", or "union" (optional)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: List of data types with name, kind, category, and size
+    """
+    port = _get_instance_port(port)
+    params = {"offset": offset, "limit": limit}
+    if category:
+        params["category"] = category
+    if kind:
+        params["kind"] = kind
+    response = safe_get(port, "datatypes", params)
+    simplified = simplify_response(response)
+    if isinstance(simplified, dict) and "error" not in simplified:
+        simplified.setdefault("size", len(simplified.get("result", [])))
+        simplified.setdefault("offset", offset)
+        simplified.setdefault("limit", limit)
+    return simplified
+
+
+@mcp.tool()
+@text_output
+def datatypes_search(name: str, offset: int = 0, limit: int = 100, port: int = None) -> dict:
+    """Search for data types by name
+
+    Args:
+        name: Data type name to search for
+        offset: Pagination offset (default: 0)
+        limit: Maximum items to return (default: 100)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Matching data types
+    """
+    port = _get_instance_port(port)
+    params = {"offset": offset, "limit": limit, "name": name}
+    response = safe_get(port, "datatypes", params)
+    simplified = simplify_response(response)
+    if isinstance(simplified, dict) and "error" not in simplified:
+        simplified.setdefault("size", len(simplified.get("result", [])))
+        simplified.setdefault("offset", offset)
+        simplified.setdefault("limit", limit)
+    return simplified
 
 
 # ================= Startup =================
