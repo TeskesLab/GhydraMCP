@@ -1,0 +1,88 @@
+name: Build Ghidra Plugin
+
+on:
+  push:
+    branches: [ main, 'api-*', 'feature/*', 'bugfix/*' ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v3
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+
+    - name: Install Maven
+      run: |
+        apt-get update && apt-get install -y maven
+        mvn --version
+
+    - name: Build with Maven
+      run: mvn -B package
+
+    - name: Upload nightly artifacts
+      if: github.ref_type != 'tag'
+      uses: actions/upload-artifact@v3
+      with:
+        name: GhydraMCP-nightly
+        path: |
+          target/GhydraMCP-*.zip
+          bridge_mcp_hydra.py
+
+    - name: Generate Release Notes from CHANGELOG
+      if: github.ref_type == 'tag'
+      id: generate_notes
+      run: |
+        VERSION="${{ github.ref_name }}"
+        VERSION="${VERSION#v}"
+
+        awk -v version="$VERSION" '
+          BEGIN { print_section=0; }
+          $0 ~ "^## \\[" version "\\]" { print_section=1; next }
+          $0 ~ "^## \\[" && print_section { print_section=0; next }
+          print_section
+        ' CHANGELOG.md > release_notes.md
+
+        echo "RELEASE_NOTES_FILE=release_notes.md" >> $GITHUB_OUTPUT
+
+    - name: Install tea CLI
+      if: github.ref_type == 'tag'
+      run: |
+        curl -sL https://dl.gitea.io/tea/0.13.0/tea-0.13.0-linux-amd64 -o /usr/local/bin/tea
+        chmod +x /usr/local/bin/tea
+
+    - name: Create Release with tea
+      if: github.ref_type == 'tag'
+      env:
+        TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        GITEA_SERVER: ${{ gitea.server_url }}
+        GITEA_REPOSITORY: ${{ gitea.repository }}
+      run: |
+        VERSION="${{ github.ref_name }}"
+        REPO_OWNER="${GITEA_REPOSITORY%%/*}"
+        REPO_NAME="${GITEA_REPOSITORY#*/}"
+
+        tea login add --name default --url "$GITEA_SERVER" --token "$TEA_TOKEN"
+
+        ASSETS=()
+        for f in target/GhydraMCP-*.zip; do
+          [ -f "$f" ] && ASSETS+=("--asset" "$f")
+        done
+        [ -f bridge_mcp_hydra.py ] && ASSETS+=("--asset" "bridge_mcp_hydra.py")
+
+        tea releases create \
+          --repo "${REPO_OWNER}/${REPO_NAME}" \
+          --login default \
+          --tag "$VERSION" \
+          --title "Release $VERSION" \
+          --note-file release_notes.md \
+          "${ASSETS[@]}"

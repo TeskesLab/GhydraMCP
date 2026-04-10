@@ -584,6 +584,66 @@ def format_variables(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_cfg(response: dict, **kwargs) -> str:
+    """Format control flow graph as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    fn_name = result.get("function", "???")
+    blocks = result.get("blocks", [])
+    edges = result.get("edges", [])
+
+    lines = [
+        f"CFG for {fn_name} ({result.get('address', '???')})",
+        f"  {result.get('blockCount', 0)} blocks, {result.get('edgeCount', 0)} edges",
+        ""
+    ]
+
+    block_starts = {}
+    for b in blocks:
+        start = b.get("start", "")
+        block_starts[start] = b
+        lines.append(f"  Block {start} - {b.get('end', '')} (size: {b.get('size', 0)})")
+
+    if edges:
+        lines.append("")
+        lines.append("  Edges:")
+        for e in edges:
+            lines.append(f"    {e.get('from', '')} -> {e.get('to', '')}  [{e.get('type', '?')}]")
+
+    return "\n".join(lines)
+
+
+def format_pcode(response: dict, **kwargs) -> str:
+    """Format pcode operations as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    fn_name = result.get("function", "???")
+    ops = result.get("operations", [])
+
+    lines = [
+        f"Pcode for {fn_name} ({result.get('address', '???')})",
+        f"  {result.get('opCount', 0)} operations",
+        ""
+    ]
+
+    for op in ops:
+        addr = op.get("address", "?")
+        opcode = op.get("opcode", "?")
+        output = op.get("output", "")
+        inputs = ", ".join(op.get("inputs", []))
+
+        if output:
+            lines.append(f"  {addr}: {output} = {opcode} {inputs}")
+        else:
+            lines.append(f"  {addr}: {opcode} {inputs}")
+
+    return "\n".join(lines)
+
+
 def format_callgraph(response: dict, **kwargs) -> str:
     """Format call graph as plain text"""
     if not response.get("success", False):
@@ -846,6 +906,8 @@ FORMATTERS = {
     "functions_decompile": format_decompile,
     "functions_disassemble": format_disassembly,
     "functions_get_variables": format_variables,
+    "functions_get_cfg": format_cfg,
+    "functions_get_pcode": format_pcode,
     "xrefs_list": format_xrefs,
     "data_list": format_data_list,
     "data_list_strings": format_strings,
@@ -2258,6 +2320,128 @@ def functions_get_variables(name: str = None, address: str = None, port: int = N
         endpoint = f"functions/by-name/{quote(name)}/variables"
     
     response = safe_get(port, endpoint)
+    return simplify_response(response)
+
+@mcp.tool()
+@text_output
+def functions_get_cfg(name: str = None, address: str = None, port: int = None) -> dict:
+    """Get control flow graph (basic blocks and edges) for a function
+    
+    Args:
+        name: Function fully-qualified name (mutually exclusive with address)
+        address: Function address in hex format (mutually exclusive with name)
+        port: Specific Ghidra instance port (optional)
+        
+    Returns:
+        dict: Contains blocks (start, end, size) and edges (from, to, type)
+    """
+    if not name and not address:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "Either name or address parameter is required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+    
+    port = _get_instance_port(port)
+    
+    if address:
+        endpoint = f"functions/{address}/cfg"
+    else:
+        endpoint = f"functions/by-name/{quote(name)}/cfg"
+    
+    response = safe_get(port, endpoint)
+    return simplify_response(response)
+
+@mcp.tool()
+@text_output
+def functions_get_pcode(name: str = None, address: str = None, port: int = None) -> dict:
+    """Get pcode operations (low-level IR) for a function
+    
+    Pcode is Ghidra's intermediate representation — useful for understanding
+    data flow, identifying obfuscated patterns, and tracing CFF state machines.
+    
+    Args:
+        name: Function fully-qualified name (mutually exclusive with address)
+        address: Function address in hex format (mutually exclusive with name)
+        port: Specific Ghidra instance port (optional)
+        
+    Returns:
+        dict: Contains list of pcode operations with address, opcode, output, inputs
+    """
+    if not name and not address:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "Either name or address parameter is required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+    
+    port = _get_instance_port(port)
+    
+    if address:
+        endpoint = f"functions/{address}/pcode"
+    else:
+        endpoint = f"functions/by-name/{quote(name)}/pcode"
+    
+    response = safe_get(port, endpoint)
+    return simplify_response(response)
+
+@mcp.tool()
+@text_output
+def functions_set_variable(name: str = None, address: str = None, variable: str = None,
+                          new_name: str = None, data_type: str = None, port: int = None) -> dict:
+    """Rename or change the type of a function variable (parameter or local)
+    
+    Args:
+        name: Function fully-qualified name (mutually exclusive with address)
+        address: Function address in hex format (mutually exclusive with name)
+        variable: Current variable name to update (required)
+        new_name: New name for the variable (optional)
+        data_type: New data type for the variable, e.g. "int", "char *", "uint32_t" (optional)
+        port: Specific Ghidra instance port (optional)
+        
+    Returns:
+        dict: Updated variable information
+    """
+    if not (name or address) or not variable:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "Function identifier (name or address) and variable name are required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+    
+    if not new_name and not data_type:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "At least one of new_name or data_type must be specified"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+    
+    port = _get_instance_port(port)
+    
+    payload = {}
+    if new_name:
+        payload["name"] = new_name
+    if data_type:
+        payload["data_type"] = data_type
+    
+    if address:
+        endpoint = f"functions/{address}/variables/{quote(variable)}"
+    else:
+        endpoint = f"functions/by-name/{quote(name)}/variables/{quote(variable)}"
+    
+    response = safe_patch(port, endpoint, payload)
     return simplify_response(response)
 
 # Memory tools

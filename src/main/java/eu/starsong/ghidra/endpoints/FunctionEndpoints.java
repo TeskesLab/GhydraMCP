@@ -17,9 +17,16 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.block.CodeBlock;
+import ghidra.program.model.block.CodeBlockIterator;
+import ghidra.program.model.block.CodeBlockReference;
+import ghidra.program.model.block.CodeBlockReferenceIterator;
+import ghidra.program.model.block.SimpleBlockModel;
+import ghidra.program.model.data.DataType;
 import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.HighFunctionDBUtil;
 import ghidra.program.model.pcode.HighSymbol;
+import ghidra.program.model.pcode.PcodeOpAST;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.Msg;
@@ -842,6 +849,10 @@ public class FunctionEndpoints extends AbstractEndpoint {
             handleDisassembleFunction(exchange, function);
         } else if (resource.equals("variables")) {
             handleFunctionVariables(exchange, function);
+        } else if (resource.equals("cfg")) {
+            handleGetCFG(exchange, function);
+        } else if (resource.equals("pcode")) {
+            handleGetPcode(exchange, function);
         } else if (resource.startsWith("variables/")) {
             // Handle variable operations
             String variableName = resource.substring("variables/".length());
@@ -1363,6 +1374,151 @@ public class FunctionEndpoints extends AbstractEndpoint {
     }
 
     /**
+     * Handle GET /functions/{addr}/cfg - Get control flow graph (basic blocks + edges)
+     */
+    private void handleGetCFG(HttpExchange exchange, Function function) throws IOException {
+        if (!"GET".equals(exchange.getRequestMethod())) {
+            sendErrorResponse(exchange, 405, "Method Not Allowed", "METHOD_NOT_ALLOWED");
+            return;
+        }
+
+        Program program = getCurrentProgram();
+        if (program == null) {
+            sendErrorResponse(exchange, 400, "No program loaded", "NO_PROGRAM_LOADED");
+            return;
+        }
+
+        try {
+            SimpleBlockModel blockModel = new SimpleBlockModel(program);
+            List<Map<String, Object>> blocks = new ArrayList<>();
+            List<Map<String, Object>> edges = new ArrayList<>();
+
+            ghidra.program.model.block.CodeBlockIterator codeBlockIter = blockModel.getCodeBlocksContaining(function.getBody(), null);
+            while (codeBlockIter.hasNext()) {
+                CodeBlock block = codeBlockIter.next();
+                String blockStart = block.getFirstStartAddress().toString();
+                String blockEnd = block.getMaxAddress().toString();
+
+                Map<String, Object> blockInfo = new HashMap<>();
+                blockInfo.put("start", blockStart);
+                blockInfo.put("end", blockEnd);
+                blockInfo.put("size", block.getMaxAddress().subtract(block.getFirstStartAddress()));
+                blocks.add(blockInfo);
+
+                CodeBlockReferenceIterator destIter = block.getDestinations(null);
+                while (destIter.hasNext()) {
+                    CodeBlockReference dest = destIter.next();
+                    CodeBlock destBlock = dest.getDestinationBlock();
+                    if (destBlock != null) {
+                        Map<String, Object> edge = new HashMap<>();
+                        edge.put("from", blockStart);
+                        edge.put("to", destBlock.getFirstStartAddress().toString());
+                        edge.put("type", dest.getFlowType().getName());
+                        edges.add(edge);
+                    }
+                }
+            }
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("function", function.getName(true));
+            result.put("address", function.getEntryPoint().toString());
+            result.put("blockCount", blocks.size());
+            result.put("edgeCount", edges.size());
+            result.put("blocks", blocks);
+            result.put("edges", edges);
+
+            String functionPath = "/functions/" + function.getEntryPoint().toString();
+            ResponseBuilder builder = new ResponseBuilder(exchange, port)
+                .success(true)
+                .result(result);
+            builder.addLink("self", functionPath + "/cfg");
+            builder.addLink("function", functionPath);
+            builder.addLink("decompile", functionPath + "/decompile");
+            builder.addLink("pcode", functionPath + "/pcode");
+
+            sendJsonResponse(exchange, builder.build(), 200);
+        } catch (Exception e) {
+            Msg.error(this, "Error getting CFG for " + function.getName(), e);
+            sendErrorResponse(exchange, 500, "Failed to compute CFG: " + e.getMessage(), "INTERNAL_ERROR");
+        }
+    }
+
+    /**
+     * Handle GET /functions/{addr}/pcode - Get pcode operations for a function
+     */
+    private void handleGetPcode(HttpExchange exchange, Function function) throws IOException {
+        if (!"GET".equals(exchange.getRequestMethod())) {
+            sendErrorResponse(exchange, 405, "Method Not Allowed", "METHOD_NOT_ALLOWED");
+            return;
+        }
+
+        Program program = getCurrentProgram();
+        if (program == null) {
+            sendErrorResponse(exchange, 400, "No program loaded", "NO_PROGRAM_LOADED");
+            return;
+        }
+
+        DecompilerCache cache = getDecompilerCache();
+        DecompileResults decompResults;
+        if (cache != null) {
+            decompResults = cache.getDecompileResults(function, 30);
+        } else {
+            DecompInterface decomp = new DecompInterface();
+            try {
+                decomp.openProgram(program);
+                decompResults = decomp.decompileFunction(function, 30, new ConsoleTaskMonitor());
+            } finally {
+                decomp.dispose();
+            }
+        }
+
+        if (decompResults == null || !decompResults.decompileCompleted()) {
+            sendErrorResponse(exchange, 500, "Decompilation failed for " + function.getName(), "DECOMPILE_FAILED");
+            return;
+        }
+
+        HighFunction highFunc = decompResults.getHighFunction();
+        if (highFunc == null) {
+            sendErrorResponse(exchange, 500, "No high function available", "DECOMPILE_FAILED");
+            return;
+        }
+
+        List<Map<String, Object>> ops = new ArrayList<>();
+        Iterator<PcodeOpAST> pcodeIter = highFunc.getPcodeOps();
+        while (pcodeIter.hasNext()) {
+            PcodeOpAST op = pcodeIter.next();
+            Map<String, Object> opInfo = new HashMap<>();
+            opInfo.put("address", op.getSeqnum().getTarget().toString());
+            opInfo.put("opcode", op.getMnemonic());
+            opInfo.put("output", op.getOutput() != null ? op.getOutput().toString() : null);
+
+            List<String> inputs = new ArrayList<>();
+            for (int i = 0; i < op.getNumInputs(); i++) {
+                inputs.add(op.getInput(i).toString());
+            }
+            opInfo.put("inputs", inputs);
+            ops.add(opInfo);
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("function", function.getName(true));
+        result.put("address", function.getEntryPoint().toString());
+        result.put("opCount", ops.size());
+        result.put("operations", ops);
+
+        String functionPath = "/functions/" + function.getEntryPoint().toString();
+        ResponseBuilder builder = new ResponseBuilder(exchange, port)
+            .success(true)
+            .result(result);
+        builder.addLink("self", functionPath + "/pcode");
+        builder.addLink("function", functionPath);
+        builder.addLink("decompile", functionPath + "/decompile");
+        builder.addLink("cfg", functionPath + "/cfg");
+
+        sendJsonResponse(exchange, builder.build(), 200);
+    }
+
+    /**
      * Handle requests to update a function variable
      */
     private void handleUpdateVariable(HttpExchange exchange, Function function, String variableName) throws IOException {
@@ -1412,10 +1568,18 @@ public class FunctionEndpoints extends AbstractEndpoint {
 
             boolean success = TransactionHelper.executeInTransaction(program, "Update variable " + variableName + " in " + function.getName(), () -> {
                 try {
+                    DataType resolvedType = null;
+                    if (newDataType != null && !newDataType.isEmpty()) {
+                        resolvedType = GhidraUtil.resolveDataType(program, newDataType);
+                        if (resolvedType == null) {
+                            resolvedType = GhidraUtil.findDataType(program, newDataType);
+                        }
+                    }
+
                     for (Iterator<HighSymbol> symbolIter = highFunc.getLocalSymbolMap().getSymbols(); symbolIter.hasNext();) {
                         HighSymbol symbol = symbolIter.next();
                         if (symbol.getName().equals(variableName)) {
-                            HighFunctionDBUtil.updateDBVariable(symbol, newName, null, SourceType.USER_DEFINED);
+                            HighFunctionDBUtil.updateDBVariable(symbol, newName, resolvedType, SourceType.USER_DEFINED);
                             return true;
                         }
                     }
@@ -1432,12 +1596,17 @@ public class FunctionEndpoints extends AbstractEndpoint {
             }
             
             if (success) {
-                // Create a successful response
                 Map<String, Object> result = new HashMap<>();
                 result.put("name", newName != null ? newName : variableName);
                 result.put("function", function.getName(true));
                 result.put("address", function.getEntryPoint().toString());
-                result.put("message", "Variable renamed successfully");
+                if (newDataType != null) {
+                    result.put("data_type", newDataType);
+                }
+                List<String> changes = new ArrayList<>();
+                if (newName != null) changes.add("renamed to " + newName);
+                if (newDataType != null) changes.add("type set to " + newDataType);
+                result.put("message", "Variable updated: " + String.join(", ", changes));
                 
                 ResponseBuilder builder = new ResponseBuilder(exchange, port)
                     .success(true)
