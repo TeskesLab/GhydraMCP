@@ -682,6 +682,49 @@ def format_callgraph(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_dataflow(response: dict, **kwargs) -> str:
+    """Format data flow analysis as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    func = result.get("function", "???")
+    func_addr = result.get("function_address", "")
+    direction = result.get("direction", "forward")
+    start = result.get("start_address", "???")
+    steps = result.get("steps", [])
+    step_count = result.get("step_count", len(steps))
+
+    lines = [
+        f"Dataflow from {start} ({direction}) in {func} ({func_addr})",
+        f"  {step_count} steps",
+        "",
+    ]
+
+    for i, step in enumerate(steps):
+        source = step.get("source")
+        if source:
+            # Backward-trace terminal (constant / function_input / undefined)
+            varnode = step.get("varnode", "")
+            high = step.get("varnode_high", "")
+            label = f"{high} = " if high else ""
+            lines.append(f"  [{i}] {source}: {label}{varnode}")
+        else:
+            addr = step.get("address", "???")
+            opcode = step.get("opcode", "???")
+            out = step.get("varnode_out", "")
+            out_high = step.get("varnode_out_high")
+            inputs = step.get("inputs", [])
+            input_highs = step.get("input_high_vars", [])
+
+            out_label = out_high if out_high else out
+            in_labels = ", ".join(input_highs) if input_highs else ", ".join(inputs)
+
+            lines.append(f"  [{i}] {addr}: {out_label} = {opcode}({in_labels})")
+
+    return "\n".join(lines)
+
+
 def format_structs_list(response: dict, offset: int = 0, **kwargs) -> str:
     """Format struct list as plain text"""
     if not response.get("success", False):
@@ -918,6 +961,7 @@ FORMATTERS = {
     "structs_list": format_structs_list,
     "structs_get": format_struct_info,
     "analysis_get_callgraph": format_callgraph,
+    "analysis_get_dataflow": format_dataflow,
     "project_info": format_project_info,
     "project_list_files": format_project_files,
     "classes_list": format_classes_list,

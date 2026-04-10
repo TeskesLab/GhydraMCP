@@ -17,13 +17,28 @@ import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 
+import eu.starsong.ghidra.util.DecompilerCache;
+import ghidra.app.decompiler.DecompInterface;
+import ghidra.app.decompiler.DecompileResults;
+import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.pcode.PcodeBlockBasic;
+import ghidra.program.model.pcode.PcodeOp;
+import ghidra.program.model.pcode.PcodeOpAST;
+import ghidra.program.model.pcode.Varnode;
+import ghidra.util.task.ConsoleTaskMonitor;
+
 import java.io.IOException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
 
 /**
  * Endpoints for managing Ghidra programs (binaries).
@@ -1691,51 +1706,263 @@ public class ProgramEndpoints extends AbstractEndpoint {
                 return;
             }
 
-            // Parse address
-            ghidra.program.model.address.Address address;
-            try {
-                address = program.getAddressFactory().getAddress(addressStr);
-            } catch (Exception e) {
-                sendErrorResponse(exchange, 400, "Invalid address format: " + addressStr, "INVALID_ADDRESS");
+            Address targetAddr = program.getAddressFactory().getAddress(addressStr);
+            if (targetAddr == null) {
+                sendErrorResponse(exchange, 400, "Invalid address: " + addressStr, "INVALID_ADDRESS");
                 return;
             }
 
-            // This would typically use Ghidra's data flow analysis APIs
-            // For now, we'll return a simplified placeholder response
+            Function containingFunc = program.getFunctionManager().getFunctionContaining(targetAddr);
+            if (containingFunc == null) {
+                // If not found, try constructing in the default address space
+                // (getAddress() may pick the wrong space when multiple spaces overlap)
+                long offset = targetAddr.getOffset();
+                ghidra.program.model.address.AddressSpace defaultSpace = program.getAddressFactory().getDefaultAddressSpace();
+                Address defaultAddr = defaultSpace.getAddress(offset);
+                containingFunc = program.getFunctionManager().getFunctionContaining(defaultAddr);
+                if (containingFunc != null) {
+                    targetAddr = defaultAddr;
+                }
+            }
+            if (containingFunc == null) {
+                sendErrorResponse(exchange, 404, "No function found containing address " + addressStr, "NO_FUNCTION");
+                return;
+            }
+
+            // Ensure the target address is in the same address space as the function
+            // This handles cases where getAddress() resolves to a different space than
+            // what the decompiler/pcode uses for instruction addresses
+            ghidra.program.model.address.AddressSpace funcSpace = containingFunc.getEntryPoint().getAddressSpace();
+            if (!targetAddr.getAddressSpace().equals(funcSpace)) {
+                targetAddr = funcSpace.getAddress(targetAddr.getOffset());
+            }
+
+            DecompileResults decompResults = decompileFunction(containingFunc);
+            if (decompResults == null || !decompResults.decompileCompleted()) {
+                sendErrorResponse(exchange, 500, "Decompilation failed for function containing " + addressStr, "DECOMPILE_FAILED");
+                return;
+            }
+
+            HighFunction highFunc = decompResults.getHighFunction();
+            if (highFunc == null) {
+                sendErrorResponse(exchange, 500, "No high function available", "DECOMPILE_FAILED");
+                return;
+            }
+
+            PcodeOpAST targetOp = findPcodeOpAtAddress(highFunc, targetAddr);
+            if (targetOp == null) {
+                sendErrorResponse(exchange, 404, "No pcode operation found at address " + addressStr, "NO_PCODE_AT_ADDRESS");
+                return;
+            }
+
+            List<Map<String, Object>> steps;
+            if ("forward".equals(direction)) {
+                steps = traceForwardDataFlow(targetOp, maxSteps);
+            } else {
+                steps = traceBackwardDataFlow(targetOp, maxSteps);
+            }
+
             Map<String, Object> dataFlowResult = new HashMap<>();
             dataFlowResult.put("start_address", addressStr);
             dataFlowResult.put("direction", direction);
             dataFlowResult.put("max_steps", maxSteps);
-            dataFlowResult.put("message", "Data flow analysis not fully implemented - this is a placeholder response");
-
-            // Add some dummy flow steps
-            List<Map<String, Object>> steps = new ArrayList<>();
-            Map<String, Object> step1 = new HashMap<>();
-            step1.put("address", addressStr);
-            step1.put("instruction", "Sample instruction at " + addressStr);
-            step1.put("description", "Starting point of data flow analysis");
-            steps.add(step1);
-
+            dataFlowResult.put("function", containingFunc.getName(true));
+            dataFlowResult.put("function_address", containingFunc.getEntryPoint().toString());
+            dataFlowResult.put("step_count", steps.size());
             dataFlowResult.put("steps", steps);
 
-            // Build response
             ResponseBuilder builder = new ResponseBuilder(exchange, port)
                 .success(true)
                 .result(dataFlowResult);
 
-            // Add HATEOAS links
-            StringBuilder selfLinkBuilder = new StringBuilder("/programs/current/analysis/dataflow?address=")
+            StringBuilder selfLinkBuilder = new StringBuilder("/analysis/dataflow?address=")
                 .append(addressStr)
                 .append("&direction=").append(direction)
                 .append("&max_steps=").append(maxSteps);
 
             builder.addLink("self", selfLinkBuilder.toString());
             builder.addLink("program", "/programs/current");
+            builder.addLink("function", "/functions/" + containingFunc.getEntryPoint().toString());
+            builder.addLink("pcode", "/functions/" + containingFunc.getEntryPoint().toString() + "/pcode");
 
             sendJsonResponse(exchange, builder.build(), 200);
         } catch (Exception e) {
             Msg.error(this, "Error performing data flow analysis", e);
             sendErrorResponse(exchange, 500, "Error performing data flow analysis: " + e.getMessage(), "DATAFLOW_ERROR");
         }
+    }
+
+    private DecompileResults decompileFunction(Function function) {
+        DecompilerCache cache = getDecompilerCache();
+        if (cache != null) {
+            return cache.getDecompileResults(function, 30);
+        }
+        DecompInterface decomp = new DecompInterface();
+        try {
+            decomp.openProgram(getCurrentProgram());
+            return decomp.decompileFunction(function, 30, new ConsoleTaskMonitor());
+        } finally {
+            decomp.dispose();
+        }
+    }
+
+    private PcodeOpAST findPcodeOpAtAddress(HighFunction highFunc, Address targetAddr) {
+        // Strategy 1: Use Ghidra's native address-filtered iterator (handles space matching)
+        Iterator<PcodeOpAST> iter = highFunc.getPcodeOps(targetAddr);
+        if (iter.hasNext()) {
+            return iter.next();
+        }
+
+        // Strategy 2: Match by offset only (handles address space mismatches)
+        long targetOffset = targetAddr.getOffset();
+        iter = highFunc.getPcodeOps();
+        while (iter.hasNext()) {
+            PcodeOpAST op = iter.next();
+            if (op.getSeqnum().getTarget().getOffset() == targetOffset) {
+                return op;
+            }
+        }
+
+        return null;
+    }
+
+    private String varnodeLabel(Varnode vn) {
+        if (vn == null) return null;
+        if (vn.isConstant()) return "0x" + Long.toHexString(vn.getOffset());
+        if (vn.isUnique()) return vn.toString();
+        if (vn.getAddress() != null && vn.getSpace() >= 0) {
+            return vn.getAddress().toString() + ":" + vn.getSize();
+        }
+        return vn.toString();
+    }
+
+    private String highVariableName(Varnode vn) {
+        if (vn == null) return null;
+        try {
+            var hv = vn.getHigh();
+            if (hv != null && hv.getName() != null && !hv.getName().isEmpty()) {
+                return hv.getName();
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private List<Map<String, Object>> traceForwardDataFlow(PcodeOpAST startOp, int maxSteps) {
+        List<Map<String, Object>> steps = new ArrayList<>();
+        Varnode output = startOp.getOutput();
+        if (output == null) return steps;
+
+        Set<Long> visited = new HashSet<>();
+        Queue<Varnode> queue = new LinkedList<>();
+        queue.add(output);
+
+        while (!queue.isEmpty() && steps.size() < maxSteps) {
+            Varnode current = queue.poll();
+            if (visited.contains(getVarnodeId(current))) continue;
+            visited.add(getVarnodeId(current));
+
+            Iterator<PcodeOp> descIter = current.getDescendants();
+            while (descIter.hasNext() && steps.size() < maxSteps) {
+                PcodeOp descOp = descIter.next();
+                Map<String, Object> step = new HashMap<>();
+                step.put("address", descOp.getSeqnum().getTarget().toString());
+                step.put("opcode", descOp.getMnemonic());
+                step.put("varnode_in", varnodeLabel(current));
+                step.put("varnode_in_high", highVariableName(current));
+
+                List<String> inputs = new ArrayList<>();
+                List<String> inputHighs = new ArrayList<>();
+                for (int i = 0; i < descOp.getNumInputs(); i++) {
+                    Varnode in = descOp.getInput(i);
+                    inputs.add(varnodeLabel(in));
+                    String hn = highVariableName(in);
+                    if (hn != null) inputHighs.add(hn);
+                }
+                step.put("inputs", inputs);
+                if (!inputHighs.isEmpty()) step.put("input_high_vars", inputHighs);
+
+                Varnode descOutput = descOp.getOutput();
+                step.put("varnode_out", varnodeLabel(descOutput));
+                step.put("varnode_out_high", highVariableName(descOutput));
+
+                steps.add(step);
+
+                if (descOutput != null && !visited.contains(getVarnodeId(descOutput))) {
+                    queue.add(descOutput);
+                }
+            }
+        }
+        return steps;
+    }
+
+    private List<Map<String, Object>> traceBackwardDataFlow(PcodeOpAST startOp, int maxSteps) {
+        List<Map<String, Object>> steps = new ArrayList<>();
+        Set<Long> visited = new HashSet<>();
+        Queue<Varnode> queue = new LinkedList<>();
+
+        for (int i = 0; i < startOp.getNumInputs(); i++) {
+            queue.add(startOp.getInput(i));
+        }
+
+        while (!queue.isEmpty() && steps.size() < maxSteps) {
+            Varnode current = queue.poll();
+            if (visited.contains(getVarnodeId(current))) continue;
+            visited.add(getVarnodeId(current));
+
+            if (current.isConstant()) {
+                Map<String, Object> step = new HashMap<>();
+                step.put("source", "constant");
+                step.put("varnode", varnodeLabel(current));
+                steps.add(step);
+                continue;
+            }
+
+            PcodeOp defOp = current.getDef();
+            if (defOp == null) {
+                Map<String, Object> step = new HashMap<>();
+                step.put("source", current.isInput() ? "function_input" : "undefined");
+                step.put("varnode", varnodeLabel(current));
+                step.put("varnode_high", highVariableName(current));
+                steps.add(step);
+                continue;
+            }
+
+            Map<String, Object> step = new HashMap<>();
+            step.put("address", defOp.getSeqnum().getTarget().toString());
+            step.put("opcode", defOp.getMnemonic());
+            step.put("varnode_out", varnodeLabel(current));
+            step.put("varnode_out_high", highVariableName(current));
+
+            List<String> inputs = new ArrayList<>();
+            List<String> inputHighs = new ArrayList<>();
+            for (int i = 0; i < defOp.getNumInputs(); i++) {
+                Varnode in = defOp.getInput(i);
+                inputs.add(varnodeLabel(in));
+                String hn = highVariableName(in);
+                if (hn != null) inputHighs.add(hn);
+            }
+            step.put("inputs", inputs);
+            if (!inputHighs.isEmpty()) step.put("input_high_vars", inputHighs);
+
+            steps.add(step);
+
+            for (int i = 0; i < defOp.getNumInputs(); i++) {
+                Varnode in = defOp.getInput(i);
+                if (!in.isConstant() && !visited.contains(getVarnodeId(in))) {
+                    queue.add(in);
+                }
+            }
+        }
+        return steps;
+    }
+
+    private long getVarnodeId(Varnode vn) {
+        if (vn == null) return 0;
+        long id = vn.getOffset();
+        id = id * 31 + vn.getSize();
+        if (vn.getAddress() != null) {
+            id = id * 31 + vn.getAddress().getOffset();
+        }
+        return id;
     }
 }
