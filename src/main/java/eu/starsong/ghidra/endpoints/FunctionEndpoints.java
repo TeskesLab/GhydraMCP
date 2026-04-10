@@ -1393,7 +1393,8 @@ public class FunctionEndpoints extends AbstractEndpoint {
             List<Map<String, Object>> blocks = new ArrayList<>();
             List<Map<String, Object>> edges = new ArrayList<>();
 
-            ghidra.program.model.block.CodeBlockIterator codeBlockIter = blockModel.getCodeBlocksContaining(function.getBody(), null);
+            ConsoleTaskMonitor monitor = new ConsoleTaskMonitor();
+            ghidra.program.model.block.CodeBlockIterator codeBlockIter = blockModel.getCodeBlocksContaining(function.getBody(), monitor);
             while (codeBlockIter.hasNext()) {
                 CodeBlock block = codeBlockIter.next();
                 String blockStart = block.getFirstStartAddress().toString();
@@ -1405,7 +1406,7 @@ public class FunctionEndpoints extends AbstractEndpoint {
                 blockInfo.put("size", block.getMaxAddress().subtract(block.getFirstStartAddress()));
                 blocks.add(blockInfo);
 
-                CodeBlockReferenceIterator destIter = block.getDestinations(null);
+                CodeBlockReferenceIterator destIter = block.getDestinations(monitor);
                 while (destIter.hasNext()) {
                     CodeBlockReference dest = destIter.next();
                     CodeBlock destBlock = dest.getDestinationBlock();

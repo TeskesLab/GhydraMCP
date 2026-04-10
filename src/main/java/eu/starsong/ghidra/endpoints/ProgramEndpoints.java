@@ -53,6 +53,7 @@ public class ProgramEndpoints extends AbstractEndpoint {
 
         // Register direct analysis endpoints according to HATEOAS API
         server.createContext("/analysis/callgraph", this::handleCallGraph);
+        server.createContext("/analysis/dataflow", exchange -> handleDataFlow(exchange, null, ""));
     }
 
     @Override
@@ -1563,7 +1564,7 @@ public class ProgramEndpoints extends AbstractEndpoint {
      */
     private Map<String, Object> buildCallGraph(Program program, ghidra.program.model.listing.Function startFunction, int maxDepth) {
         Map<String, Object> graph = new HashMap<>();
-        graph.put("root", startFunction.getName(true));
+        graph.put("rootFunction", startFunction.getName(true));
         graph.put("root_address", startFunction.getEntryPoint().toString());
         graph.put("max_depth", maxDepth);
 
@@ -1659,6 +1660,16 @@ public class ProgramEndpoints extends AbstractEndpoint {
      * Handle data flow analysis requests
      */
     private void handleDataFlow(HttpExchange exchange, Program program, String path) throws IOException {
+        if (program == null) {
+            program = getCurrentProgram();
+        }
+        if (program == null) {
+            sendErrorResponse(exchange, 400, "No program is currently open", "NO_PROGRAM_OPEN");
+            return;
+        }
+        if (path == null) {
+            path = "";
+        }
         if (!"GET".equals(exchange.getRequestMethod())) {
             sendErrorResponse(exchange, 405, "Method Not Allowed", "METHOD_NOT_ALLOWED");
             return;
