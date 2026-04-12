@@ -55,6 +55,7 @@ public class GhydraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
     private int port;
     private boolean isBaseInstance = false;
     private DecompilerCache decompilerCache;
+    private ScriptEndpoints scriptEndpoints;
 
     /**
      * Constructor for GhydraMCP Plugin.
@@ -154,6 +155,8 @@ public class GhydraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
         new ProjectManagementEndpoints(currentProgram, port, tool).registerEndpoints(server);
         new ProgramEndpoints(currentProgram, port, tool).registerEndpoints(server);
         new ScalarEndpoints(currentProgram, port, tool).registerEndpoints(server);
+        scriptEndpoints = new ScriptEndpoints(currentProgram, port, tool);
+        scriptEndpoints.registerEndpoints(server);
         
         Msg.info(this, "Registered program-dependent endpoints. Programs will be checked at runtime.");
     }
@@ -220,6 +223,11 @@ public class GhydraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
                 infoData.put("serverPort", port);
                 infoData.put("serverStartTime", System.currentTimeMillis());
                 infoData.put("instanceCount", activeInstances.size());
+                
+                // Add PyGhidra availability
+                if (scriptEndpoints != null) {
+                    infoData.put("pyghidra_available", scriptEndpoints.isPyGhidraAvailable());
+                }
                 
                 ResponseBuilder builder = new ResponseBuilder(exchange, port)
                    .success(true)
@@ -392,7 +400,8 @@ public class GhydraMCPPlugin extends Plugin implements ApplicationLevelPlugin {
                            .addLink("xrefs", "/xrefs")
                            .addLink("analysis", "/analysis")
                            .addLink("address", "/address")
-                           .addLink("function", "/function");
+                           .addLink("function", "/function")
+                           .addLink("script", "/script/execute", "POST");
                 }
                 
                 HttpUtil.sendJsonResponse(exchange, builder.build(), 200, port);

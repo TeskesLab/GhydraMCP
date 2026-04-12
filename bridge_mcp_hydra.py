@@ -32,7 +32,7 @@ DEFAULT_GHIDRA_HOST = "localhost"
 QUICK_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT, DEFAULT_GHIDRA_PORT+10)
 FULL_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT, DEFAULT_GHIDRA_PORT+20)
 
-BRIDGE_VERSION = "v2.2.0"
+BRIDGE_VERSION = "v2.3.0"
 REQUIRED_API_VERSION = 2020
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "10"))
@@ -62,6 +62,7 @@ The API is organized into namespaces for different types of operations:
 - namespaces_* : For namespace hierarchy
 - variables_* : For global and local variables
 - datatypes_* : For data type management
+- script_* : For executing Python 3 scripts inside Ghidra via PyGhidra
 """
 
 mcp = FastMCP("GhydraMCP", version=BRIDGE_VERSION, instructions=instructions)
@@ -941,6 +942,35 @@ def format_datatypes_list(response: dict, offset: int = 0, limit: int = 100, **k
     return "\n".join(lines)
 
 
+def format_script_execute(response: dict, **kwargs) -> str:
+    """Format script execution output as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    stdout = result.get("stdout", "")
+    stderr = result.get("stderr", "")
+    exit_code = result.get("exitCode", 0)
+    language = result.get("language", "python3")
+
+    lines = []
+    if exit_code != 0:
+        lines.append(f"Script exited with code {exit_code} ({language}):")
+    else:
+        lines.append(f"Script output ({language}):")
+
+    if stdout:
+        lines.append("")
+        lines.append(stdout)
+
+    if stderr:
+        lines.append("")
+        lines.append(f"[stderr]")
+        lines.append(stderr)
+
+    return "\n".join(lines)
+
+
 # ================= Formatter Registry & Decorator =================
 
 FORMATTERS = {
@@ -973,6 +1003,7 @@ FORMATTERS = {
     "variables_list": format_variables_list,
     "datatypes_list": format_datatypes_list,
     "datatypes_search": format_datatypes_list,
+    "script_execute": format_script_execute,
 }
 
 
@@ -3666,6 +3697,69 @@ def datatypes_search(name: str, offset: int = 0, limit: int = 100, port: int = N
         simplified.setdefault("offset", offset)
         simplified.setdefault("limit", limit)
     return simplified
+
+
+# ================= Script Execution =================
+
+@mcp.tool()
+@text_output
+def script_execute(code: str, language: str = "python3", timeout: int = 30, port: int = None) -> dict:
+    """Execute a Python 3 script inside Ghidra via PyGhidra
+
+    Runs arbitrary Python 3 code in the Ghidra scripting context with access to
+    currentProgram, currentAddress, monitor, and all Ghidra Java classes via JPype.
+
+    The script has access to:
+    - currentProgram: The currently loaded Ghidra Program object
+    - currentAddress: The currently selected address
+    - monitor: A TaskMonitor for progress reporting
+    - state: The GhidraState object
+    - All Ghidra Java classes via JPype (e.g., ghidra.program.model.listing.Function)
+    - Python 3 standard library
+
+    Requires Ghidra to be launched via 'pyghidraRun' for Python 3 support.
+
+    Args:
+        code: Python 3 code to execute (multiline string)
+        language: Script language - must be "python3" (default: "python3")
+        timeout: Execution timeout in seconds (default: 30)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Script execution result with stdout, stderr, and exit code
+    """
+    if not code:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_CODE",
+                "message": "Code parameter is required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    port = _get_instance_port(port)
+
+    payload = {
+        "code": code,
+        "language": language
+    }
+
+    response = safe_post(port, "script/execute", payload)
+    return simplify_response(response)
+
+
+@mcp.tool()
+@text_output
+def script_capabilities(port: int = None) -> dict:
+    """Check which script languages/runtimes are available in this Ghidra instance
+
+    Returns:
+        dict: Available script capabilities (python3, jython, etc.)
+    """
+    port = _get_instance_port(port)
+    response = safe_get(port, "script/capabilities")
+    return simplify_response(response)
 
 
 # ================= Startup =================
