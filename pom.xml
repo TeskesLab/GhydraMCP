@@ -158,7 +158,7 @@
               <Plugin-Class>eu.starsong.ghidra.GhydraMCP</Plugin-Class>
               <Plugin-Name>GhydraMCP</Plugin-Name>
               <Plugin-Version>${git.commit.id.abbrev}-${maven.build.timestamp}</Plugin-Version>
-              <Plugin-Author>LaurieWired, Teal Bauer</Plugin-Author>
+              <Plugin-Author>LaurieWired, Teal Bauer, Lucas Teske</Plugin-Author>
               <Plugin-Description>Expose multiple Ghidra tools to MCP servers with variable management</Plugin-Description>
             </manifestEntries>
           </archive>

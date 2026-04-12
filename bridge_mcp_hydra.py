@@ -63,6 +63,7 @@ The API is organized into namespaces for different types of operations:
 - variables_* : For global and local variables
 - datatypes_* : For data type management
 - script_* : For executing Python 3 scripts inside Ghidra via PyGhidra
+- raw_image_define : For defining raw image data (RGB565, 1bpp, etc.) that renders inline in Listing
 """
 
 mcp = FastMCP("GhydraMCP", version=BRIDGE_VERSION, instructions=instructions)
@@ -1004,6 +1005,7 @@ FORMATTERS = {
     "datatypes_list": format_datatypes_list,
     "datatypes_search": format_datatypes_list,
     "script_execute": format_script_execute,
+    "raw_image_define": format_script_execute,
 }
 
 
@@ -3760,6 +3762,118 @@ def script_capabilities(port: int = None) -> dict:
     port = _get_instance_port(port)
     response = safe_get(port, "script/capabilities")
     return simplify_response(response)
+
+
+@mcp.tool()
+@text_output
+def raw_image_define(address: str, width: int, height: int, format: str = "RGB565",
+                      endian: str = "little", port: int = None) -> dict:
+    """Define a raw image at the specified address and configure its display settings
+
+    Creates a RawImage data type at the address with the given dimensions and pixel format.
+    The image will render inline in Ghidra's Listing view.
+
+    Supported formats: RGB565, RGB888, ARGB8888, RGB332, ARGB4444,
+                       1bpp Monochrome, 2bpp Grayscale, 4bpp Grayscale, 8bpp Grayscale
+
+    Args:
+        address: Memory address in hex format where the raw image data starts
+        width: Image width in pixels
+        height: Image height in pixels
+        format: Pixel format (default: "RGB565")
+        endian: Byte order - "little" or "big" (default: "little")
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Operation result with confirmation
+    """
+    if not address:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "Address parameter is required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    if width <= 0 or height <= 0:
+        return {
+            "success": False,
+            "error": {
+                "code": "INVALID_DIMENSIONS",
+                "message": "Width and height must be positive integers"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    format_map = {
+        "rgb565": 0, "rgb888": 1, "argb8888": 2, "rgb332": 3,
+        "argb4444": 4, "1bpp": 5, "2bpp": 6, "4bpp": 7, "8bpp": 8,
+        "1bpp_monochrome": 5, "2bpp_grayscale": 6, "4bpp_grayscale": 7, "8bpp_grayscale": 8,
+    }
+
+    fmt_lower = format.lower().strip()
+    if fmt_lower not in format_map:
+        return {
+            "success": False,
+            "error": {
+                "code": "INVALID_FORMAT",
+                "message": f"Unknown pixel format '{format}'. Supported: {', '.join(sorted(set(format_map.keys())))}"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    format_ordinal = format_map[fmt_lower]
+
+    endian_flag = "false" if endian.lower().startswith("little") else "true"
+
+    format_name = fmt_lower.upper() if "_" not in fmt_lower else fmt_lower.upper()
+    if fmt_lower == "1bpp_monochrome":
+        format_name = "1bpp Monochrome"
+    elif fmt_lower == "2bpp_grayscale":
+        format_name = "2bpp Grayscale"
+    elif fmt_lower == "4bpp_grayscale":
+        format_name = "4bpp Grayscale"
+    elif fmt_lower == "8bpp_grayscale":
+        format_name = "8bpp Grayscale"
+
+    script = f"""
+from ghidra.program.model.listing import Listing
+from ghidra.program.model.data import BuiltInDataTypeManager
+
+dtm = BuiltInDataTypeManager.getDataTypeManager()
+dt = dtm.getDataType("/RawImage")
+if dt is None:
+    raise RuntimeError("RawImage not found in built-in types")
+
+addr = currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress("{address}")
+listing = currentProgram.getListing()
+
+# Calculate expected byte length based on format
+fmt = {format_ordinal}
+w, h = {width}, {height}
+bpp_map = {{0: 16, 1: 24, 2: 32, 3: 8, 4: 16, 5: 1, 6: 2, 7: 4, 8: 8}}
+bpp = bpp_map.get(fmt, 16)
+total_bits = w * h * bpp
+byte_len = (total_bits + 7) // 8
+
+tx = currentProgram.startTransaction("define_raw_image")
+try:
+    listing.clearCodeUnits(addr, addr.add(byte_len - 1), False)
+    d = listing.createData(addr, dt, byte_len)
+    if d is not None:
+        d.setValue("raw_image_width", {width})
+        d.setValue("raw_image_height", {height})
+        d.setValue("raw_image_format", {format_ordinal})
+        print("OK: RawImage {width}x{height} {format_name} at " + str(addr) + " (" + str(d.getLength()) + " bytes)")
+    else:
+        print("ERROR: Failed to create data at " + str(addr))
+finally:
+    currentProgram.endTransaction(tx, True)
+"""
+
+    return script_execute(code=script, port=port)
 
 
 # ================= Startup =================
