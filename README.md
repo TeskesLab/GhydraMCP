@@ -1,10 +1,10 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/starsong-consulting/GhydraMCP)](https://github.com/starsong-consulting/GhydraMCP/releases)
-[![API Version](https://img.shields.io/badge/API-v2020-orange)](https://github.com/starsong-consulting/GhydraMCP/blob/main/GHIDRA_HTTP_API.md)
-[![GitHub stars](https://img.shields.io/github/stars/starsong-consulting/GhydraMCP)](https://github.com/starsong-consulting/GhydraMCP/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/starsong-consulting/GhydraMCP)](https://github.com/starsong-consulting/GhydraMCP/network/members)
-[![GitHub contributors](https://img.shields.io/github/contributors/starsong-consulting/GhydraMCP)](https://github.com/starsong-consulting/GhydraMCP/graphs/contributors)
-[![Build Status](https://github.com/starsong-consulting/GhydraMCP/actions/workflows/build.yml/badge.svg)](https://github.com/starsong-consulting/GhydraMCP/actions/workflows/build.yml)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/TeskesLab/GhydraMCP)](https://github.com/TeskesLab/GhydraMCP/releases)
+[![API Version](https://img.shields.io/badge/API-v2020-orange)](https://github.com/TeskesLab/GhydraMCP/blob/main/GHIDRA_HTTP_API.md)
+[![GitHub stars](https://img.shields.io/github/stars/TeskesLab/GhydraMCP)](https://github.com/TeskesLab/GhydraMCP/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/TeskesLab/GhydraMCP)](https://github.com/TeskesLab/GhydraMCP/network/members)
+[![GitHub contributors](https://img.shields.io/github/contributors/TeskesLab/GhydraMCP)](https://github.com/TeskesLab/GhydraMCP/graphs/contributors)
+[![Build Status](https://github.com/TeskesLab/GhydraMCP/actions/workflows/build.yml/badge.svg)](https://github.com/TeskesLab/GhydraMCP/actions/workflows/build.yml)
 
 # GhydraMCP v2.3.0
 
@@ -348,7 +348,7 @@ GhydraMCP works with any MCP-compatible client. Below are configuration examples
 
 #### Recommended: Local Installation from Release
 
-Download the latest [release](https://github.com/starsong-consulting/GhydraMCP/releases) to ensure the bridge and plugin versions are in sync.
+Download the latest [release](https://github.com/TeskesLab/GhydraMCP/releases) to ensure the bridge and plugin versions are in sync.
 
 ```json
 {
@@ -382,7 +382,7 @@ If you want to use the latest development version, you can run directly from the
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/starsong-consulting/GhydraMCP",
+        "git+https://github.com/TeskesLab/GhydraMCP",
         "ghydramcp"
       ],
       "env": {

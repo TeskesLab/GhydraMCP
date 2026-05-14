@@ -46,7 +46,7 @@ GhydraMCP consists of three main components:
 
 ```bash
 # Clone the repository
-git clone https://github.com/starsong-consulting/GhydraMCP.git
+git clone https://github.com/TeskesLab/GhydraMCP.git
 cd GhydraMCP
 
 # Build the project
