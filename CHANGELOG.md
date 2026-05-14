@@ -6,18 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.3.0] - 2025-05-14
+
 ### Added
-- **Scalar Search**: New `scalars_search` tool for finding scalars within a program.
-  - Supports `in_function` filter to narrow results to scalars within specific containing functions (case-insensitive substring match on function name).
-  - Supports `to_function` filter to find scalars used as arguments in calls to specific functions (e.g., find all `0` values passed to `memset`).
+- **Raw Image DataType**: New `raw_image_define` tool for defining raw image data (RGB565, RGB888, ARGB8888, RGB332, ARGB4444, 1-8bpp) that renders inline in Ghidra's Listing view.
+- **PyGhidra Script Execution**: New `script_execute` and `script_capabilities` tools for running Python 3 scripts inside Ghidra with access to `currentProgram`, JPype, and the full Ghidra API.
+- **Control Flow Graph**: New `functions_get_cfg` tool and `/functions/{addr}/cfg` endpoint for getting basic block CFG data.
+- **Pcode Operations**: New `functions_get_pcode` tool and `/functions/{addr}/pcode` endpoint for getting pcode intermediate representation.
+- **Variable Type Setting**: New `functions_set_variable` tool for changing local/global variable types.
+- **Data Flow Analysis**: Real data flow analysis via pcode varnode tracing (forward/backward).
+- **Memory Disassembly**: New `memory_disassemble` tool and `/memory/{addr}/disassembly` endpoint for disassembling at arbitrary addresses outside function boundaries.
+- **Scalar Search**: New `scalars_search` tool for finding scalar (constant) values in instructions, with `in_function` and `to_function` filters.
+- **Data Name Filters**: Implemented `name` and `name_contains` filters for data listing endpoints.
+- **CLI Tool — Full Coverage**: All 16 command groups now implemented (54 subcommands total): instances, functions, data, structs, memory, xrefs, analysis, symbols, classes, segments, namespaces, variables, datatypes, comments, project, ui.
+- **CLI — New Commands**: `functions search`, `functions set-comment`, `memory disassemble`, `data search`, `xrefs to`, `xrefs from`, `datatypes list`, `datatypes search`, and all symbols/classes/segments/namespaces/variables commands.
 - **Missing Data Name Filters**: Although name and name_contains were documented for data endpoints, they weren't actually implemented until now.
 
 ### Changed
 - **Breaking: Ghidra 12.0.1 Update**: Updated Ghidra to 12.0.1.
-- **Breaking: Use Symbol FQN**: All endpoints now use fully-qualified symbol names to avoid collisions.
-  - Function lookups now supports granular searches for namespaced functions.
-  - Function renaming now supports moving the function to other namespaces.
->>>>>>> fix/data-list-name-filters
+- **Breaking: Use Symbol FQN**: All endpoints now use fully-qualified symbol names to avoid collisions. Function lookups support granular searches for namespaced functions. Function renaming supports moving the function to other namespaces.
+- **Promoted CLI over MCP Bridge**: CLI tool (`ghydra`) is now the recommended integration path. MCP bridge remains functional but is marked as legacy.
+- **LRU Decompiler Cache**: Added caching for decompilation results to speed up repeated queries.
+
+### Fixed
+- **CFG TaskMonitor NPE**: Fixed null pointer exception in CFG endpoint when TaskMonitor is not available.
+- **Callgraph Root Name**: Fixed incorrect root node name in callgraph output.
+- **Dataflow Endpoint Registration**: Fixed missing dataflow endpoint registration in plugin.
+- **EDT Timeout**: Added EDT timeout to prevent HTTP thread hangs.
+- **HTTP Status Codes**: Fixed incorrect HTTP status codes across data type and variable endpoints.
 
 ## [2.0.0] - 2025-11-11
 
@@ -130,10 +146,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Initial project setup
 - Basic MCP bridge functionality
 
-[unreleased]: https://github.com/teal-bauer/GhydraMCP/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/teal-bauer/GhydraMCP/compare/v1.4.0...v2.0.0
-[1.4.0]: https://github.com/teal-bauer/GhydraMCP/compare/v1.3.0...v1.4.0
-[1.3.0]: https://github.com/teal-bauer/GhydraMCP/compare/v1.2...v1.3.0
-[1.2]: https://github.com/teal-bauer/GhydraMCP/compare/v1.1...v1.2
-[1.1]: https://github.com/teal-bauer/GhydraMCP/compare/1.0...v1.1
-[1.0]: https://github.com/teal-bauer/GhydraMCP/releases/tag/1.0
+[unreleased]: https://github.com/starsong-consulting/GhydraMCP/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/starsong-consulting/GhydraMCP/compare/v2.0.0...v2.3.0
+[2.0.0]: https://github.com/starsong-consulting/GhydraMCP/compare/v1.4.0...v2.0.0
+[1.4.0]: https://github.com/starsong-consulting/GhydraMCP/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/starsong-consulting/GhydraMCP/compare/v1.2...v1.3.0
+[1.2]: https://github.com/starsong-consulting/GhydraMCP/compare/v1.1...v1.2
+[1.1]: https://github.com/starsong-consulting/GhydraMCP/compare/1.0...v1.1
+[1.0]: https://github.com/starsong-consulting/GhydraMCP/releases/tag/1.0

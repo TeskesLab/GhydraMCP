@@ -13,7 +13,7 @@ Thank you for your interest in contributing to GhydraMCP! This document provides
 
 ## Project Structure
 
-GhydraMCP consists of two main components:
+GhydraMCP consists of three main components:
 
 1. **Java Plugin for Ghidra** (`src/main/java/eu/starsong/ghidra/`):
    - Main class: `GhydraMCPPlugin.java`
@@ -22,9 +22,16 @@ GhydraMCP consists of two main components:
    - Data models: `model/` directory
    - Utilities: `util/` directory
 
-2. **Python MCP Bridge** (`bridge_mcp_hydra.py`):
-   - Implements the Model Context Protocol (MCP)
-   - Connects AI assistants to the Ghidra plugin via HTTP
+2. **CLI Tool** (`ghydra/`):
+   - CLI entry point: `ghydra/cli/main.py`
+   - Command groups: `ghydra/cli/` directory (16 groups, 54 commands)
+   - HTTP client: `ghydra/client/`
+   - Output formatters: `ghydra/formatters/`
+   - Configuration: `ghydra/config/`
+
+3. **Python MCP Bridge** (`bridge_mcp_hydra.py`):
+   - Legacy MCP integration (CLI is preferred for new integrations)
+   - 58 MCP tools wrapping the HTTP API
 
 ## Development Setup
 
@@ -83,12 +90,22 @@ When making changes, update version numbers in these locations:
 
 1. **Plugin Version** in `src/main/java/eu/starsong/ghidra/api/ApiConstants.java`:
    ```java
-   public static final String PLUGIN_VERSION = "v2.0.0";
+   public static final String PLUGIN_VERSION = "v2.3.0";
    ```
 
 2. **Bridge Version** in `bridge_mcp_hydra.py`:
    ```python
-   BRIDGE_VERSION = "v2.0.0"
+   BRIDGE_VERSION = "v2.3.0"
+   ```
+
+3. **CLI Version** in `ghydra/__init__.py`:
+   ```python
+   __version__ = "2.3.0"
+   ```
+
+4. **Package Version** in `pyproject.toml`:
+   ```toml
+   version = "2.3.0"
    ```
 
 ### API Versions

@@ -1,9 +1,14 @@
 [project]
 name = "ghydramcp"
-version = "2.2.0"
+version = "2.3.0"
 description = "Multi-instance Ghidra plugin with HATEOAS REST API and MCP bridge for AI-assisted reverse engineering, binary analysis, and decompilation"
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+    { name = "LaurieWired" },
+    { name = "Teal Bauer", email = "teal@starsong.consulting" },
+    { name = "Lucas Teske", email = "lucas@teske.com.br" },
+]
 dependencies = [
     "mcp==1.6.0",
     "requests==2.32.3",

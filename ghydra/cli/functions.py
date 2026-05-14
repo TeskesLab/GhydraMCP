@@ -484,3 +484,153 @@ def set_comment(ctx, address, comment):
         error_output = formatter.format_error(e)
         rich_echo(error_output, err=True)
         ctx.exit(1)
+
+
+@functions.command('get-cfg')
+@click.option('--name', '-n', help='Function name')
+@click.option('--address', '-a', help='Function address (hex)')
+@click.pass_context
+def get_cfg(ctx, name, address):
+    """Get control flow graph (basic blocks and edges).
+
+    Either --name or --address must be specified.
+
+    \b
+    Examples:
+        ghydra functions get-cfg --name main
+        ghydra functions get-cfg --address 0x401000
+    """
+    if not name and not address:
+        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
+        ctx.exit(1)
+
+    if name and address:
+        rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
+        ctx.exit(1)
+
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        if address:
+            endpoint = f'functions/{validate_address(address)}/cfg'
+        else:
+            endpoint = f'functions/by-name/{quote(name)}/cfg'
+
+        response = client.get(endpoint)
+
+        output = formatter.format_simple_result(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@functions.command('get-pcode')
+@click.option('--name', '-n', help='Function name')
+@click.option('--address', '-a', help='Function address (hex)')
+@click.pass_context
+def get_pcode(ctx, name, address):
+    """Get pcode operations (low-level intermediate representation).
+
+    Either --name or --address must be specified.
+
+    \b
+    Examples:
+        ghydra functions get-pcode --name main
+        ghydra functions get-pcode --address 0x401000
+    """
+    if not name and not address:
+        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
+        ctx.exit(1)
+
+    if name and address:
+        rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
+        ctx.exit(1)
+
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        if address:
+            endpoint = f'functions/{validate_address(address)}/pcode'
+        else:
+            endpoint = f'functions/by-name/{quote(name)}/pcode'
+
+        response = client.get(endpoint)
+
+        output = formatter.format_simple_result(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@functions.command('set-variable')
+@click.option('--name', '-n', help='Function name')
+@click.option('--address', '-a', help='Function address (hex)')
+@click.option('--variable', required=True, help='Current variable name')
+@click.option('--new-name', help='New name for the variable')
+@click.option('--data-type', help='New data type (e.g., int, char *, uint32_t)')
+@click.pass_context
+def set_variable(ctx, name, address, variable, new_name, data_type):
+    """Rename or change the type of a function variable.
+
+    Either --name or --address must be specified. At least one of --new-name
+    or --data-type must be specified.
+
+    \b
+    Examples:
+        ghydra functions set-variable --name main --variable buf --new-name buffer
+        ghydra functions set-variable --address 0x401000 --variable len --data-type "size_t"
+    """
+    if not name and not address:
+        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
+        ctx.exit(1)
+
+    if name and address:
+        rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
+        ctx.exit(1)
+
+    if not new_name and not data_type:
+        rich_echo("[red]Error:[/red] At least one of --new-name or --data-type is required", err=True)
+        ctx.exit(1)
+
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+
+    try:
+        if address:
+            endpoint = f'functions/{validate_address(address)}/variables/{quote(variable)}'
+        else:
+            endpoint = f'functions/by-name/{quote(name)}/variables/{quote(variable)}'
+
+        data = {}
+        if new_name:
+            data['name'] = new_name
+        if data_type:
+            data['data_type'] = data_type
+
+        response = client.patch(endpoint, data=data)
+
+        output = formatter.format_simple_result(response)
+        click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)

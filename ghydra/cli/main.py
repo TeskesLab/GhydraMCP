@@ -100,6 +100,9 @@ from . import (
     namespaces,
     variables,
     datatypes,
+    scalars,
+    script,
+    raw_image,
 )
 
 cli.add_command(instances.instances)
@@ -118,6 +121,9 @@ cli.add_command(segments.segments)
 cli.add_command(namespaces.namespaces)
 cli.add_command(variables.variables)
 cli.add_command(datatypes.datatypes)
+cli.add_command(scalars.scalars)
+cli.add_command(script.script)
+cli.add_command(raw_image.raw_image)
 
 
 @cli.command('version')
