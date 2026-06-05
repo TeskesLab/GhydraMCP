@@ -6,7 +6,7 @@
 [![GitHub contributors](https://img.shields.io/github/contributors/TeskesLab/GhydraMCP)](https://github.com/TeskesLab/GhydraMCP/graphs/contributors)
 [![Build Status](https://github.com/TeskesLab/GhydraMCP/actions/workflows/build.yml/badge.svg)](https://github.com/TeskesLab/GhydraMCP/actions/workflows/build.yml)
 
-# GhydraMCP v2.3.0
+# GhydraMCP v2.4.0
 
 GhydraMCP is a bridge between [Ghidra](https://ghidra-sre.org/) and AI assistants that enables comprehensive AI-assisted reverse engineering through a HATEOAS-driven REST API and the [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol/mcp).
 
@@ -14,7 +14,7 @@ GhydraMCP is a bridge between [Ghidra](https://ghidra-sre.org/) and AI assistant
 
 ## Overview
 
-GhydraMCP v2.3.0 integrates three key components:
+GhydraMCP v2.4.0 integrates three key components:
 
 1. **Modular Ghidra Plugin**: Exposes Ghidra's powerful reverse engineering capabilities through a HATEOAS-driven REST API
 2. **CLI Tool (`ghydra`)**: A standalone command-line interface for direct interaction with Ghidra — human-readable tables, `--json` mode for scripting and AI tool use. **This is the recommended integration path.**
@@ -188,11 +188,11 @@ GhydraMCP works with any MCP-compatible client using **stdio transport**. It has
 
 See the [Client Setup](#client-setup) section below for detailed configuration instructions for each client.
 
-## API Reference (Updated for v2.3.0)
+## API Reference (Updated for v2.4.0)
 
 ### Available Tools
 
-GhydraMCP v2.3.0 organizes tools into logical namespaces for better discoverability and organization. 58 tools total.
+GhydraMCP v2.4.0 organizes tools into logical namespaces for better discoverability and organization. 58 tools total.
 
 **Instance Management** (`instances_*`):
 - `instances_list`: List active Ghidra instances (auto-discovers on default host) - **use this first**
@@ -633,7 +633,7 @@ GhydraMCP uses structured JSON for all communication between the Python bridge a
 
 ## API Architecture
 
-GhydraMCP v2.3.0 implements a comprehensive HATEOAS-driven REST API that follows hypermedia design principles:
+GhydraMCP v2.4.0 implements a comprehensive HATEOAS-driven REST API that follows hypermedia design principles:
 
 ### Core API Design
 

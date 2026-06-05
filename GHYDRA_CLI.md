@@ -1,4 +1,4 @@
-# Ghydra CLI v2.3.0
+# Ghydra CLI v2.4.0
 
 A standalone command-line interface for GhydraMCP — interact with Ghidra's reverse engineering capabilities directly from the terminal. No MCP client needed.
 
