@@ -5,6 +5,7 @@ package eu.starsong.ghidra.endpoints;
     import com.sun.net.httpserver.HttpExchange;
     import com.sun.net.httpserver.HttpServer;
     import eu.starsong.ghidra.util.DecompilerCache;
+    import eu.starsong.ghidra.util.GhidraSwing;
     import eu.starsong.ghidra.util.TransactionHelper;
     import eu.starsong.ghidra.util.TransactionHelper.TransactionException;
     import ghidra.app.decompiler.DecompInterface;
@@ -225,13 +226,15 @@ package eu.starsong.ghidra.endpoints;
             ArrayList<Symbol> globalSymbols = new ArrayList<>();
             
             // First, collect global variables efficiently
-            for (Symbol symbol : symbolTable.getDefinedSymbols()) {
-                if (symbol.isGlobal() && !symbol.isExternal() &&
-                    symbol.getSymbolType() != SymbolType.FUNCTION &&
-                    symbol.getSymbolType() != SymbolType.LABEL) {
-                    globalSymbols.add(symbol);
+            GhidraSwing.runRead(() -> {
+                for (Symbol symbol : symbolTable.getDefinedSymbols()) {
+                    if (symbol.isGlobal() && !symbol.isExternal() &&
+                        symbol.getSymbolType() != SymbolType.FUNCTION &&
+                        symbol.getSymbolType() != SymbolType.LABEL) {
+                        globalSymbols.add(symbol);
+                    }
                 }
-            }
+            });
             
             // Sort globals by name first
             globalSymbols.sort(Comparator.comparing(Symbol::getName));
@@ -242,7 +245,7 @@ package eu.starsong.ghidra.endpoints;
             for (Symbol symbol : globalSymbols) {
                 if (currentIndex >= startIdx && currentIndex < endIdx) {
                     Map<String, String> varInfo = new HashMap<>();
-                    varInfo.put("name", symbol.getName(true));
+                    varInfo.put("name", symbol.getName());
                     varInfo.put("address", symbol.getAddress().toString());
                     varInfo.put("type", "global");
                     varInfo.put("dataType", getDataTypeName(program, symbol.getAddress()));
@@ -265,12 +268,17 @@ package eu.starsong.ghidra.endpoints;
             // Get local variables - only if needed (these are expensive)
             // We need to perform some estimation for locals, as decompiling all functions is too slow
             
-            // First estimate the total count
-            int funcCount = 0;
-            for (Function f : program.getFunctionManager().getFunctions(true)) {
-                funcCount++;
-            }
-            
+            // Materialize the function list on the EDT so the decompile loops below can iterate
+            // it off-thread without holding a live DB iterator across decompilation.
+            final List<Function> allFunctions = GhidraSwing.runRead(() -> {
+                List<Function> fns = new ArrayList<>();
+                for (Function f : program.getFunctionManager().getFunctions(true)) {
+                    fns.add(f);
+                }
+                return fns;
+            });
+            int funcCount = allFunctions.size();
+
             // Roughly estimate 2 local variables per function
             totalEstimate = globalVarCount + (funcCount * 2);
             
@@ -285,7 +293,7 @@ package eu.starsong.ghidra.endpoints;
                     int functionsProcessed = 0;
                     int maxFunctionsToProcess = 20;
 
-                    for (Function function : program.getFunctionManager().getFunctions(true)) {
+                    for (Function function : allFunctions) {
                         try {
                             DecompileResults results = decompileForVariables(function, fallbackDecomp, 10);
                             if (results != null && results.decompileCompleted()) {
@@ -347,7 +355,7 @@ package eu.starsong.ghidra.endpoints;
                         int maxFunctionsToProcess = 5;
                         int localVarsAdded = 0;
 
-                        for (Function function : program.getFunctionManager().getFunctions(true)) {
+                        for (Function function : allFunctions) {
                             try {
                                 DecompileResults results = decompileForVariables(function, fallbackDecomp, 10);
                                 if (results != null && results.decompileCompleted()) {
@@ -360,7 +368,7 @@ package eu.starsong.ghidra.endpoints;
                                                 Map<String, String> varInfo = new HashMap<>();
                                                 varInfo.put("name", symbol.getName());
                                                 varInfo.put("type", "local");
-                                                varInfo.put("function", function.getName(true));
+                                                varInfo.put("function", function.getName());
                                                 Address pcAddr = symbol.getPCAddress();
                                                 varInfo.put("address", pcAddr != null ? pcAddr.toString() : "N/A");
                                                 varInfo.put("dataType", symbol.getDataType() != null ? symbol.getDataType().getName() : "unknown");
@@ -371,7 +379,7 @@ package eu.starsong.ghidra.endpoints;
                                     }
                                 }
                             } catch (Exception e) {
-                                Msg.warn(this, "listVariablesPaginated: Error processing function " + function.getName(true), e);
+                                Msg.warn(this, "listVariablesPaginated: Error processing function " + function.getName(), e);
                             }
 
                             functionsProcessed++;
@@ -379,6 +387,7 @@ package eu.starsong.ghidra.endpoints;
                                 break;
                             }
                         }
+
                         hasMore = functionsProcessed < funcCount || localVarsAdded >= remainingSpace;
                     } catch (Exception e) {
                         Msg.error(this, "listVariablesPaginated: Error during local variable processing", e);
@@ -426,22 +435,24 @@ package eu.starsong.ghidra.endpoints;
             SymbolTable symbolTable = program.getSymbolTable();
             List<Map<String, String>> globalMatches = new ArrayList<>();
             
-            SymbolIterator it = symbolTable.getSymbolIterator();
-            while (it.hasNext()) {
-                Symbol symbol = it.next();
-                if (symbol.isGlobal() &&
-                    symbol.getSymbolType() != SymbolType.FUNCTION &&
-                    symbol.getSymbolType() != SymbolType.LABEL &&
-                    symbol.getName(true).toLowerCase().contains(lowerSearchTerm)) {
+            GhidraSwing.runRead(() -> {
+                SymbolIterator it = symbolTable.getSymbolIterator();
+                while (it.hasNext()) {
+                    Symbol symbol = it.next();
+                    if (symbol.isGlobal() &&
+                        symbol.getSymbolType() != SymbolType.FUNCTION &&
+                        symbol.getSymbolType() != SymbolType.LABEL &&
+                        symbol.getName().toLowerCase().contains(lowerSearchTerm)) {
 
-                    Map<String, String> varInfo = new HashMap<>();
-                    varInfo.put("name", symbol.getName(true));
-                    varInfo.put("address", symbol.getAddress().toString());
-                    varInfo.put("type", "global");
-                    varInfo.put("dataType", getDataTypeName(program, symbol.getAddress()));
-                    globalMatches.add(varInfo);
+                        Map<String, String> varInfo = new HashMap<>();
+                        varInfo.put("name", symbol.getName());
+                        varInfo.put("address", symbol.getAddress().toString());
+                        varInfo.put("type", "global");
+                        varInfo.put("dataType", getDataTypeName(program, symbol.getAddress()));
+                        globalMatches.add(varInfo);
+                    }
                 }
-            }
+            });
             
             // Sort global matches by name
             globalMatches.sort(Comparator.comparing(a -> a.get("name")));
@@ -471,12 +482,17 @@ package eu.starsong.ghidra.endpoints;
             // Search local variables - only do this if we need more results
             // We need to perform some estimation for locals, as decompiling all functions is too slow
             
-            // First estimate the total count
-            int funcCount = 0;
-            for (Function f : program.getFunctionManager().getFunctions(true)) {
-                funcCount++;
-            }
-            
+            // Materialize the function list on the EDT so the decompile loops below can iterate
+            // it off-thread without holding a live DB iterator across decompilation.
+            final List<Function> allFunctions = GhidraSwing.runRead(() -> {
+                List<Function> fns = new ArrayList<>();
+                for (Function f : program.getFunctionManager().getFunctions(true)) {
+                    fns.add(f);
+                }
+                return fns;
+            });
+            int funcCount = allFunctions.size();
+
             // Roughly estimate 1 match per 5 functions when searching
             totalEstimate = globalCount + (funcCount / 5);
             
@@ -491,7 +507,7 @@ package eu.starsong.ghidra.endpoints;
                     int functionsProcessed = 0;
                     int maxFunctionsToProcess = 30;
 
-                    for (Function function : program.getFunctionManager().getFunctions(true)) {
+                    for (Function function : allFunctions) {
                         try {
                             DecompileResults results = decompileForVariables(function, fallbackDecomp, 5);
                             if (results != null && results.decompileCompleted()) {
@@ -553,7 +569,7 @@ package eu.starsong.ghidra.endpoints;
                         int maxFunctionsToProcess = 5;
                         int localVarsAdded = 0;
 
-                        for (Function function : program.getFunctionManager().getFunctions(true)) {
+                        for (Function function : allFunctions) {
                             try {
                                 DecompileResults results = decompileForVariables(function, fallbackDecomp, 5);
                                 if (results != null && results.decompileCompleted()) {
@@ -565,7 +581,7 @@ package eu.starsong.ghidra.endpoints;
                                             if (symbol.getName().toLowerCase().contains(lowerSearchTerm)) {
                                                 Map<String, String> varInfo = new HashMap<>();
                                                 varInfo.put("name", symbol.getName());
-                                                varInfo.put("function", function.getName(true));
+                                                varInfo.put("function", function.getName());
                                                 varInfo.put("type", symbol.isParameter() ? "parameter" : "local");
                                                 Address pcAddr = symbol.getPCAddress();
                                                 varInfo.put("address", pcAddr != null ? pcAddr.toString() : "N/A");
@@ -577,7 +593,7 @@ package eu.starsong.ghidra.endpoints;
                                     }
                                 }
                             } catch (Exception e) {
-                                Msg.warn(this, "searchVariablesPaginated: Error processing function " + function.getName(true), e);
+                                Msg.warn(this, "searchVariablesPaginated: Error processing function " + function.getName(), e);
                             }
 
                             functionsProcessed++;
@@ -585,6 +601,7 @@ package eu.starsong.ghidra.endpoints;
                                 break;
                             }
                         }
+
                         hasMore = functionsProcessed < funcCount || localVarsAdded >= remainingSpace;
                     } catch (Exception e) {
                         Msg.error(this, "searchVariablesPaginated: Error during local variable search", e);

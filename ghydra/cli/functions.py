@@ -6,6 +6,8 @@ from urllib.parse import quote
 from ..client.exceptions import GhidraError
 from ..utils import should_page, page_output, rich_echo, validate_address
 
+DEFAULT_DECOMPILATION_TIMEOUT = 1200
+
 
 @click.group('functions')
 def functions():
@@ -22,8 +24,11 @@ def functions():
 @click.option('--name-contains', help='Filter by function name substring (case-insensitive)')
 @click.option('--name-matches', help='Filter by function name regex pattern')
 @click.option('--containing-address', help='Find function containing this address (hex)')
+@click.option('--addr-min', help='Only return functions at or above this address (hex)')
+@click.option('--addr-max', help='Only return functions at or below this address (hex)')
 @click.pass_context
-def list_functions(ctx, offset, limit, name_contains, name_matches, containing_address):
+def list_functions(ctx, offset, limit, name_contains, name_matches, containing_address,
+                   addr_min, addr_max):
     """List all functions with optional filtering.
 
     \b
@@ -32,6 +37,7 @@ def list_functions(ctx, offset, limit, name_contains, name_matches, containing_a
         ghydra functions list --name-contains main
         ghydra functions list --name-matches "^sub_.*"
         ghydra functions list --containing-address 0x401234
+        ghydra functions list --addr-min 0x401000 --addr-max 0x402000
         ghydra functions list --limit 50
     """
     client = ctx.obj['client']
@@ -39,7 +45,6 @@ def list_functions(ctx, offset, limit, name_contains, name_matches, containing_a
     config = ctx.obj['config']
 
     try:
-        # Build query parameters
         params = {
             'offset': offset,
             'limit': limit
@@ -47,16 +52,16 @@ def list_functions(ctx, offset, limit, name_contains, name_matches, containing_a
 
         if name_contains:
             params['name_contains'] = name_contains
-
         if name_matches:
             params['name_matches_regex'] = name_matches
-
         if containing_address:
             params['containing_addr'] = validate_address(containing_address)
+        if addr_min:
+            params['addr_min'] = validate_address(addr_min)
+        if addr_max:
+            params['addr_max'] = validate_address(addr_max)
 
-        # Make API request
         response = client.get('functions', params=params)
-
         output = formatter.format_functions_list(response)
 
         if should_page(config, ctx.obj['output_json']):
@@ -96,6 +101,96 @@ def search_functions(ctx, name, regex, offset, limit):
         else:
             params['name_contains'] = name
 
+        response = client.get('functions', params=params)
+        output = formatter.format_functions_list(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@functions.command('get-containing')
+@click.argument('address')
+@click.pass_context
+def get_containing(ctx, address):
+    """Find the function containing the specified address.
+
+    \b
+    Example:
+        ghydra functions get-containing 0x401234
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        params = {'containing_addr': validate_address(address)}
+        response = client.get('functions', params=params)
+        output = formatter.format_functions_list(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@functions.command('get-next')
+@click.argument('address')
+@click.pass_context
+def get_next(ctx, address):
+    """Get the next function after the given address (by memory order).
+
+    \b
+    Example:
+        ghydra functions get-next 0x401000
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        params = {'after': validate_address(address)}
+        response = client.get('functions', params=params)
+        output = formatter.format_functions_list(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@functions.command('get-prev')
+@click.argument('address')
+@click.pass_context
+def get_prev(ctx, address):
+    """Get the previous function before the given address (by memory order).
+
+    \b
+    Example:
+        ghydra functions get-prev 0x402000
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        params = {'before': validate_address(address)}
         response = client.get('functions', params=params)
         output = formatter.format_functions_list(response)
 
@@ -165,7 +260,8 @@ def get_function(ctx, name, address):
 @click.option('--syntax-tree', is_flag=True, help='Include syntax tree in output')
 @click.option('--style', default='normalize', help='Decompiler style (default: normalize)')
 @click.option('--no-constants', is_flag=True, help='Hide constant values')
-@click.option('--timeout', type=int, default=30, help='Decompilation timeout in seconds')
+@click.option('--timeout', type=int, default=DEFAULT_DECOMPILATION_TIMEOUT,
+              help=f'Decompilation timeout in seconds (default: {DEFAULT_DECOMPILATION_TIMEOUT})')
 @click.option('--start-line', type=int, help='Start line (1-indexed)')
 @click.option('--end-line', type=int, help='End line (inclusive)')
 @click.option('--max-lines', type=int, help='Maximum lines to return')
@@ -215,8 +311,14 @@ def decompile(ctx, name, address, syntax_tree, style, no_constants, timeout, sta
         if max_lines:
             params['max_lines'] = max_lines
 
-        # Make API request
-        response = client.get(endpoint, params=params)
+        # Keep HTTP timeout slightly above requested decompilation timeout
+        # so client transport timeout does not fire first.
+        original_timeout = client.timeout
+        client.timeout = max(original_timeout, timeout + 30)
+        try:
+            response = client.get(endpoint, params=params)
+        finally:
+            client.timeout = original_timeout
 
         output = formatter.format_decompiled_code(response)
 
@@ -301,9 +403,7 @@ def create_function(ctx, address):
     formatter = ctx.obj['formatter']
 
     try:
-        # Make API request
-        endpoint = f'functions/{validate_address(address)}'
-        response = client.post(endpoint)
+        response = client.post('functions', json_data={'address': validate_address(address)})
 
         output = formatter.format_simple_result(response)
         click.echo(output)
@@ -389,14 +489,47 @@ def set_signature(ctx, name, address, signature):
     try:
         # Build endpoint
         if address:
-            endpoint = f'functions/{validate_address(address)}/signature'
+            endpoint = f'functions/{validate_address(address)}'
         else:
-            endpoint = f'functions/by-name/{quote(name)}/signature'
+            endpoint = f'functions/by-name/{quote(name)}'
 
         # Make API request
         data = {'signature': signature}
         response = client.patch(endpoint, data=data)
 
+        output = formatter.format_simple_result(response)
+        click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@functions.command('delete')
+@click.option('--name', '-n', help='Function name')
+@click.option('--address', '-a', help='Function address (hex)')
+@click.pass_context
+def delete_function(ctx, name, address):
+    """Delete a function."""
+    if not name and not address:
+        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
+        ctx.exit(1)
+
+    if name and address:
+        rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
+        ctx.exit(1)
+
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+
+    try:
+        if address:
+            endpoint = f'functions/{validate_address(address)}'
+        else:
+            endpoint = f'functions/by-name/{quote(name)}'
+
+        response = client.delete(endpoint)
         output = formatter.format_simple_result(response)
         click.echo(output)
 
@@ -455,28 +588,30 @@ def get_variables(ctx, name, address):
         ctx.exit(1)
 
 
-@functions.command('set-comment')
+@functions.command('update-variable')
 @click.option('--address', '-a', required=True, help='Function address (hex)')
-@click.option('--comment', required=True, help='Comment text')
+@click.option('--variable-name', required=True, help='Existing variable name')
+@click.option('--new-name', help='New variable name')
+@click.option('--new-data-type', help='New variable data type')
 @click.pass_context
-def set_comment(ctx, address, comment):
-    """Set comment for a function.
+def update_variable(ctx, address, variable_name, new_name, new_data_type):
+    """Update a local variable in a function."""
+    if not new_name and not new_data_type:
+        rich_echo("[red]Error:[/red] At least one of --new-name or --new-data-type is required", err=True)
+        ctx.exit(1)
 
-    \b
-    Example:
-        ghydra functions set-comment --address 0x401000 --comment "Main entry point"
-    """
     client = ctx.obj['client']
     formatter = ctx.obj['formatter']
 
     try:
-        # Build endpoint - using comments API
-        endpoint = f'comments/{validate_address(address)}'
+        endpoint = f'functions/{validate_address(address)}/variables/{quote(variable_name)}'
+        data = {}
+        if new_name:
+            data['name'] = new_name
+        if new_data_type:
+            data['data_type'] = new_data_type
 
-        # Make API request
-        data = {'comment': comment, 'type': 'plate'}
-        response = client.post(endpoint, json_data=data)
-
+        response = client.patch(endpoint, data=data)
         output = formatter.format_simple_result(response)
         click.echo(output)
 
@@ -503,30 +638,23 @@ def get_cfg(ctx, name, address):
     if not name and not address:
         rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
         ctx.exit(1)
-
     if name and address:
         rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
         ctx.exit(1)
-
     client = ctx.obj['client']
     formatter = ctx.obj['formatter']
     config = ctx.obj['config']
-
     try:
         if address:
             endpoint = f'functions/{validate_address(address)}/cfg'
         else:
             endpoint = f'functions/by-name/{quote(name)}/cfg'
-
         response = client.get(endpoint)
-
         output = formatter.format_simple_result(response)
-
         if should_page(config, ctx.obj['output_json']):
             page_output(output, use_pager=config.page_output)
         else:
             click.echo(output)
-
     except GhidraError as e:
         error_output = formatter.format_error(e)
         rich_echo(error_output, err=True)
@@ -550,30 +678,23 @@ def get_pcode(ctx, name, address):
     if not name and not address:
         rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
         ctx.exit(1)
-
     if name and address:
         rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
         ctx.exit(1)
-
     client = ctx.obj['client']
     formatter = ctx.obj['formatter']
     config = ctx.obj['config']
-
     try:
         if address:
             endpoint = f'functions/{validate_address(address)}/pcode'
         else:
             endpoint = f'functions/by-name/{quote(name)}/pcode'
-
         response = client.get(endpoint)
-
         output = formatter.format_simple_result(response)
-
         if should_page(config, ctx.obj['output_json']):
             page_output(output, use_pager=config.page_output)
         else:
             click.echo(output)
-
     except GhidraError as e:
         error_output = formatter.format_error(e)
         rich_echo(error_output, err=True)
@@ -601,36 +722,66 @@ def set_variable(ctx, name, address, variable, new_name, data_type):
     if not name and not address:
         rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
         ctx.exit(1)
-
     if name and address:
         rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
         ctx.exit(1)
-
     if not new_name and not data_type:
         rich_echo("[red]Error:[/red] At least one of --new-name or --data-type is required", err=True)
         ctx.exit(1)
-
     client = ctx.obj['client']
     formatter = ctx.obj['formatter']
-
     try:
         if address:
             endpoint = f'functions/{validate_address(address)}/variables/{quote(variable)}'
         else:
             endpoint = f'functions/by-name/{quote(name)}/variables/{quote(variable)}'
-
         data = {}
         if new_name:
             data['name'] = new_name
         if data_type:
             data['data_type'] = data_type
-
         response = client.patch(endpoint, data=data)
-
         output = formatter.format_simple_result(response)
         click.echo(output)
-
     except GhidraError as e:
         error_output = formatter.format_error(e)
         rich_echo(error_output, err=True)
         ctx.exit(1)
+
+
+@functions.command('set-comment')
+@click.option('--address', '-a', required=True, help='Function address (hex)')
+@click.option('--comment', required=True, help='Comment text (empty string removes comment)')
+@click.pass_context
+def set_comment(ctx, address, comment):
+    """Set a decompiler-friendly comment at a function.
+
+    Tries to set the function's plate comment first; falls back to a pre-comment
+    at the entry address if the function PATCH is unavailable.
+
+    \b
+    Example:
+        ghydra functions set-comment --address 0x401000 --comment "Main entry point"
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    addr = validate_address(address)
+
+    try:
+        response = client.patch(f'functions/{addr}', data={'comment': comment})
+        output = formatter.format_simple_result(response)
+        click.echo(output)
+        return
+    except GhidraError as primary_err:
+        # Fall back to a pre-comment if the function endpoint can't set the comment.
+        try:
+            response = client.post(
+                f'memory/{addr}/comments/pre',
+                json_data={'comment': comment},
+            )
+            output = formatter.format_simple_result(response)
+            click.echo(output)
+        except GhidraError as fallback_err:
+            rich_echo(formatter.format_error(primary_err), err=True)
+            rich_echo(formatter.format_error(fallback_err), err=True)
+            ctx.exit(1)

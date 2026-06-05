@@ -5,10 +5,12 @@ import com.sun.net.httpserver.HttpServer;
 import eu.starsong.ghidra.api.ResponseBuilder;
 import eu.starsong.ghidra.model.FunctionInfo;
 import eu.starsong.ghidra.util.DecompilerCache;
+import eu.starsong.ghidra.util.GhidraSwing;
 import eu.starsong.ghidra.util.GhidraUtil;
 import eu.starsong.ghidra.util.HttpUtil;
 import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.app.decompiler.DecompInterface;
+import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.util.NamespaceUtils;
 import ghidra.app.util.SymbolPath;
@@ -31,6 +33,7 @@ import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.Msg;
 import ghidra.util.task.ConsoleTaskMonitor;
+import ghidra.util.task.TaskMonitor;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -44,6 +47,9 @@ import java.io.IOException;
  * Implements the /functions endpoints with HATEOAS pattern.
  */
 public class FunctionEndpoints extends AbstractEndpoint {
+
+    private static final int DEFAULT_DECOMPILATION_TIMEOUT_SECONDS =
+        Integer.getInteger("ghidra.mcp.decompile.timeout", 1200);
 
     private PluginTool tool;
 
@@ -214,6 +220,9 @@ public class FunctionEndpoints extends AbstractEndpoint {
             } else if ("PATCH".equals(method)) {
                 // Update function
                 handleUpdateFunctionRESTful(exchange, function);
+            } else if ("DELETE".equals(method)) {
+                // Delete function
+                handleDeleteFunctionRESTful(exchange, function);
             } else {
                 sendErrorResponse(exchange, 405, "Method Not Allowed", "METHOD_NOT_ALLOWED");
             }
@@ -257,8 +266,7 @@ public class FunctionEndpoints extends AbstractEndpoint {
                     if (nameContainsFilter != null && !fqn.toLowerCase().contains(nameContainsFilter.toLowerCase())) {
                         continue;
                     }
-
-                    if (nameRegexFilter != null && !fqn.matches(nameRegexFilter)) {
+                    if (nameRegexFilter != null && !java.util.regex.Pattern.compile(nameRegexFilter).matcher(fqn).find()) {
                         continue;
                     }
 
@@ -585,6 +593,23 @@ public class FunctionEndpoints extends AbstractEndpoint {
         }
     }
 
+    private Map<String, Object> buildFunctionListEntry(Function f) {
+        Map<String, Object> func = new HashMap<>();
+        func.put("name", f.getName());
+        func.put("address", f.getEntryPoint().toString());
+
+        Map<String, Object> links = new HashMap<>();
+        Map<String, String> selfLink = new HashMap<>();
+        selfLink.put("href", "/functions/" + f.getEntryPoint());
+        links.put("self", selfLink);
+        Map<String, String> programLink = new HashMap<>();
+        programLink.put("href", "/program");
+        links.put("program", programLink);
+        func.put("_links", links);
+
+        return func;
+    }
+
     /**
      * Handle requests to the /functions endpoint
      */
@@ -606,54 +631,67 @@ public class FunctionEndpoints extends AbstractEndpoint {
                 String nameRegexFilter = params.get("name_matches_regex");
                 String addrFilter = params.get("addr");
                 String containingAddrFilter = params.get("containing_addr");
+                String afterAddrFilter = params.get("after");
+                String beforeAddrFilter = params.get("before");
+                String addrMinFilter = params.get("addr_min");
+                String addrMaxFilter = params.get("addr_max");
 
                 List<Map<String, Object>> functions = new ArrayList<>();
 
-                // Handle special case: if containing_addr is specified, find the function containing that address
-                if (containingAddrFilter != null && !containingAddrFilter.isEmpty()) {
+                if (afterAddrFilter != null && !afterAddrFilter.isEmpty()) {
+                    try {
+                        Address afterAddr = program.getAddressFactory().getAddress(afterAddrFilter);
+                        GhidraSwing.runRead(() -> {
+                            for (Function f : program.getFunctionManager().getFunctions(afterAddr, true)) {
+                                if (f.getEntryPoint().compareTo(afterAddr) > 0) {
+                                    functions.add(buildFunctionListEntry(f));
+                                    break;
+                                }
+                            }
+                        });
+                    } catch (Exception e) {
+                        sendErrorResponse(exchange, 400, "Invalid after format: " + afterAddrFilter, "INVALID_PARAMETER");
+                        return;
+                    }
+                } else if (beforeAddrFilter != null && !beforeAddrFilter.isEmpty()) {
+                    try {
+                        Address beforeAddr = program.getAddressFactory().getAddress(beforeAddrFilter);
+                        GhidraSwing.runRead(() -> {
+                            for (Function f : program.getFunctionManager().getFunctions(beforeAddr, false)) {
+                                if (f.getEntryPoint().compareTo(beforeAddr) < 0) {
+                                    functions.add(buildFunctionListEntry(f));
+                                    break;
+                                }
+                            }
+                        });
+                    } catch (Exception e) {
+                        sendErrorResponse(exchange, 400, "Invalid before format: " + beforeAddrFilter, "INVALID_PARAMETER");
+                        return;
+                    }
+                } else if (containingAddrFilter != null && !containingAddrFilter.isEmpty()) {
                     try {
                         Address containingAddr = program.getAddressFactory().getAddress(containingAddrFilter);
                         Function containingFunc = program.getFunctionManager().getFunctionContaining(containingAddr);
 
                         if (containingFunc != null) {
-                            // Apply other filters to the found function
                             boolean matches = true;
 
                             String fqn = containingFunc.getName(true);
                             if (nameFilter != null && !fqn.equals(nameFilter)) {
                                 matches = false;
                             }
-
                             if (nameContainsFilter != null && !fqn.toLowerCase().contains(nameContainsFilter.toLowerCase())) {
                                 matches = false;
                             }
-
-                            if (nameRegexFilter != null && !fqn.matches(nameRegexFilter)) {
+                            if (nameRegexFilter != null && !java.util.regex.Pattern.compile(nameRegexFilter).matcher(fqn).find()) {
                                 matches = false;
                             }
-
                             if (addrFilter != null && !containingFunc.getEntryPoint().toString().equals(addrFilter)) {
                                 matches = false;
                             }
 
                             if (matches) {
-                                Map<String, Object> func = new HashMap<>();
-                                func.put("name", fqn);
-                                func.put("address", containingFunc.getEntryPoint().toString());
-
-                                // Add HATEOAS links (fixed to use proper URL paths)
-                                Map<String, Object> links = new HashMap<>();
-                                Map<String, String> selfLink = new HashMap<>();
-                                selfLink.put("href", "/functions/" + containingFunc.getEntryPoint());
-                                links.put("self", selfLink);
-
-                                Map<String, String> programLink = new HashMap<>();
-                                programLink.put("href", "/program");
-                                links.put("program", programLink);
-
-                                func.put("_links", links);
-
-                                functions.add(func);
+                                functions.add(buildFunctionListEntry(containingFunc));
                             }
                         }
                     } catch (Exception e) {
@@ -661,45 +699,47 @@ public class FunctionEndpoints extends AbstractEndpoint {
                         return;
                     }
                 } else {
-                    // Get all functions
-                    for (Function f : program.getFunctionManager().getFunctions(true)) {
-                        // Apply filters (use FQN for matching)
-                        String fqn = f.getName(true);
-
-                        if (nameFilter != null && !fqn.equals(nameFilter)) {
-                            continue;
+                    Address addrMin = null;
+                    Address addrMax = null;
+                    try {
+                        if (addrMinFilter != null && !addrMinFilter.isEmpty()) {
+                            addrMin = program.getAddressFactory().getAddress(addrMinFilter);
                         }
-
-                        if (nameContainsFilter != null && !fqn.toLowerCase().contains(nameContainsFilter.toLowerCase())) {
-                            continue;
+                        if (addrMaxFilter != null && !addrMaxFilter.isEmpty()) {
+                            addrMax = program.getAddressFactory().getAddress(addrMaxFilter);
                         }
-
-                        if (nameRegexFilter != null && !fqn.matches(nameRegexFilter)) {
-                            continue;
-                        }
-
-                        if (addrFilter != null && !f.getEntryPoint().toString().equals(addrFilter)) {
-                            continue;
-                        }
-
-                        Map<String, Object> func = new HashMap<>();
-                        func.put("name", fqn);
-                        func.put("address", f.getEntryPoint().toString());
-
-                        // Add HATEOAS links (fixed to use proper URL paths)
-                        Map<String, Object> links = new HashMap<>();
-                        Map<String, String> selfLink = new HashMap<>();
-                        selfLink.put("href", "/functions/" + f.getEntryPoint());
-                        links.put("self", selfLink);
-
-                        Map<String, String> programLink = new HashMap<>();
-                        programLink.put("href", "/program");
-                        links.put("program", programLink);
-
-                        func.put("_links", links);
-
-                        functions.add(func);
+                    } catch (Exception e) {
+                        sendErrorResponse(exchange, 400, "Invalid address range: " + e.getMessage(), "INVALID_PARAMETER");
+                        return;
                     }
+
+                    final Address fAddrMin = addrMin;
+                    final Address fAddrMax = addrMax;
+                    GhidraSwing.runRead(() -> {
+                        for (Function f : program.getFunctionManager().getFunctions(true)) {
+                            String fqn = f.getName(true);
+                            if (nameFilter != null && !fqn.equals(nameFilter)) {
+                                continue;
+                            }
+                            if (nameContainsFilter != null && !fqn.toLowerCase().contains(nameContainsFilter.toLowerCase())) {
+                                continue;
+                            }
+                            if (nameRegexFilter != null && !java.util.regex.Pattern.compile(nameRegexFilter).matcher(fqn).find()) {
+                                continue;
+                            }
+                            if (addrFilter != null && !f.getEntryPoint().toString().equals(addrFilter)) {
+                                continue;
+                            }
+                            if (fAddrMin != null && f.getEntryPoint().compareTo(fAddrMin) < 0) {
+                                continue;
+                            }
+                            if (fAddrMax != null && f.getEntryPoint().compareTo(fAddrMax) > 0) {
+                                continue;
+                            }
+
+                            functions.add(buildFunctionListEntry(f));
+                        }
+                    });
                 }
                 
                 // Apply pagination
@@ -1110,20 +1150,33 @@ public class FunctionEndpoints extends AbstractEndpoint {
             String style = params.getOrDefault("style", "normalize");
             String format = params.getOrDefault("format", "structured");
             boolean showConstants = Boolean.parseBoolean(params.getOrDefault("show_constants", "true"));
-            int timeout = parseIntOrDefault(params.get("timeout"), 30);
+            int timeout = Math.max(1, parseIntOrDefault(params.get("timeout"), DEFAULT_DECOMPILATION_TIMEOUT_SECONDS));
 
             // Line filtering parameters for context management
             int startLine = parseIntOrDefault(params.get("start_line"), -1);
             int endLine = parseIntOrDefault(params.get("end_line"), -1);
             int maxLines = parseIntOrDefault(params.get("max_lines"), -1);
 
-            // Decompile function — use cache if available, fall back to static method
-            String decompilation;
-            DecompilerCache cache = getDecompilerCache();
-            if (cache != null) {
-                decompilation = cache.getDecompiledCode(function, timeout);
+            DecompileResults decompResults = decompileWithStatus(function, timeout, showConstants);
+            boolean decompileCompleted = decompResults != null &&
+                                        decompResults.decompileCompleted() &&
+                                        decompResults.getDecompiledFunction() != null;
+            boolean timedOut = decompResults != null && decompResults.isTimedOut();
+            String decompileError = decompResults != null ? decompResults.getErrorMessage() : null;
+            int suggestedTimeout = Math.max(timeout * 2, DEFAULT_DECOMPILATION_TIMEOUT_SECONDS);
+
+            String decompilation = null;
+            if (decompileCompleted) {
+                decompilation = decompResults.getDecompiledFunction().getC();
+            } else if (timedOut) {
+                decompilation = "// Decompilation timed out after " + timeout + " seconds.\n" +
+                               "// This function likely needs more time.\n" +
+                               "// Retry with a higher timeout (for example timeout=" + suggestedTimeout + ").";
+            } else if (decompileError != null && !decompileError.isEmpty()) {
+                decompilation = "// Decompilation did not complete.\n// " + decompileError;
             } else {
-                decompilation = GhidraUtil.decompileFunction(function, showConstants, timeout);
+                decompilation = "// Decompilation did not complete.\n" +
+                               "// Retry with a higher timeout (for example timeout=" + suggestedTimeout + ").";
             }
 
             // Apply line filtering if requested
@@ -1167,6 +1220,20 @@ public class FunctionEndpoints extends AbstractEndpoint {
             Map<String, Object> result = new HashMap<>();
             result.put("function", functionInfo);
             result.put("decompiled", filteredDecompilation != null ? filteredDecompilation : "// Decompilation failed");
+            result.put("timeout_seconds", timeout);
+            result.put("decompile_completed", decompileCompleted);
+            result.put("timed_out", timedOut);
+
+            if (!decompileCompleted) {
+                result.put("retry_recommended", true);
+                result.put("suggested_timeout_seconds", suggestedTimeout);
+                result.put("message", timedOut
+                    ? "Decompilation timed out; retry with a higher timeout."
+                    : "Decompilation did not complete; retry with a higher timeout.");
+                if (decompileError != null && !decompileError.isEmpty()) {
+                    result.put("decompile_error", decompileError);
+                }
+            }
 
             // Add metadata about line filtering if applied
             if (startLine > 0 || endLine > 0 || maxLines > 0) {
@@ -1203,6 +1270,34 @@ public class FunctionEndpoints extends AbstractEndpoint {
         }
     }
 
+    private DecompileResults decompileWithStatus(Function function, int timeout, boolean showConstants) {
+        DecompilerCache cache = getDecompilerCache();
+        if (cache != null) {
+            return cache.getDecompileResults(function, timeout);
+        }
+
+        Program program = function.getProgram();
+        DecompInterface decompiler = new DecompInterface();
+        DecompileOptions options = new DecompileOptions();
+
+        if (showConstants) {
+            options.setEliminateUnreachable(true);
+            options.grabFromProgram(program);
+        }
+
+        decompiler.setOptions(options);
+        decompiler.openProgram(program);
+
+        try {
+            return decompiler.decompileFunction(function, timeout, TaskMonitor.DUMMY);
+        } catch (Exception e) {
+            Msg.error(this, "Error during decompilation of function: " + function.getName(), e);
+            return null;
+        } finally {
+            decompiler.dispose();
+        }
+    }
+
     /**
      * Handle requests to disassemble a function
      */
@@ -1216,37 +1311,41 @@ public class FunctionEndpoints extends AbstractEndpoint {
 
             Program program = function.getProgram();
             if (program != null) {
+                final Program prog = program;
                 try {
-                    Address startAddr = function.getEntryPoint();
-                    Address endAddr = function.getBody().getMaxAddress();
+                    GhidraSwing.runRead(() -> {
+                        Address startAddr = function.getEntryPoint();
+                        Address endAddr = function.getBody().getMaxAddress();
 
-                    ghidra.program.model.listing.Listing listing = program.getListing();
-                    ghidra.program.model.listing.InstructionIterator instrIter =
-                        listing.getInstructions(startAddr, true);
+                        ghidra.program.model.listing.Listing listing = prog.getListing();
+                        ghidra.program.model.listing.InstructionIterator instrIter =
+                            listing.getInstructions(startAddr, true);
 
-                    while (instrIter.hasNext()) {
-                        ghidra.program.model.listing.Instruction instr = instrIter.next();
+                        while (instrIter.hasNext()) {
+                            ghidra.program.model.listing.Instruction instr = instrIter.next();
 
-                        if (instr.getAddress().compareTo(endAddr) > 0) {
-                            break;
+                            if (instr.getAddress().compareTo(endAddr) > 0) {
+                                break;
+                            }
+
+                            Map<String, Object> instrMap = new HashMap<>();
+                            instrMap.put("address", instr.getAddress().toString());
+
+                            byte[] bytes = new byte[instr.getLength()];
+                            prog.getMemory().getBytes(instr.getAddress(), bytes);
+                            StringBuilder hexBytes = new StringBuilder();
+                            for (byte b : bytes) {
+                                hexBytes.append(String.format("%02X", b & 0xFF));
+                            }
+                            instrMap.put("bytes", hexBytes.toString());
+
+                            instrMap.put("mnemonic", instr.getMnemonicString());
+                            instrMap.put("operands", instr.toString().substring(instr.getMnemonicString().length()).trim());
+
+                            allInstructions.add(instrMap);
                         }
-
-                        Map<String, Object> instrMap = new HashMap<>();
-                        instrMap.put("address", instr.getAddress().toString());
-
-                        byte[] bytes = new byte[instr.getLength()];
-                        program.getMemory().getBytes(instr.getAddress(), bytes);
-                        StringBuilder hexBytes = new StringBuilder();
-                        for (byte b : bytes) {
-                            hexBytes.append(String.format("%02X", b & 0xFF));
-                        }
-                        instrMap.put("bytes", hexBytes.toString());
-
-                        instrMap.put("mnemonic", instr.getMnemonicString());
-                        instrMap.put("operands", instr.toString().substring(instr.getMnemonicString().length()).trim());
-
-                        allInstructions.add(instrMap);
-                    }
+                        return null;
+                    });
                 } catch (Exception e) {
                     Msg.error(this, "Error getting disassembly for function: " + function.getName(true), e);
                 }
@@ -1323,10 +1422,13 @@ public class FunctionEndpoints extends AbstractEndpoint {
             List<Map<String, Object>> variables;
             DecompilerCache cache = getDecompilerCache();
             if (cache != null) {
-                DecompileResults results = cache.getDecompileResults(function, 30);
+                // Decompilation manages its own threading - keep it off the EDT.
+                DecompileResults results = cache.getDecompileResults(function, DEFAULT_DECOMPILATION_TIMEOUT_SECONDS);
                 HighFunction hf = (results != null && results.decompileCompleted()) ? results.getHighFunction() : null;
-                variables = GhidraUtil.getFunctionVariables(function, hf);
+                variables = GhidraSwing.runRead(() -> { return GhidraUtil.getFunctionVariables(function, hf); });
             } else {
+                // The no-arg overload decompiles internally; the decompiler manages its own
+                // threading and must NOT run on the EDT, so this stays off the Swing thread.
                 variables = GhidraUtil.getFunctionVariables(function);
             }
             
@@ -1545,12 +1647,12 @@ public class FunctionEndpoints extends AbstractEndpoint {
             DecompilerCache cache = getDecompilerCache();
             DecompileResults decompResults;
             if (cache != null) {
-                decompResults = cache.getDecompileResults(function, 30);
+                decompResults = cache.getDecompileResults(function, DEFAULT_DECOMPILATION_TIMEOUT_SECONDS);
             } else {
                 DecompInterface decomp = new DecompInterface();
                 try {
                     decomp.openProgram(program);
-                    decompResults = decomp.decompileFunction(function, 30, new ConsoleTaskMonitor());
+                    decompResults = decomp.decompileFunction(function, DEFAULT_DECOMPILATION_TIMEOUT_SECONDS, new ConsoleTaskMonitor());
                 } finally {
                     decomp.dispose();
                 }
@@ -1620,6 +1722,25 @@ public class FunctionEndpoints extends AbstractEndpoint {
         } catch (Exception e) {
             sendErrorResponse(exchange, 500, "Error processing variable update request: " + e.getMessage(), "INTERNAL_ERROR");
         }
+    }
+
+    /**
+     * Helper method to find a function by name
+     */
+    private Function findFunctionByName(String name) {
+        Program program = getCurrentProgram();
+        if (program == null) {
+            return null;
+        }
+        
+        return GhidraSwing.runRead(() -> {
+            for (Function f : program.getFunctionManager().getFunctions(true)) {
+                if (f.getName().equals(name)) {
+                    return f;
+                }
+            }
+            return null;
+        });
     }
 
     private Function findFunctionByAddress(String addressString) {

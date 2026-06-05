@@ -1,5 +1,7 @@
 """Data type commands."""
 
+import json
+
 import click
 
 from ..client.exceptions import GhidraError
@@ -80,6 +82,81 @@ def search_datatypes(ctx, name, offset, limit):
             page_output(output, use_pager=config.page_output)
         else:
             click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@datatypes.command('create-struct')
+@click.option('--name', required=True, help='Struct name')
+@click.option('--category', default='/', help='Category path (default: /)')
+@click.option('--fields-json', help='Optional JSON array string for fields')
+@click.pass_context
+def create_struct(ctx, name, category, fields_json):
+    """Create a struct datatype."""
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+
+    try:
+        data = {'name': name, 'category': category}
+        if fields_json:
+            data['fields'] = json.loads(fields_json)
+
+        response = client.post('datatypes/struct', json_data=data)
+        output = formatter.format_simple_result(response)
+        click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@datatypes.command('create-enum')
+@click.option('--name', required=True, help='Enum name')
+@click.option('--size', type=int, default=4, help='Enum storage size in bytes (default: 4)')
+@click.option('--category', default='/', help='Category path (default: /)')
+@click.option('--values-json', help='Optional JSON object string for values')
+@click.pass_context
+def create_enum(ctx, name, size, category, values_json):
+    """Create an enum datatype."""
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+
+    try:
+        data = {'name': name, 'size': size, 'category': category}
+        if values_json:
+            data['values'] = json.loads(values_json)
+
+        response = client.post('datatypes/enum', json_data=data)
+        output = formatter.format_simple_result(response)
+        click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@datatypes.command('create-union')
+@click.option('--name', required=True, help='Union name')
+@click.option('--category', default='/', help='Category path (default: /)')
+@click.option('--fields-json', help='Optional JSON array string for fields')
+@click.pass_context
+def create_union(ctx, name, category, fields_json):
+    """Create a union datatype."""
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+
+    try:
+        data = {'name': name, 'category': category}
+        if fields_json:
+            data['fields'] = json.loads(fields_json)
+        response = client.post('datatypes/union', json_data=data)
+        output = formatter.format_simple_result(response)
+        click.echo(output)
 
     except GhidraError as e:
         error_output = formatter.format_error(e)

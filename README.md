@@ -173,6 +173,11 @@ ghydra --json functions list | jq '.result[].name'
 
 All commands support `--host`, `--port`, `--json`, and `--no-color` flags. See [GHYDRA_CLI.md](GHYDRA_CLI.md) for the full reference.
 
+Timeout defaults are intentionally high for large binaries:
+- CLI/bridge HTTP timeout default: `900s` (`GHYDRA_TIMEOUT`)
+- Decompilation timeout default: `1200s` (`GHYDRA_DECOMP_TIMEOUT`)
+- Incomplete decompilation responses include retry guidance (`retry_recommended`, `suggested_timeout_seconds`)
+
 ## MCP Clients
 
 GhydraMCP works with any MCP-compatible client using **stdio transport**. It has been tested and confirmed working with:
@@ -200,35 +205,40 @@ GhydraMCP v2.3.0 organizes tools into logical namespaces for better discoverabil
 **Function Analysis** (`functions_*`):
 - `functions_list`: List all functions (params: offset, limit, name_contains, name_matches_regex, containing_addr, port [optional])
 - `functions_get`: Get function details (params: name or address, port [optional])
-- `functions_decompile`: Get decompiled C code (params: name or address, syntax_tree, style, show_constants, timeout, start_line, end_line, max_lines, port [optional])
+- `functions_get_containing`: Find function containing an address (params: address, port [optional])
+- `functions_get_next`: Get next function after an address (params: address, port [optional])
+- `functions_get_prev`: Get previous function before an address (params: address, port [optional])
+- `functions_decompile`: Get decompiled C code (params: name or address, syntax_tree, style, show_constants, timeout, start_line, end_line, max_lines, port [optional]); incomplete results return retry metadata and suggested timeout
 - `functions_disassemble`: Get disassembled instructions (params: name or address, offset, limit, port [optional])
 - `functions_create`: Create function at address (params: address, port [optional])
 - `functions_rename`: Rename a function (params: old_name or address, new_name, port [optional])
 - `functions_set_signature`: Update function prototype (params: name or address, signature, port [optional])
+- `functions_delete`: Delete a function (params: name or address, port [optional])
 - `functions_get_variables`: Get function variables (params: name or address, port [optional])
 - `functions_set_variable`: Rename or retype a function variable (params: name or address, variable, new_name [optional], data_type [optional], port [optional])
+- `functions_update_variable`: Update a function variable (params: address, variable_name, new_name [optional], new_data_type [optional], port [optional])
 - `functions_get_cfg`: Get control flow graph (params: name or address, port [optional])
 - `functions_get_pcode`: Get pcode operations (params: name or address, port [optional])
 - `functions_set_comment`: Set function comment (params: address, comment, port [optional])
 
 **Data Manipulation** (`data_*`):
-- `data_list`: List data items (params: offset, limit, addr, name, name_contains, type, port [optional])
+- `data_list`: List data items (params: offset, limit, addr, name, name_contains, type, port [optional]); address lookups return defined data first, then label symbols if no defined data exists
 - `data_create`: Create data at address (params: address, data_type, size [optional], port [optional])
 - `data_list_strings`: List all defined strings (params: offset, limit, filter, port [optional])
-- `data_rename`: Rename data item (params: address, name, port [optional])
+- `data_rename`: Rename data item (params: address, name, port [optional]); auto-defines a byte at the address if data is undefined
 - `data_delete`: Delete data item (params: address, port [optional])
-- `data_set_type`: Change data type (params: address, data_type, port [optional])
+- `data_set_type`: Change data type (params: address, data_type, port [optional]); supports array syntax (e.g. `uint64_t[8]`) and auto-defines data when undefined
 
 **Struct Management** (`structs_*`):
 - `structs_list`: List all struct data types (params: offset, limit, category [optional], port [optional])
 - `structs_get`: Get detailed struct information (params: name, port [optional])
-- `structs_create`: Create new struct (params: name, category [optional], description [optional], port [optional])
+- `structs_create`: Create new struct (params: name, category [optional], size [optional], description [optional], port [optional])
 - `structs_add_field`: Add field to struct (params: struct_name, field_name, field_type, offset [optional], comment [optional], port [optional])
 - `structs_update_field`: Update struct field (params: struct_name, field_name or field_offset, new_name [optional], new_type [optional], new_comment [optional], port [optional])
 - `structs_delete`: Delete struct (params: name, port [optional])
 
 **Memory Operations** (`memory_*`):
-- `memory_read`: Read bytes from memory (params: address, length, format, port [optional])
+- `memory_read`: Read bytes from memory (params: address, length, format, port [optional]); overlay-aware (`runtime::145e29b10` and plain offsets that map to overlays)
 - `memory_write`: Write bytes to memory (params: address, bytes_data, format, port [optional])
 - `memory_disassemble`: Disassemble at arbitrary address (params: address, offset, limit, port [optional])
 
@@ -239,7 +249,7 @@ GhydraMCP v2.3.0 organizes tools into logical namespaces for better discoverabil
 - `scalars_search`: Find scalar values in instructions (params: value, in_function [optional], to_function [optional], offset, limit, port [optional])
 
 **Analysis** (`analysis_*`):
-- `analysis_run`: Trigger program analysis (params: background, port [optional])
+- `analysis_run`: Trigger program analysis (params: analysis_options [optional], background [optional], port [optional])
 - `analysis_status`: Check analysis status (params: port [optional])
 - `analysis_get_callgraph`: Get function call graph (params: name or address, max_depth, port [optional])
 - `analysis_get_dataflow`: Perform data flow analysis via pcode varnode tracing (params: address, direction, max_steps, port [optional])
@@ -249,11 +259,14 @@ GhydraMCP v2.3.0 organizes tools into logical namespaces for better discoverabil
 - `symbols_list`: List all symbols (params: offset, limit, port [optional])
 - `symbols_imports`: List imported symbols (params: offset, limit, port [optional])
 - `symbols_exports`: List exported symbols (params: offset, limit, port [optional])
-- `segments_list`: List memory segments (params: offset, limit, port [optional])
+- `segments_list`: List memory segments (params: offset, limit, name [optional], port [optional])
 - `namespaces_list`: List namespace hierarchy (params: offset, limit, port [optional])
 - `variables_list`: List variables (params: search, global_only, offset, limit, port [optional])
 - `datatypes_list`: List data types (params: offset, limit, category, kind, port [optional])
 - `datatypes_search`: Search data types by name (params: name, offset, limit, port [optional])
+- `datatypes_create_struct`: Create struct datatype (params: name, category [optional], fields [optional], port [optional])
+- `datatypes_create_enum`: Create enum datatype (params: name, size [optional], category [optional], values [optional], port [optional])
+- `datatypes_create_union`: Create union datatype (params: name, category [optional], fields [optional], port [optional])
 
 **Script Execution** (`script_*`):
 - `script_execute`: Execute Python 3 script inside Ghidra via PyGhidra (params: code, language, timeout, port [optional])
@@ -268,11 +281,41 @@ GhydraMCP v2.3.0 organizes tools into logical namespaces for better discoverabil
 
 **Comments** (`comments_*`):
 - `comments_set`: Set comment at address (params: address, comment, type [plate/pre/post/eol/repeatable], port [optional])
+- `comments_get`: Get comment at address (params: address, comment_type [optional], port [optional])
 
 **Project Management** (`project_*`):
 - `project_info`: Get current project information (params: port [optional])
 - `project_list_files`: List files in project (params: folder, recursive, offset, limit, port [optional])
 - `project_open_file`: Open project file in CodeBrowser (params: path, port [optional])
+- `projects_list`: List projects (params: port [optional])
+- `projects_get`: Get project details by name (params: name, port [optional])
+- `programs_list`: List programs (params: project [optional], offset, limit, port [optional])
+- `programs_get`: Get program by ID or `current` (params: program_id [optional], port [optional])
+- `programs_delete`: Delete/close program by ID or `current` (params: program_id [optional], port [optional])
+
+> `programs_delete` and program import routes are currently exposed but may return `NOT_IMPLEMENTED` depending on plugin-side support.
+
+**Datatype Management** (`datatypes_*`):
+- `datatypes_list`: List data types (params: offset, limit, category [optional], kind [optional], port [optional])
+- `datatypes_search`: Search data types by name (params: name, offset, limit, port [optional])
+- `datatypes_create_struct`: Create struct datatype (params: name, category [optional], fields_json [optional], port [optional]); supports JSON field definitions
+- `datatypes_create_enum`: Create enum datatype (params: name, size [optional], category [optional], values_json [optional], port [optional]); supports JSON value definitions
+- `datatypes_create_union`: Create union datatype (params: name, category [optional], fields_json [optional], port [optional]); supports JSON field definitions
+
+**Comment Management** (`comments_*`):
+- `comments_set`: Set memory comment (params: address, comment [optional], comment_type [optional], port [optional])
+- `comments_get`: Get memory comment (params: address, comment_type [optional], port [optional])
+
+**UI Helpers** (`ui_*`):
+- `ui_get_current_address`: Get currently selected UI address (params: port [optional])
+- `ui_get_current_function`: Get currently selected UI function (params: port [optional])
+
+**Program Metadata** (`classes_*`, `symbols_*`, `segments_*`, `namespaces_*`, `variables_*`):
+- `classes_list`: List classes/namespaces (params: offset, limit, port [optional])
+- `symbols_list` / `symbols_imports` / `symbols_exports`: Enumerate symbols (params: offset, limit, port [optional])
+- `segments_list`: List memory blocks (params: offset, limit, name [optional], port [optional])
+- `namespaces_list`: List namespaces (params: offset, limit, port [optional])
+- `variables_list`: List variables (params: offset, limit, search [optional], global_only [optional], port [optional])
 
 **Example Usage**:
 ```python
@@ -295,7 +338,7 @@ client.use_tool("ghydra", "data_list_strings", {"filter": "password"})  # Find s
 client.use_tool("ghydra", "data_list", {"offset": 0, "limit": 50})
 client.use_tool("ghydra", "data_create", {"address": "0x00401234", "data_type": "int"})
 client.use_tool("ghydra", "data_rename", {"address": "0x00401234", "name": "counter"})
-client.use_tool("ghydra", "data_set_type", {"address": "0x00401238", "data_type": "char *"})
+client.use_tool("ghydra", "data_set_type", {"address": "0x00401238", "data_type": "uint64_t[8]"})
 client.use_tool("ghydra", "data_delete", {"address": "0x0040123C"})
 
 # Struct Management
@@ -321,7 +364,7 @@ client.use_tool("ghydra", "structs_get", {"name": "NetworkPacket"})
 client.use_tool("ghydra", "structs_list", {"category": "/network"})
 
 # Memory Operations
-client.use_tool("ghydra", "memory_read", {"address": "0x00401000", "length": 16, "format": "hex"})
+client.use_tool("ghydra", "memory_read", {"address": "runtime::145e29b10", "length": 16, "format": "hex"})
 client.use_tool("ghydra", "memory_write", {"address": "0x00401000", "bytes_data": "90909090", "format": "hex"})
 
 # Cross-References

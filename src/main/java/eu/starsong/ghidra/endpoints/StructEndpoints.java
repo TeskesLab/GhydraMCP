@@ -3,6 +3,7 @@ package eu.starsong.ghidra.endpoints;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import eu.starsong.ghidra.api.ResponseBuilder;
+import eu.starsong.ghidra.util.GhidraSwing;
 import eu.starsong.ghidra.util.GhidraUtil;
 import eu.starsong.ghidra.util.TransactionHelper;
 import eu.starsong.ghidra.util.TransactionHelper.TransactionException;
@@ -10,6 +11,7 @@ import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
+import ghidra.util.exception.DuplicateNameException;
 
 import java.io.IOException;
 import java.net.URLDecoder;
@@ -185,7 +187,7 @@ public class StructEndpoints extends AbstractEndpoint {
 
                             // fieldId can be an offset (numeric) or field name
                             try {
-                                Integer.parseInt(subId);
+                                Integer.decode(subId);
                                 params.put("fieldOffset", subId);
                             } catch (NumberFormatException e) {
                                 params.put("fieldName", subId);
@@ -237,35 +239,37 @@ public class StructEndpoints extends AbstractEndpoint {
             List<Map<String, Object>> structList = new ArrayList<>();
 
             // Iterate through all data types and filter for structures
-            dtm.getAllDataTypes().forEachRemaining(dataType -> {
-                if (dataType instanceof Structure) {
-                    Structure struct = (Structure) dataType;
+            GhidraSwing.runRead(() -> {
+                dtm.getAllDataTypes().forEachRemaining(dataType -> {
+                    if (dataType instanceof Structure) {
+                        Structure struct = (Structure) dataType;
 
-                    // Apply category filter if specified
-                    if (categoryFilter != null && !categoryFilter.isEmpty()) {
-                        CategoryPath catPath = struct.getCategoryPath();
-                        if (!catPath.getPath().contains(categoryFilter)) {
-                            return;
+                        // Apply category filter if specified
+                        if (categoryFilter != null && !categoryFilter.isEmpty()) {
+                            CategoryPath catPath = struct.getCategoryPath();
+                            if (!catPath.getPath().contains(categoryFilter)) {
+                                return;
+                            }
                         }
+
+                        Map<String, Object> structInfo = new HashMap<>();
+                        structInfo.put("name", struct.getName());
+                        structInfo.put("path", struct.getPathName());
+                        structInfo.put("size", struct.getLength());
+                        structInfo.put("numFields", struct.getNumComponents());
+                        structInfo.put("category", struct.getCategoryPath().getPath());
+                        structInfo.put("description", struct.getDescription() != null ? struct.getDescription() : "");
+
+                        // Add HATEOAS links
+                        Map<String, Object> links = new HashMap<>();
+                        Map<String, String> selfLink = new HashMap<>();
+                        selfLink.put("href", "/structs?name=" + struct.getName());
+                        links.put("self", selfLink);
+                        structInfo.put("_links", links);
+
+                        structList.add(structInfo);
                     }
-
-                    Map<String, Object> structInfo = new HashMap<>();
-                    structInfo.put("name", struct.getName());
-                    structInfo.put("path", struct.getPathName());
-                    structInfo.put("size", struct.getLength());
-                    structInfo.put("numFields", struct.getNumComponents());
-                    structInfo.put("category", struct.getCategoryPath().getPath());
-                    structInfo.put("description", struct.getDescription() != null ? struct.getDescription() : "");
-
-                    // Add HATEOAS links
-                    Map<String, Object> links = new HashMap<>();
-                    Map<String, String> selfLink = new HashMap<>();
-                    selfLink.put("href", "/structs?name=" + struct.getName());
-                    links.put("self", selfLink);
-                    structInfo.put("_links", links);
-
-                    structList.add(structInfo);
-                }
+                });
             });
 
             // Sort by name for consistency
@@ -352,6 +356,20 @@ public class StructEndpoints extends AbstractEndpoint {
                 return;
             }
 
+            Integer initialSize = null;
+            if (sizeStr != null && !sizeStr.isEmpty()) {
+                try {
+                    initialSize = Integer.decode(sizeStr);
+                    if (initialSize < 0) {
+                        sendErrorResponse(exchange, 400, "Invalid size parameter: must be >= 0", "INVALID_PARAMETER");
+                        return;
+                    }
+                } catch (NumberFormatException e) {
+                    sendErrorResponse(exchange, 400, "Invalid size parameter: must be an integer", "INVALID_PARAMETER");
+                    return;
+                }
+            }
+
             Program program = getCurrentProgram();
             if (program == null) {
                 sendErrorResponse(exchange, 400, "No program loaded", "NO_PROGRAM_LOADED");
@@ -360,6 +378,11 @@ public class StructEndpoints extends AbstractEndpoint {
 
             Map<String, Object> resultMap = new HashMap<>();
             resultMap.put("name", structName);
+            if (initialSize != null) {
+                resultMap.put("requestedSize", initialSize);
+            }
+
+            final Integer finalInitialSize = initialSize;
 
             try {
                 TransactionHelper.executeInTransaction(program, "Create struct " + structName, () -> {
@@ -380,7 +403,8 @@ public class StructEndpoints extends AbstractEndpoint {
                     }
 
                     // Create the structure
-                    StructureDataType struct = new StructureDataType(catPath, structName, 0);
+                    int structSize = (finalInitialSize != null) ? finalInitialSize : 0;
+                    StructureDataType struct = new StructureDataType(catPath, structName, structSize);
 
                     if (description != null && !description.isEmpty()) {
                         struct.setDescription(description);
@@ -457,7 +481,7 @@ public class StructEndpoints extends AbstractEndpoint {
             Integer offset = null;
             if (offsetStr != null && !offsetStr.isEmpty()) {
                 try {
-                    offset = Integer.parseInt(offsetStr);
+                    offset = Integer.decode(offsetStr);
                 } catch (NumberFormatException e) {
                     sendErrorResponse(exchange, 400, "Invalid offset parameter: must be an integer", "INVALID_PARAMETER");
                     return;
@@ -584,7 +608,7 @@ public class StructEndpoints extends AbstractEndpoint {
             Integer fieldOffset = null;
             if (fieldOffsetStr != null && !fieldOffsetStr.isEmpty()) {
                 try {
-                    fieldOffset = Integer.parseInt(fieldOffsetStr);
+                    fieldOffset = Integer.decode(fieldOffsetStr);
                 } catch (NumberFormatException e) {
                     sendErrorResponse(exchange, 400, "Invalid fieldOffset parameter: must be an integer", "INVALID_PARAMETER");
                     return;
@@ -621,7 +645,7 @@ public class StructEndpoints extends AbstractEndpoint {
                     // Find the field to update
                     DataTypeComponent component = null;
                     if (finalFieldOffset != null) {
-                        component = struct.getComponentAt(finalFieldOffset);
+                        component = struct.getComponentContaining(finalFieldOffset);
                     } else {
                         // Search by field name
                         for (DataTypeComponent comp : struct.getComponents()) {
@@ -637,7 +661,12 @@ public class StructEndpoints extends AbstractEndpoint {
                     }
 
                     int componentOffset = component.getOffset();
-                    int componentLength = component.getLength();
+
+                    if (finalFieldOffset != null && componentOffset != finalFieldOffset) {
+                        throw new Exception("fieldOffset " + finalFieldOffset + " is inside component at offset " +
+                                           componentOffset + "; provide the component start offset");
+                    }
+
                     DataType originalType = component.getDataType();
                     String originalName = component.getFieldName();
                     String originalComment = component.getComment();
@@ -652,25 +681,42 @@ public class StructEndpoints extends AbstractEndpoint {
                     String updatedName = (newName != null && !newName.isEmpty()) ? newName : originalName;
                     String updatedComment = (newComment != null) ? newComment : originalComment;
                     DataType updatedType = originalType;
+                    boolean hasTypeUpdate = newType != null && !newType.isEmpty();
+                    boolean hasNameUpdate = newName != null && !newName.isEmpty();
+                    boolean hasCommentUpdate = newComment != null;
 
-                    if (newType != null && !newType.isEmpty()) {
+                    if (hasTypeUpdate) {
                         updatedType = GhidraUtil.resolveDataType(program, newType);
                         if (updatedType == null) {
                             throw new Exception("Field type not found: " + newType);
                         }
                     }
 
-                    // Update the field by replacing it
-                    // Ghidra doesn't have a direct "update" - we need to delete and re-add
-                    struct.deleteAtOffset(componentOffset);
-                    DataTypeComponent newComponent = struct.insertAtOffset(componentOffset, updatedType,
-                                                                           updatedType.getLength(),
-                                                                           updatedName, updatedComment);
+                    DataTypeComponent updatedComponent = component;
 
-                    resultMap.put("newName", newComponent.getFieldName());
-                    resultMap.put("newType", newComponent.getDataType().getName());
-                    resultMap.put("newComment", newComponent.getComment() != null ? newComponent.getComment() : "");
-                    resultMap.put("length", newComponent.getLength());
+                    if (hasTypeUpdate) {
+                        int replacementLength = getValidatedReplacementLength(struct, componentOffset, component, updatedType);
+                        updatedComponent = struct.replaceAtOffset(componentOffset, updatedType, replacementLength, updatedName, updatedComment);
+                        if (updatedComponent == null) {
+                            throw new Exception("Failed to replace field at offset " + componentOffset);
+                        }
+                    } else {
+                        if (hasNameUpdate && !Objects.equals(updatedName, originalName)) {
+                            try {
+                                updatedComponent.setFieldName(updatedName);
+                            } catch (DuplicateNameException e) {
+                                throw new Exception("Field name already exists in struct: " + updatedName, e);
+                            }
+                        }
+                        if (hasCommentUpdate) {
+                            updatedComponent.setComment(updatedComment);
+                        }
+                    }
+
+                    resultMap.put("newName", updatedComponent.getFieldName());
+                    resultMap.put("newType", updatedComponent.getDataType().getName());
+                    resultMap.put("newComment", updatedComponent.getComment() != null ? updatedComponent.getComment() : "");
+                    resultMap.put("length", updatedComponent.getLength());
 
                     return null;
                 });
@@ -792,16 +838,18 @@ public class StructEndpoints extends AbstractEndpoint {
 
         // Add field details
         List<Map<String, Object>> fields = new ArrayList<>();
-        for (DataTypeComponent component : struct.getComponents()) {
-            Map<String, Object> fieldInfo = new HashMap<>();
-            fieldInfo.put("name", component.getFieldName() != null ? component.getFieldName() : "");
-            fieldInfo.put("offset", component.getOffset());
-            fieldInfo.put("length", component.getLength());
-            fieldInfo.put("type", component.getDataType().getName());
-            fieldInfo.put("typePath", component.getDataType().getPathName());
-            fieldInfo.put("comment", component.getComment() != null ? component.getComment() : "");
-            fields.add(fieldInfo);
-        }
+        GhidraSwing.runRead(() -> {
+            for (DataTypeComponent component : struct.getComponents()) {
+                Map<String, Object> fieldInfo = new HashMap<>();
+                fieldInfo.put("name", component.getFieldName() != null ? component.getFieldName() : "");
+                fieldInfo.put("offset", component.getOffset());
+                fieldInfo.put("length", component.getLength());
+                fieldInfo.put("type", component.getDataType().getName());
+                fieldInfo.put("typePath", component.getDataType().getPathName());
+                fieldInfo.put("comment", component.getComment() != null ? component.getComment() : "");
+                fields.add(fieldInfo);
+            }
+        });
         structInfo.put("fields", fields);
 
         return structInfo;
@@ -811,17 +859,42 @@ public class StructEndpoints extends AbstractEndpoint {
      * Find a struct by name, searching through all data types
      */
     private DataType findStructByName(DataTypeManager dtm, String structName) {
-        final DataType[] result = new DataType[1];
+        return GhidraSwing.runRead(() -> {
+            final DataType[] result = new DataType[1];
 
-        dtm.getAllDataTypes().forEachRemaining(dt -> {
-            if (dt instanceof Structure && dt.getName().equals(structName)) {
-                if (result[0] == null) {
-                    result[0] = dt;
+            dtm.getAllDataTypes().forEachRemaining(dt -> {
+                if (dt instanceof Structure && dt.getName().equals(structName)) {
+                    if (result[0] == null) {
+                        result[0] = dt;
+                    }
                 }
-            }
-        });
+            });
 
-        return result[0];
+            return result[0];
+        });
+    }
+
+    private int getValidatedReplacementLength(Structure struct, int componentOffset, DataTypeComponent component, DataType updatedType) throws Exception {
+        int requestedLength = updatedType.getLength();
+        if (requestedLength <= 0) {
+            throw new Exception("Field type '" + updatedType.getName() + "' has unsupported size: " + requestedLength);
+        }
+
+        int maxLength = getMaxReplacementLength(struct, componentOffset, component);
+        if (requestedLength > maxLength) {
+            throw new Exception("Field type '" + updatedType.getName() + "' (" + requestedLength +
+                               " bytes) does not fit at offset " + componentOffset +
+                               "; available bytes before next defined field: " + maxLength);
+        }
+        return requestedLength;
+    }
+
+    private int getMaxReplacementLength(Structure struct, int componentOffset, DataTypeComponent component) {
+        int searchOffset = component.getEndOffset() + 1;
+        DataTypeComponent nextDefined = struct.getDefinedComponentAtOrAfterOffset(searchOffset);
+        int structLength = struct.getLength();
+        int endOffset = (nextDefined != null) ? nextDefined.getOffset() : structLength;
+        return Math.max(0, endOffset - componentOffset);
     }
 
 }

@@ -4,6 +4,8 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import eu.starsong.ghidra.api.ResponseBuilder;
 import eu.starsong.ghidra.model.ProgramInfo;
+import eu.starsong.ghidra.util.DataFlowUtil;
+import eu.starsong.ghidra.util.GhidraSwing;
 import eu.starsong.ghidra.util.GhidraUtil;
 import eu.starsong.ghidra.util.HttpUtil;
 import eu.starsong.ghidra.util.TransactionHelper;
@@ -60,6 +62,10 @@ public class ProgramEndpoints extends AbstractEndpoint {
 
     @Override
     public void registerEndpoints(HttpServer server) {
+        // Program collection/resource endpoints
+        server.createContext("/programs", this::handleProgramsRoot);
+        server.createContext("/programs/", this::handleProgramsById);
+
         server.createContext("/program", this::handleProgramInfo);
 
         // Register address and function endpoints
@@ -69,6 +75,34 @@ public class ProgramEndpoints extends AbstractEndpoint {
         // Register direct analysis endpoints according to HATEOAS API
         server.createContext("/analysis/callgraph", this::handleCallGraph);
         server.createContext("/analysis/dataflow", exchange -> handleDataFlow(exchange, null, ""));
+    }
+
+    private void handleProgramsRoot(HttpExchange exchange) throws IOException {
+        String method = exchange.getRequestMethod();
+        String path = exchange.getRequestURI().getPath();
+
+        if (!"/programs".equals(path) && !"/programs/".equals(path)) {
+            sendErrorResponse(exchange, 404, "Endpoint not found", "ENDPOINT_NOT_FOUND");
+            return;
+        }
+
+        if ("GET".equals(method)) {
+            handleListPrograms(exchange);
+        } else if ("POST".equals(method)) {
+            handleImportProgram(exchange);
+        } else {
+            sendErrorResponse(exchange, 405, "Method Not Allowed", "METHOD_NOT_ALLOWED");
+        }
+    }
+
+    private void handleProgramsById(HttpExchange exchange) throws IOException {
+        String path = exchange.getRequestURI().getPath();
+        if ("/programs/".equals(path)) {
+            exchange.getResponseHeaders().set("Location", "/programs");
+            exchange.sendResponseHeaders(302, -1);
+            return;
+        }
+        handleProgramById(exchange);
     }
 
     @Override
@@ -175,7 +209,14 @@ public class ProgramEndpoints extends AbstractEndpoint {
 
             // Check if this is a request for the current program
             if (path.equals("/programs/current")) {
-                handleProgramInfo(exchange);
+                String method = exchange.getRequestMethod();
+                if ("GET".equals(method)) {
+                    handleProgramInfo(exchange);
+                } else if ("DELETE".equals(method)) {
+                    handleDeleteProgram(exchange, "current");
+                } else {
+                    sendErrorResponse(exchange, 405, "Method Not Allowed", "METHOD_NOT_ALLOWED");
+                }
                 return;
             }
 
@@ -1083,61 +1124,67 @@ public class ProgramEndpoints extends AbstractEndpoint {
 
             // Find references based on the provided parameters
             List<Map<String, Object>> xrefs = new ArrayList<>();
+            final Program prog = program;
+            final ghidra.program.model.address.Address toAddrFinal = toAddr;
+            final ghidra.program.model.address.Address fromAddrFinal = fromAddr;
+            final String refTypeFinal = refType;
 
-            // Get references to an address
-            if (toAddr != null) {
-                // Get references to this address
-                ghidra.program.model.symbol.ReferenceManager refManager = program.getReferenceManager();
-                ghidra.program.model.symbol.ReferenceIterator refsIterator = refManager.getReferencesTo(toAddr);
+            GhidraSwing.runRead(() -> {
+                // Get references to an address
+                if (toAddrFinal != null) {
+                    // Get references to this address
+                    ghidra.program.model.symbol.ReferenceManager refManager = prog.getReferenceManager();
+                    ghidra.program.model.symbol.ReferenceIterator refsIterator = refManager.getReferencesTo(toAddrFinal);
 
-                while (refsIterator.hasNext()) {
-                    ghidra.program.model.symbol.Reference ref = refsIterator.next();
+                    while (refsIterator.hasNext()) {
+                        ghidra.program.model.symbol.Reference ref = refsIterator.next();
 
-                    // Skip if type filter is specified and doesn't match
-                    if (refType != null && !refTypeMatches(ref, refType)) {
-                        continue;
+                        // Skip if type filter is specified and doesn't match
+                        if (refTypeFinal != null && !refTypeMatches(ref, refTypeFinal)) {
+                            continue;
+                        }
+
+                        // Get reference info
+                        Map<String, Object> refInfo = new HashMap<>();
+                        refInfo.put("from_addr", ref.getFromAddress().toString());
+                        refInfo.put("to_addr", ref.getToAddress().toString());
+                        refInfo.put("type", getReferenceTypeName(ref.getReferenceType()));
+
+                        // Get additional context if available
+                        refInfo.put("from_function", getFunctionName(prog, ref.getFromAddress()));
+                        refInfo.put("to_function", getFunctionName(prog, ref.getToAddress()));
+
+                        xrefs.add(refInfo);
                     }
-
-                    // Get reference info
-                    Map<String, Object> refInfo = new HashMap<>();
-                    refInfo.put("from_addr", ref.getFromAddress().toString());
-                    refInfo.put("to_addr", ref.getToAddress().toString());
-                    refInfo.put("type", getReferenceTypeName(ref.getReferenceType()));
-
-                    // Get additional context if available
-                    refInfo.put("from_function", getFunctionName(program, ref.getFromAddress()));
-                    refInfo.put("to_function", getFunctionName(program, ref.getToAddress()));
-
-                    xrefs.add(refInfo);
                 }
-            }
 
-            // Get references from an address
-            if (fromAddr != null && (toAddr == null || xrefs.isEmpty())) {
-                // Get references from this address
-                ghidra.program.model.symbol.ReferenceManager refManager = program.getReferenceManager();
-                ghidra.program.model.symbol.Reference[] refs = refManager.getReferencesFrom(fromAddr);
+                // Get references from an address
+                if (fromAddrFinal != null && (toAddrFinal == null || xrefs.isEmpty())) {
+                    // Get references from this address
+                    ghidra.program.model.symbol.ReferenceManager refManager = prog.getReferenceManager();
+                    ghidra.program.model.symbol.Reference[] refs = refManager.getReferencesFrom(fromAddrFinal);
 
-                for (ghidra.program.model.symbol.Reference ref : refs) {
+                    for (ghidra.program.model.symbol.Reference ref : refs) {
 
-                    // Skip if type filter is specified and doesn't match
-                    if (refType != null && !refTypeMatches(ref, refType)) {
-                        continue;
+                        // Skip if type filter is specified and doesn't match
+                        if (refTypeFinal != null && !refTypeMatches(ref, refTypeFinal)) {
+                            continue;
+                        }
+
+                        // Get reference info
+                        Map<String, Object> refInfo = new HashMap<>();
+                        refInfo.put("from_addr", ref.getFromAddress().toString());
+                        refInfo.put("to_addr", ref.getToAddress().toString());
+                        refInfo.put("type", getReferenceTypeName(ref.getReferenceType()));
+
+                        // Get additional context if available
+                        refInfo.put("from_function", getFunctionName(prog, ref.getFromAddress()));
+                        refInfo.put("to_function", getFunctionName(prog, ref.getToAddress()));
+
+                        xrefs.add(refInfo);
                     }
-
-                    // Get reference info
-                    Map<String, Object> refInfo = new HashMap<>();
-                    refInfo.put("from_addr", ref.getFromAddress().toString());
-                    refInfo.put("to_addr", ref.getToAddress().toString());
-                    refInfo.put("type", getReferenceTypeName(ref.getReferenceType()));
-
-                    // Get additional context if available
-                    refInfo.put("from_function", getFunctionName(program, ref.getFromAddress()));
-                    refInfo.put("to_function", getFunctionName(program, ref.getToAddress()));
-
-                    xrefs.add(refInfo);
                 }
-            }
+            });
 
             // Apply pagination
             int endIndex = Math.min(xrefs.size(), offset + limit);
@@ -1537,7 +1584,11 @@ public class ProgramEndpoints extends AbstractEndpoint {
             }
 
             // Build call graph (this is a simplified implementation)
-            Map<String, Object> graph = buildCallGraph(program, startFunction, maxDepth);
+            final Program progGraph = program;
+            final ghidra.program.model.listing.Function startFunctionFinal = startFunction;
+            final int maxDepthFinal = maxDepth;
+            Map<String, Object> graph = GhidraSwing.runRead(
+                () -> buildCallGraph(progGraph, startFunctionFinal, maxDepthFinal));
 
             // Build response
             ResponseBuilder builder = new ResponseBuilder(exchange, port)
@@ -1580,7 +1631,9 @@ public class ProgramEndpoints extends AbstractEndpoint {
     private Map<String, Object> buildCallGraph(Program program, ghidra.program.model.listing.Function startFunction, int maxDepth) {
         Map<String, Object> graph = new HashMap<>();
         graph.put("rootFunction", startFunction.getName(true));
+        graph.put("root", startFunction.getName(true));
         graph.put("root_address", startFunction.getEntryPoint().toString());
+        graph.put("rootAddress", startFunction.getEntryPoint().toString()); // Backward-compatible alias
         graph.put("max_depth", maxDepth);
 
         // Build nodes list
@@ -1711,66 +1764,10 @@ public class ProgramEndpoints extends AbstractEndpoint {
                 sendErrorResponse(exchange, 400, "Invalid address: " + addressStr, "INVALID_ADDRESS");
                 return;
             }
-
-            Function containingFunc = program.getFunctionManager().getFunctionContaining(targetAddr);
-            if (containingFunc == null) {
-                // If not found, try constructing in the default address space
-                // (getAddress() may pick the wrong space when multiple spaces overlap)
-                long offset = targetAddr.getOffset();
-                ghidra.program.model.address.AddressSpace defaultSpace = program.getAddressFactory().getDefaultAddressSpace();
-                Address defaultAddr = defaultSpace.getAddress(offset);
-                containingFunc = program.getFunctionManager().getFunctionContaining(defaultAddr);
-                if (containingFunc != null) {
-                    targetAddr = defaultAddr;
-                }
-            }
-            if (containingFunc == null) {
-                sendErrorResponse(exchange, 404, "No function found containing address " + addressStr, "NO_FUNCTION");
-                return;
-            }
-
-            // Ensure the target address is in the same address space as the function
-            // This handles cases where getAddress() resolves to a different space than
-            // what the decompiler/pcode uses for instruction addresses
-            ghidra.program.model.address.AddressSpace funcSpace = containingFunc.getEntryPoint().getAddressSpace();
-            if (!targetAddr.getAddressSpace().equals(funcSpace)) {
-                targetAddr = funcSpace.getAddress(targetAddr.getOffset());
-            }
-
-            DecompileResults decompResults = decompileFunction(containingFunc);
-            if (decompResults == null || !decompResults.decompileCompleted()) {
-                sendErrorResponse(exchange, 500, "Decompilation failed for function containing " + addressStr, "DECOMPILE_FAILED");
-                return;
-            }
-
-            HighFunction highFunc = decompResults.getHighFunction();
-            if (highFunc == null) {
-                sendErrorResponse(exchange, 500, "No high function available", "DECOMPILE_FAILED");
-                return;
-            }
-
-            PcodeOpAST targetOp = findPcodeOpAtAddress(highFunc, targetAddr);
-            if (targetOp == null) {
-                sendErrorResponse(exchange, 404, "No pcode operation found at address " + addressStr, "NO_PCODE_AT_ADDRESS");
-                return;
-            }
-
-            List<Map<String, Object>> steps;
-            if ("forward".equals(direction)) {
-                steps = traceForwardDataFlow(targetOp, maxSteps);
-            } else {
-                steps = traceBackwardDataFlow(targetOp, maxSteps);
-            }
-
-            Map<String, Object> dataFlowResult = new HashMap<>();
-            dataFlowResult.put("start_address", addressStr);
-            dataFlowResult.put("direction", direction);
-            dataFlowResult.put("max_steps", maxSteps);
-            dataFlowResult.put("function", containingFunc.getName(true));
-            dataFlowResult.put("function_address", containingFunc.getEntryPoint().toString());
-            dataFlowResult.put("step_count", steps.size());
-            dataFlowResult.put("steps", steps);
-
+            
+            Map<String, Object> dataFlowResult =
+                DataFlowUtil.analyzeReferenceFlow(program, targetAddr, direction, maxSteps);
+            
             ResponseBuilder builder = new ResponseBuilder(exchange, port)
                 .success(true)
                 .result(dataFlowResult);
@@ -1782,8 +1779,11 @@ public class ProgramEndpoints extends AbstractEndpoint {
 
             builder.addLink("self", selfLinkBuilder.toString());
             builder.addLink("program", "/programs/current");
-            builder.addLink("function", "/functions/" + containingFunc.getEntryPoint().toString());
-            builder.addLink("pcode", "/functions/" + containingFunc.getEntryPoint().toString() + "/pcode");
+            Object functionAddress = dataFlowResult.get("function_address");
+            if (functionAddress instanceof String functionAddressStr) {
+                builder.addLink("function", "/functions/" + functionAddressStr);
+                builder.addLink("pcode", "/functions/" + functionAddressStr + "/pcode");
+            }
 
             sendJsonResponse(exchange, builder.build(), 200);
         } catch (Exception e) {
