@@ -506,39 +506,6 @@ def set_signature(ctx, name, address, signature):
         ctx.exit(1)
 
 
-@functions.command('delete')
-@click.option('--name', '-n', help='Function name')
-@click.option('--address', '-a', help='Function address (hex)')
-@click.pass_context
-def delete_function(ctx, name, address):
-    """Delete a function."""
-    if not name and not address:
-        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
-        ctx.exit(1)
-
-    if name and address:
-        rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
-        ctx.exit(1)
-
-    client = ctx.obj['client']
-    formatter = ctx.obj['formatter']
-
-    try:
-        if address:
-            endpoint = f'functions/{validate_address(address)}'
-        else:
-            endpoint = f'functions/by-name/{quote(name)}'
-
-        response = client.delete(endpoint)
-        output = formatter.format_simple_result(response)
-        click.echo(output)
-
-    except GhidraError as e:
-        error_output = formatter.format_error(e)
-        rich_echo(error_output, err=True)
-        ctx.exit(1)
-
-
 @functions.command('get-variables')
 @click.option('--name', '-n', help='Function name')
 @click.option('--address', '-a', help='Function address (hex)')

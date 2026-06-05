@@ -6,22 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [2.4.0] - 2025-06-05
+## [2.4.0] - 2026-06-05
 
 ### Added
 - **Upstream Sync**: Merged changes from starsong-consulting/GhydraMCP (16 commits). New features:
   - `functions_get_containing`, `functions_get_next`, `functions_get_prev` — function navigation by address
-  - `functions_delete` — delete function
   - `functions_update_variable` — alternative variable update endpoint
   - `comments_get` — get comment at address
   - `projects_list`, `projects_get` — project enumeration
-  - `programs_list`, `programs_get`, `programs_delete` — program lifecycle management
+  - `programs_list`, `programs_get` — program lifecycle management
   - `datatypes_create_struct`, `datatypes_create_enum`, `datatypes_create_union` — create datatypes programmatically
   - `functions_list` — `addr_min`/`addr_max` address range filtering
   - `memory_read` — `segment` parameter for overlay-aware reads
   - `structs_create` — `size` parameter
 - **Java**: New `DataFlowUtil.java` utility, `GhidraSwing.java` EDT helper
-- **CLI**: New commands — `functions get-containing`, `functions get-next`, `functions get-prev`, `functions delete`, `functions update-variable`, `comments get`, `datatypes create-struct`, `datatypes create-enum`, `datatypes create-union`, `project projects-list`, `project projects-get`, `project programs-list`, `project programs-get`, `project programs-delete`
+- **CLI**: New commands — `functions get-containing`, `functions get-next`, `functions get-prev`, `functions update-variable`, `comments get`, `datatypes create-struct`, `datatypes create-enum`, `datatypes create-union`, `project list-projects`, `project get-project`, `project list-programs`, `project get-program`
 
 ### Changed
 - **Java endpoints**: All endpoints now use `GhidraSwing.runRead()` for EDT-safe DB iterator reads

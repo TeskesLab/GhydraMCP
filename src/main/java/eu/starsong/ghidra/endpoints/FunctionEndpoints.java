@@ -595,7 +595,7 @@ public class FunctionEndpoints extends AbstractEndpoint {
 
     private Map<String, Object> buildFunctionListEntry(Function f) {
         Map<String, Object> func = new HashMap<>();
-        func.put("name", f.getName());
+        func.put("name", f.getName(true));
         func.put("address", f.getEntryPoint().toString());
 
         Map<String, Object> links = new HashMap<>();

@@ -34,7 +34,7 @@ GhydraMCP is based on [GhidraMCP by Laurie Wired](https://github.com/LaurieWired
 
 # Features
 
-GhydraMCP version 2.3.0 provides a comprehensive set of reverse engineering capabilities through its HATEOAS-driven API and CLI:
+GhydraMCP version 2.4.0 provides a comprehensive set of reverse engineering capabilities through its HATEOAS-driven API and CLI:
 
 ## Advanced Program Analysis
 
@@ -192,7 +192,7 @@ See the [Client Setup](#client-setup) section below for detailed configuration i
 
 ### Available Tools
 
-GhydraMCP v2.4.0 organizes tools into logical namespaces for better discoverability and organization. 58 tools total.
+GhydraMCP v2.4.0 organizes tools into logical namespaces for better discoverability and organization. 71 tools total.
 
 **Instance Management** (`instances_*`):
 - `instances_list`: List active Ghidra instances (auto-discovers on default host) - **use this first**
@@ -213,7 +213,6 @@ GhydraMCP v2.4.0 organizes tools into logical namespaces for better discoverabil
 - `functions_create`: Create function at address (params: address, port [optional])
 - `functions_rename`: Rename a function (params: old_name or address, new_name, port [optional])
 - `functions_set_signature`: Update function prototype (params: name or address, signature, port [optional])
-- `functions_delete`: Delete a function (params: name or address, port [optional])
 - `functions_get_variables`: Get function variables (params: name or address, port [optional])
 - `functions_set_variable`: Rename or retype a function variable (params: name or address, variable, new_name [optional], data_type [optional], port [optional])
 - `functions_update_variable`: Update a function variable (params: address, variable_name, new_name [optional], new_data_type [optional], port [optional])
@@ -291,31 +290,6 @@ GhydraMCP v2.4.0 organizes tools into logical namespaces for better discoverabil
 - `projects_get`: Get project details by name (params: name, port [optional])
 - `programs_list`: List programs (params: project [optional], offset, limit, port [optional])
 - `programs_get`: Get program by ID or `current` (params: program_id [optional], port [optional])
-- `programs_delete`: Delete/close program by ID or `current` (params: program_id [optional], port [optional])
-
-> `programs_delete` and program import routes are currently exposed but may return `NOT_IMPLEMENTED` depending on plugin-side support.
-
-**Datatype Management** (`datatypes_*`):
-- `datatypes_list`: List data types (params: offset, limit, category [optional], kind [optional], port [optional])
-- `datatypes_search`: Search data types by name (params: name, offset, limit, port [optional])
-- `datatypes_create_struct`: Create struct datatype (params: name, category [optional], fields_json [optional], port [optional]); supports JSON field definitions
-- `datatypes_create_enum`: Create enum datatype (params: name, size [optional], category [optional], values_json [optional], port [optional]); supports JSON value definitions
-- `datatypes_create_union`: Create union datatype (params: name, category [optional], fields_json [optional], port [optional]); supports JSON field definitions
-
-**Comment Management** (`comments_*`):
-- `comments_set`: Set memory comment (params: address, comment [optional], comment_type [optional], port [optional])
-- `comments_get`: Get memory comment (params: address, comment_type [optional], port [optional])
-
-**UI Helpers** (`ui_*`):
-- `ui_get_current_address`: Get currently selected UI address (params: port [optional])
-- `ui_get_current_function`: Get currently selected UI function (params: port [optional])
-
-**Program Metadata** (`classes_*`, `symbols_*`, `segments_*`, `namespaces_*`, `variables_*`):
-- `classes_list`: List classes/namespaces (params: offset, limit, port [optional])
-- `symbols_list` / `symbols_imports` / `symbols_exports`: Enumerate symbols (params: offset, limit, port [optional])
-- `segments_list`: List memory blocks (params: offset, limit, name [optional], port [optional])
-- `namespaces_list`: List namespaces (params: offset, limit, port [optional])
-- `variables_list`: List variables (params: offset, limit, search [optional], global_only [optional], port [optional])
 
 **Example Usage**:
 ```python

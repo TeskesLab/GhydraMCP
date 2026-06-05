@@ -198,29 +198,3 @@ def get_program(ctx, program_id):
         error_output = formatter.format_error(e)
         rich_echo(error_output, err=True)
         ctx.exit(1)
-
-
-@project.command('delete-program')
-@click.option('--program-id', default='current', help='Program ID or "current"')
-@click.pass_context
-def delete_program(ctx, program_id):
-    """Delete/close program by ID or current."""
-    from urllib.parse import quote
-
-    client = ctx.obj['client']
-    formatter = ctx.obj['formatter']
-
-    try:
-        if program_id == 'current':
-            endpoint = 'programs/current'
-        else:
-            endpoint = f'programs/{quote(program_id, safe="")}'
-
-        response = client.delete(endpoint)
-        output = formatter.format_simple_result(response)
-        click.echo(output)
-
-    except GhidraError as e:
-        error_output = formatter.format_error(e)
-        rich_echo(error_output, err=True)
-        ctx.exit(1)

@@ -91,6 +91,9 @@ List, decompile, disassemble, and modify functions.
 | `list` | List all functions with optional filtering |
 | `search` | Search functions by name |
 | `get` | Get detailed function info |
+| `get-containing` | Find function containing an address |
+| `get-next` | Get next function after an address |
+| `get-prev` | Get previous function before an address |
 | `decompile` | Decompile to C pseudocode |
 | `disassemble` | Get disassembly |
 | `create` | Create function at address |
@@ -101,6 +104,7 @@ List, decompile, disassemble, and modify functions.
 | `get-cfg` | Get control flow graph |
 | `get-pcode` | Get pcode operations |
 | `set-variable` | Rename or retype a function variable |
+| `update-variable` | Update a function variable (alternative) |
 
 ```bash
 ghydra functions list
@@ -129,6 +133,10 @@ ghydra functions get-cfg --address 0x401000
 ghydra functions get-pcode --name main
 ghydra functions set-variable --name main --variable buf --new-name buffer
 ghydra functions set-variable --address 0x401000 --variable len --data-type "size_t"
+ghydra functions get-containing --address 0x401500
+ghydra functions get-next --address 0x401000
+ghydra functions get-prev --address 0x401000
+ghydra functions update-variable --address 0x401000 --variable-name buf --new-data-type "size_t"
 ```
 
 ### `ghydra data` — Data Items
@@ -324,12 +332,18 @@ List and search data types.
 |---|---|
 | `list` | List data types with filtering |
 | `search` | Search data types by name |
+| `create-struct` | Create a new struct datatype |
+| `create-enum` | Create a new enum datatype |
+| `create-union` | Create a new union datatype |
 
 ```bash
 ghydra datatypes list
 ghydra datatypes list --kind struct
 ghydra datatypes list --category /MyCategory
 ghydra datatypes search MyStruct
+ghydra datatypes create-struct --name MyStruct --category /custom
+ghydra datatypes create-enum --name MyEnum --size 4
+ghydra datatypes create-union --name MyUnion --category /custom
 ```
 
 ### `ghydra comments` — Comments
@@ -339,11 +353,13 @@ Set comments at addresses.
 | Command | Description |
 |---|---|
 | `set` | Set comment (plate, pre, post, eol, repeatable) |
+| `get` | Get comment at address |
 
 ```bash
 ghydra comments set --address 0x401000 --comment "This is the entry point"
 ghydra comments set --address 0x401000 --comment "Loop counter" --comment-type eol
 ghydra comments set --address 0x401000 --comment ""  # Remove comment
+ghydra comments get --address 0x401000
 ```
 
 ### `ghydra project` — Project Management
@@ -355,6 +371,10 @@ Manage Ghidra projects and files.
 | `info` | Get current project info |
 | `list-files` | List files in project |
 | `open-file` | Open file in new CodeBrowser |
+| `list-projects` | List Ghidra projects |
+| `get-project` | Get project details by name |
+| `list-programs` | List programs in a project |
+| `get-program` | Get program details by ID |
 
 ```bash
 ghydra project info
@@ -362,6 +382,10 @@ ghydra project list-files
 ghydra project list-files --folder "/malware"
 ghydra project list-files --no-recursive
 ghydra project open-file --path "/malware.exe"
+ghydra project list-projects
+ghydra project get-project --name MyProject
+ghydra project list-programs
+ghydra project get-program --program-id "MyProject:/malware.exe"
 ```
 
 ### `ghydra scalars` — Scalar Search
@@ -429,7 +453,7 @@ ghydra/
 │   ├── __init__.py
 │   ├── main.py           # CLI entry point, global options
 │   ├── instances.py      # Instance management (6 commands)
-│   ├── functions.py      # Function analysis (13 commands)
+│   ├── functions.py      # Function analysis (16 commands)
 │   ├── data.py           # Data items (7 commands)
 │   ├── structs.py        # Struct types (6 commands)
 │   ├── memory.py         # Memory operations (3 commands)
@@ -440,12 +464,12 @@ ghydra/
 │   ├── segments.py       # Memory segments (1 command)
 │   ├── namespaces.py     # Namespace hierarchy (1 command)
 │   ├── variables.py      # Global and local variables (1 command)
-│   ├── datatypes.py      # Data type listing (2 commands)
+│   ├── datatypes.py      # Data type listing (5 commands)
 │   ├── scalars.py        # Scalar search (1 command)
 │   ├── script.py         # Script execution (2 commands)
 │   ├── raw_image.py      # Raw image definition (1 command)
-│   ├── comments.py       # Comment management (1 command)
-│   ├── project.py        # Project management (3 commands)
+│   ├── comments.py       # Comment management (2 commands)
+│   ├── project.py        # Project management (7 commands)
 │   └── ui.py             # UI state (2 commands)
 ├── client/
 │   ├── __init__.py

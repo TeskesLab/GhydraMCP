@@ -298,18 +298,13 @@ public class ProgramEndpoints extends AbstractEndpoint {
             .result(info);
 
         // Add HATEOAS links
-        String encodedProgramId = URLDecoder.decode(programId, StandardCharsets.UTF_8);
-        builder.addLink("self", "/programs/" + encodedProgramId);
+        builder.addLink("self", "/programs/" + programId);
         builder.addLink("project", "/projects/" + projectName);
-
-        // Add links to program resources
-        builder.addLink("functions", "/programs/" + encodedProgramId + "/functions");
-        builder.addLink("symbols", "/programs/" + encodedProgramId + "/symbols");
-        builder.addLink("data", "/programs/" + encodedProgramId + "/data");
-        builder.addLink("segments", "/programs/" + encodedProgramId + "/segments");
-        builder.addLink("memory", "/programs/" + encodedProgramId + "/memory");
-        builder.addLink("xrefs", "/programs/" + encodedProgramId + "/xrefs");
-        builder.addLink("analysis", "/programs/" + encodedProgramId + "/analysis");
+        builder.addLink("functions", "/programs/" + programId + "/functions");
+        builder.addLink("segments", "/programs/" + programId + "/segments");
+        builder.addLink("memory", "/programs/" + programId + "/memory");
+        builder.addLink("xrefs", "/programs/" + programId + "/xrefs");
+        builder.addLink("analysis", "/programs/" + programId + "/analysis");
 
         sendJsonResponse(exchange, builder.build(), 200);
     }

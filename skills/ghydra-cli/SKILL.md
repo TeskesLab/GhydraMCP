@@ -57,6 +57,9 @@ ghydra functions search NAME                   # Search by name
 ghydra functions search --regex "^sub_.*"      # Search by regex
 ghydra functions get --name NAME               # Function details
 ghydra functions get --address ADDR            # Function details by address
+ghydra functions get-containing --address ADDR  # Find function containing address
+ghydra functions get-next --address ADDR       # Next function after address
+ghydra functions get-prev --address ADDR       # Previous function before address
 ghydra functions decompile --name NAME         # Decompile to C
 ghydra functions decompile --address ADDR      # Decompile by address
 ghydra functions decompile --name NAME --start-line 10 --end-line 20  # Partial decompile
@@ -69,6 +72,7 @@ ghydra functions set-signature --name NAME --signature "int foo(char *buf, int l
 ghydra functions set-comment --address ADDR --comment "..."  # Set comment
 ghydra functions set-variable --name NAME --variable VAR --new-name NEW  # Rename variable
 ghydra functions set-variable --name NAME --variable VAR --data-type "size_t"  # Retype variable
+ghydra functions update-variable --address ADDR --variable-name VAR --new-data-type "size_t"  # Alt approach
 ghydra functions create --address ADDR         # Create function
 ```
 
@@ -142,6 +146,9 @@ ghydra variables list --global-only             # Global variables only
 ghydra datatypes list                          # List all types
 ghydra datatypes list --kind struct            # Filter by kind (struct/enum/union)
 ghydra datatypes search NAME                   # Search types by name
+ghydra datatypes create-struct --name NAME     # Create a struct
+ghydra datatypes create-enum --name NAME --size 4  # Create an enum
+ghydra datatypes create-union --name NAME      # Create a union
 ```
 
 ### Scalar Search
@@ -171,6 +178,7 @@ ghydra raw-image define -a 0x402000 --width 320 --height 240 --format ARGB8888 -
 ```bash
 ghydra comments set --address ADDR --comment "..."              # Plate comment
 ghydra comments set --address ADDR --comment "..." --comment-type eol  # EOL comment
+ghydra comments get --address ADDR              # Get comment at address
 ```
 
 ### Project Management
@@ -179,6 +187,10 @@ ghydra comments set --address ADDR --comment "..." --comment-type eol  # EOL com
 ghydra project info                            # Current project info
 ghydra project list-files                      # List project files
 ghydra project open-file --path "/file.exe"    # Open in new CodeBrowser
+ghydra project list-projects                   # List all projects
+ghydra project get-project --name NAME         # Get project details
+ghydra project list-programs                   # List programs in project
+ghydra project get-program --program-id "Proj:/file.exe"  # Get program details
 ```
 
 ### UI State
