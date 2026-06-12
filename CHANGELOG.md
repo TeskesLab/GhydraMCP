@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-06-12
+
+### Changed
+- **Upstream Sync**: Merged three upstream bridge/CLI fixes from `starsong-consulting/GhydraMCP`.
+- **Bridge/CLI compatibility**: Preserved current Java `nodes`/`edges` callgraph DTO support while accepting newer tree-shaped callgraph responses.
+- **Pagination metadata**: `functions_list` now exposes both legacy top-level `size`/`offset`/`limit` and nested `meta` pagination fields.
+
+### Fixed
+- **Plugin startup**: Removed duplicate `/analysis/dataflow` HTTP context registration that caused `GhydraMCPPlugin` construction to fail in Ghidra.
+- **CLI output**: Fixed memory table formatting to avoid rendering addresses as `0x0x...`.
+- **Analysis status output**: Added clearer table formatting for analysis status responses.
+
 ## [2.4.0] - 2026-06-05
 
 ### Added
@@ -176,7 +188,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Initial project setup
 - Basic MCP bridge functionality
 
-[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v2.4.0...HEAD
+[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v2.4.1...HEAD
+[2.4.1]: https://github.com/TeskesLab/GhydraMCP/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/TeskesLab/GhydraMCP/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/TeskesLab/GhydraMCP/compare/v2.0.0...v2.3.0
 [2.0.0]: https://github.com/TeskesLab/GhydraMCP/compare/v1.4.0...v2.0.0

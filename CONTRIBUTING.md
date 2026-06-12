@@ -54,15 +54,15 @@ mvn clean package
 ```
 
 This creates:
-- `target/GhydraMCP-[version].zip` - The Ghidra plugin only
-- `target/GhydraMCP-Complete-[version].zip` - Complete package with plugin and bridge script
+- `target/GhydraMCP-v[version].zip` - The Ghidra plugin only
+- `target/GhydraMCP-Complete-v[version].zip` - Complete package with plugin and bridge script
 
 ### Installing for Development
 
 1. Build the project as described above
 2. In Ghidra, go to `File` -> `Install Extensions`
 3. Click the `+` button
-4. Select the `GhydraMCP-[version].zip` file
+4. Select the `GhydraMCP-v[version].zip` file
 5. Restart Ghidra
 6. Enable the plugin in `File` -> `Configure` -> `Developer`
 
@@ -90,22 +90,22 @@ When making changes, update version numbers in these locations:
 
 1. **Plugin Version** in `src/main/java/eu/starsong/ghidra/api/ApiConstants.java`:
    ```java
-   public static final String PLUGIN_VERSION = "v2.3.0";
+   public static final String PLUGIN_VERSION = "vX.Y.Z";
    ```
 
 2. **Bridge Version** in `bridge_mcp_hydra.py`:
    ```python
-   BRIDGE_VERSION = "v2.3.0"
+   BRIDGE_VERSION = "vX.Y.Z"
    ```
 
 3. **CLI Version** in `ghydra/__init__.py`:
    ```python
-   __version__ = "2.3.0"
+   __version__ = "X.Y.Z"
    ```
 
 4. **Package Version** in `pyproject.toml`:
    ```toml
-   version = "2.3.0"
+   version = "X.Y.Z"
    ```
 
 ### API Versions
@@ -114,12 +114,12 @@ The API version is tracked separately from the implementation version:
 
 1. **API Version** in `src/main/java/eu/starsong/ghidra/api/ApiConstants.java`:
    ```java
-   public static final int API_VERSION = 2;
+   public static final int API_VERSION = 2020;
    ```
 
 2. **Required API Version** in `bridge_mcp_hydra.py`:
    ```python
-   REQUIRED_API_VERSION = 2
+   REQUIRED_API_VERSION = 2020
    ```
 
 ### When to Update Versions

@@ -42,7 +42,7 @@ def cli(ctx, host, port, output_json, no_color, verbose):
         Configuration file: ~/.ghydra/config.json
         Environment variables: GHYDRA_HOST, GHYDRA_PORT
 
-    For more information, visit: https://github.com/starsong-consulting/GhydraMCP
+    For more information, visit: https://github.com/TeskesLab/GhydraMCP
     """
     # Load configuration
     try:

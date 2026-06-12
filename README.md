@@ -6,7 +6,7 @@
 [![GitHub contributors](https://img.shields.io/github/contributors/TeskesLab/GhydraMCP)](https://github.com/TeskesLab/GhydraMCP/graphs/contributors)
 [![Build Status](https://github.com/TeskesLab/GhydraMCP/actions/workflows/build.yml/badge.svg)](https://github.com/TeskesLab/GhydraMCP/actions/workflows/build.yml)
 
-# GhydraMCP v2.4.0
+# GhydraMCP v2.4.1
 
 GhydraMCP is a bridge between [Ghidra](https://ghidra-sre.org/) and AI assistants that enables comprehensive AI-assisted reverse engineering through a HATEOAS-driven REST API and the [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol/mcp).
 
@@ -14,7 +14,7 @@ GhydraMCP is a bridge between [Ghidra](https://ghidra-sre.org/) and AI assistant
 
 ## Overview
 
-GhydraMCP v2.4.0 integrates three key components:
+GhydraMCP v2.4.1 integrates three key components:
 
 1. **Modular Ghidra Plugin**: Exposes Ghidra's powerful reverse engineering capabilities through a HATEOAS-driven REST API
 2. **CLI Tool (`ghydra`)**: A standalone command-line interface for direct interaction with Ghidra — human-readable tables, `--json` mode for scripting and AI tool use. **This is the recommended integration path.**
@@ -34,7 +34,7 @@ GhydraMCP is based on [GhidraMCP by Laurie Wired](https://github.com/LaurieWired
 
 # Features
 
-GhydraMCP version 2.4.0 provides a comprehensive set of reverse engineering capabilities through its HATEOAS-driven API and CLI:
+GhydraMCP version 2.4.1 provides a comprehensive set of reverse engineering capabilities through its HATEOAS-driven API and CLI:
 
 ## Advanced Program Analysis
 
@@ -126,12 +126,12 @@ GhydraMCP version 2.4.0 provides a comprehensive set of reverse engineering capa
 - MCP [SDK](https://github.com/modelcontextprotocol/python-sdk)
 
 ## Ghidra
-First, download the latest [release](https://github.com/teal-bauer/GhydraMCP/releases) from this repository. The "Complete" artifact contains the zipped Ghidra plugin and the Python MCP bridge. Unpack the outer archive, then, add the plugin to Ghidra:
+First, download the latest [release](https://github.com/TeskesLab/GhydraMCP/releases) from this repository. The "Complete" artifact contains the zipped Ghidra plugin and the Python MCP bridge. Unpack the outer archive, then, add the plugin to Ghidra:
 
 1. Run Ghidra
 2. Select `File` -> `Install Extensions`
 3. Click the `+` button
-4. Select the `GhydraMCP-[version].zip` file from the downloaded release
+4. Select the `GhydraMCP-v[version].zip` file from the downloaded release
 5. Restart Ghidra
 6. Make sure the GhydraMCPPlugin is enabled in `File` -> `Configure` -> `Developer`
 
@@ -188,11 +188,11 @@ GhydraMCP works with any MCP-compatible client using **stdio transport**. It has
 
 See the [Client Setup](#client-setup) section below for detailed configuration instructions for each client.
 
-## API Reference (Updated for v2.4.0)
+## API Reference (Updated for v2.4.1)
 
 ### Available Tools
 
-GhydraMCP v2.4.0 organizes tools into logical namespaces for better discoverability and organization. 71 tools total.
+GhydraMCP v2.4.1 organizes tools into logical namespaces for better discoverability and organization. 71 tools total.
 
 **Instance Management** (`instances_*`):
 - `instances_list`: List active Ghidra instances (auto-discovers on default host) - **use this first**
@@ -607,7 +607,7 @@ GhydraMCP uses structured JSON for all communication between the Python bridge a
 
 ## API Architecture
 
-GhydraMCP v2.4.0 implements a comprehensive HATEOAS-driven REST API that follows hypermedia design principles:
+GhydraMCP v2.4.1 implements a comprehensive HATEOAS-driven REST API that follows hypermedia design principles:
 
 ### Core API Design
 
@@ -710,8 +710,8 @@ mvn clean package
 ```
 
 This creates:
-- `target/GhydraMCP-[version].zip` - The Ghidra plugin only
-- `target/GhydraMCP-Complete-[version].zip` - Complete package with plugin and bridge script
+- `target/GhydraMCP-v[version].zip` - The Ghidra plugin only
+- `target/GhydraMCP-Complete-v[version].zip` - Complete package with plugin and bridge script
 
 ## Build Ghidra Plugin Only
 If you only need the Ghidra plugin:

@@ -60,8 +60,8 @@ mvn clean package -P complete-only # Build only the complete package
 ```
 
 Artifacts in `target/`:
-- `GhydraMCP-<version>.zip` — Ghidra plugin only
-- `GhydraMCP-Complete-<version>.zip` — Plugin + Python bridge combined
+- `GhydraMCP-v<version>.zip` — Ghidra plugin only
+- `GhydraMCP-Complete-v<version>.zip` — Plugin + Python bridge combined
 
 ### Python CLI
 ```bash

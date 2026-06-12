@@ -6,9 +6,9 @@
   <groupId>eu.starsong.ghidra</groupId>
   <artifactId>GhydraMCP</artifactId>
   <packaging>jar</packaging>
-  <version>2.4.0</version>
+  <version>2.4.1</version>
   <name>GhydraMCP</name>
-  <url>https://github.com/starsong-consulting/GhydraMCP</url>
+  <url>https://github.com/TeskesLab/GhydraMCP</url>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -25,7 +25,7 @@
     <maven.install.skip>true</maven.install.skip>
     <maven.build.timestamp.format>yyyyMMdd-HHmmss</maven.build.timestamp.format>
     <revision>dev</revision>
-    <inner.zip.filename>GhydraMCP-${git.commit.id.describe}-${maven.build.timestamp}.zip</inner.zip.filename>
+    <inner.zip.filename>GhydraMCP-v${project.version}.zip</inner.zip.filename>
   </properties>
 
   <dependencies>
@@ -187,7 +187,7 @@
               <descriptors>
                 <descriptor>src/assembly/ghidra-extension.xml</descriptor>
               </descriptors>
-              <finalName>GhydraMCP-${git.commit.id.describe}-${maven.build.timestamp}</finalName>
+              <finalName>GhydraMCP-v${project.version}</finalName>
               <appendAssemblyId>false</appendAssemblyId>
             </configuration>
           </execution>
@@ -203,7 +203,7 @@
               <descriptors>
                 <descriptor>src/assembly/complete-package.xml</descriptor>
               </descriptors>
-              <finalName>GhydraMCP-Complete-${git.commit.id.describe}-${maven.build.timestamp}</finalName>
+              <finalName>GhydraMCP-Complete-v${project.version}</finalName>
               <appendAssemblyId>false</appendAssemblyId>
             </configuration>
           </execution>
