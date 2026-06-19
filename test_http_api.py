@@ -75,13 +75,13 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
         """Test the /info endpoint"""
         response = requests.get(f"{BASE_URL}/info")
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure
         self.assertStandardSuccessResponse(data)
-
+        
         # Check required fields in result
         result = data["result"]
         self.assertIn("isBaseInstance", result)
@@ -92,13 +92,13 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
         """Test the / endpoint"""
         response = requests.get(BASE_URL)
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure
         self.assertStandardSuccessResponse(data)
-
+        
         # Check required fields in result
         result = data["result"]
         self.assertIn("isBaseInstance", result)
@@ -108,35 +108,34 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
         """Test the /instances endpoint"""
         response = requests.get(f"{BASE_URL}/instances")
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure for HATEOAS API
         self.assertStandardSuccessResponse(data)
 
     def test_current_program_endpoint(self):
         """Test the /program endpoint"""
         response = requests.get(f"{BASE_URL}/program")
-
+        
         # This might return 404 if no program is loaded, which is fine
         if response.status_code == 404:
             return
-
+            
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure
         self.assertStandardSuccessResponse(data)
-
+        
         # Check for program details
         result = data["result"]
         self.assertIn("programId", result)
         self.assertIn("name", result)
-        self.assertIn("isOpen", result)
-
+        
         # Check for HATEOAS links
         self.assertIn("_links", data)
         links = data["_links"]
@@ -152,31 +151,31 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
     def test_functions_endpoint(self):
         """Test the /functions endpoint"""
         response = requests.get(f"{BASE_URL}/functions")
-
+        
         # This might return 404 if no program is loaded, which is fine
         if response.status_code == 404:
             return
-
+            
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure for HATEOAS API
         self.assertStandardSuccessResponse(data)
-
+        
         # Check links
         links = data["_links"]
         self.assertIn("self", links)
-
+        
         # Check for pagination metadata if this is a list-style endpoint
         # If result is a list, we expect pagination metadata
         # For single-object responses, these might not be present
         result = data["result"]
         if isinstance(result, list):
-            self.assertIn("size", data)
-            self.assertIn("offset", data)
-            self.assertIn("limit", data)
+            self.assertIn("meta", data)
+            self.assertIn("offset", data["meta"])
+            self.assertIn("limit", data["meta"])
 
         # Test the content of the result regardless of whether it's a list or single object
         if isinstance(result, list) and result:
@@ -192,36 +191,37 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
     def test_functions_with_pagination(self):
         """Test the /functions endpoint with pagination"""
         response = requests.get(f"{BASE_URL}/functions?offset=0&limit=5")
-
+        
         # This might return 404 if no program is loaded, which is fine
         if response.status_code == 404:
             return
-
+            
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure for HATEOAS API
         self.assertStandardSuccessResponse(data)
-
+        
         # Check result structure - in HATEOAS API, result can be an object or an array
         result = data["result"]
-
+        
         # Check for pagination metadata if this is a list-style endpoint
         # In transitional API implementation, pagination metadata might not be present
         # for single-object responses or if the endpoint doesn't support pagination
         if isinstance(result, list):
-            # Ensure pagination parameters are correctly applied
-            self.assertIn("size", data)
-            self.assertIn("offset", data)
-            self.assertIn("limit", data)
-            self.assertEqual(data["offset"], 0)
-            self.assertEqual(data["limit"], 5)
-
+            # Ensure pagination parameters are correctly applied (metadata is under "meta")
+            self.assertIn("meta", data)
+            meta = data["meta"]
+            self.assertIn("offset", meta)
+            self.assertIn("limit", meta)
+            self.assertEqual(meta["offset"], 0)
+            self.assertEqual(meta["limit"], 5)
+            
             # For list responses, verify the length
             self.assertLessEqual(len(result), 5)
-
+            
             # If there are results, check the structure
             if result:
                 func = result[0]
@@ -231,19 +231,19 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
             # If it's a single object, check it directly
             self.assertIn("name", result)
             self.assertIn("address", result)
-
+            
     def test_functions_with_filtering(self):
         """Test the /functions endpoint with filtering"""
         # First get a function to use for filtering
         response = requests.get(f"{BASE_URL}/functions?limit=1")
         if response.status_code != 200:
             self.skipTest("No functions available to test filtering")
-
+            
         data = response.json()
         result = data.get("result")
         if not result:
             self.skipTest("No functions available to test filtering")
-
+        
         # Extract name based on whether result is a list or dict
         if isinstance(result, list) and result:
             name = result[0]["name"]
@@ -251,16 +251,16 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
             name = result["name"]
         else:
             self.skipTest("Unexpected result format, cannot test filtering")
-
+        
         # Test filtering by name
         response = requests.get(f"{BASE_URL}/functions?name={name}")
         self.assertEqual(response.status_code, 200)
-
+        
         data = response.json()
         self.assertStandardSuccessResponse(data)
-
+        
         result = data["result"]
-
+        
         # Check result based on whether it's a list or single object
         if isinstance(result, list) and result:
             self.assertEqual(result[0]["name"], name)
@@ -270,22 +270,22 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
     def test_classes_endpoint(self):
         """Test the /classes endpoint"""
         response = requests.get(f"{BASE_URL}/classes?offset=0&limit=10")
-
+        
         # This might return 400 if no program is loaded, which is fine
         if response.status_code == 400 or response.status_code == 404:
             return
-
+            
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure for HATEOAS API
         self.assertStandardSuccessResponse(data)
-
+        
         # Get result data
         result = data["result"]
-
+        
         # We'd expect classes to be an array of strings or objects with name field
         if isinstance(result, list) and result:
             # Classes could be strings or objects
@@ -300,31 +300,31 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
     def test_segments_endpoint(self):
         """Test the /segments endpoint"""
         response = requests.get(f"{BASE_URL}/segments?offset=0&limit=10")
-
+        
         # This might return 400 or 404 if no program is loaded, which is fine
         if response.status_code == 400 or response.status_code == 404:
             if DISPLAY_RESPONSES:
                 print(f"Segments endpoint returned {response.status_code}")
             return
-
+            
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
         if DISPLAY_RESPONSES:
             print(f"Segments response: {json.dumps(data, indent=2)}")
-
+        
         # Check standard response structure for HATEOAS API
         self.assertStandardSuccessResponse(data)
-
+        
         # Check result structure - in HATEOAS API, result can be an object or an array
         result = data["result"]
         if DISPLAY_RESPONSES:
             print(f"Segments result type: {type(result)}")
-
+        
         # HATEOAS-compliant segments endpoint should return a list
         self.assertIsInstance(result, list, "Result must be a list of segments")
-
+        
         # Check segment structure if any segments exist
         if result:
             seg = result[0]
@@ -332,10 +332,10 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
             self.assertIn("start", seg, "Segment missing 'start' field")
             self.assertIn("end", seg, "Segment missing 'end' field")
             self.assertIn("size", seg, "Segment missing 'size' field")
-            self.assertIn("readable", seg, "Segment missing 'readable' field")
-            self.assertIn("writable", seg, "Segment missing 'writable' field")
-            self.assertIn("executable", seg, "Segment missing 'executable' field")
-
+            self.assertIn("isRead", seg, "Segment missing 'isRead' field")
+            self.assertIn("isWrite", seg, "Segment missing 'isWrite' field")
+            self.assertIn("isExecute", seg, "Segment missing 'isExecute' field")
+            
             # Verify HATEOAS links in segment
             self.assertIn("_links", seg, "Segment missing '_links' field")
             seg_links = seg["_links"]
@@ -344,16 +344,16 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
     def test_variables_endpoint(self):
         """Test the /variables endpoint"""
         response = requests.get(f"{BASE_URL}/variables")
-
+        
         # This might return 400 or 404 if no program is loaded, which is fine
         if response.status_code == 400 or response.status_code == 404:
             return
-
+            
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure for HATEOAS API
         self.assertStandardSuccessResponse(data)
 
@@ -361,22 +361,22 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
         """Test the /functions/{address} endpoint"""
         # First get a function address from the functions endpoint
         response = requests.get(f"{BASE_URL}/functions?offset=0&limit=1")
-
+        
         # This might return 404 if no program is loaded, which is fine
         if response.status_code == 404:
             return
-
+            
         self.assertEqual(response.status_code, 200)
-
+        
         data = response.json()
         self.assertTrue(data.get("success", False), "API call failed") # Check success first
         self.assertIn("result", data)
         result = data["result"]
-
+        
         # Skip test if no functions available
         if not result:
             self.skipTest("No functions available to test function by address")
-
+        
         # Extract address based on whether result is a list or dict
         if isinstance(result, list) and result:
             func_address = result[0]["address"]
@@ -384,23 +384,23 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
             func_address = result["address"]
         else:
             self.skipTest("Unexpected result format, cannot test function by address")
-
+        
         # Now test the function by address endpoint
         response = requests.get(f"{BASE_URL}/functions/{func_address}")
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure
         self.assertStandardSuccessResponse(data)
-
+        
         # Additional checks for function details
         result = data["result"]
         self.assertIn("name", result)
         self.assertIn("address", result)
         self.assertIn("signature", result)
-
+        
         # Check for HATEOAS links
         self.assertIn("_links", data)
         links = data["_links"]
@@ -413,22 +413,22 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
         """Test the /functions/{address}/decompile endpoint"""
         # First get a function address from the functions endpoint
         response = requests.get(f"{BASE_URL}/functions?offset=0&limit=1")
-
+        
         # This might return 404 if no program is loaded, which is fine
         if response.status_code == 404:
             return
-
+            
         self.assertEqual(response.status_code, 200)
-
+        
         data = response.json()
         self.assertTrue(data.get("success", False), "API call failed") # Check success first
         self.assertIn("result", data)
         result = data["result"]
-
+        
         # Skip test if no functions available
         if not result:
             self.skipTest("No functions available to test decompile function")
-
+        
         # Extract address based on whether result is a list or dict
         if isinstance(result, list) and result:
             func_address = result[0]["address"]
@@ -436,52 +436,48 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
             func_address = result["address"]
         else:
             self.skipTest("Unexpected result format, cannot test decompile function")
-
+        
         # Now test the decompile function endpoint
         response = requests.get(f"{BASE_URL}/functions/{func_address}/decompile")
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure
         self.assertStandardSuccessResponse(data)
-
+        
         # Additional checks for decompilation result
         result = data["result"]
+        
+        # Decompile endpoint returns the decompiled C in "decompilation"
+        self.assertIn("decompilation", result, "Result missing 'decompilation' field")
+        self.assertIsInstance(result["decompilation"], str, "Decompiled code must be a string")
 
-        # HATEOAS-compliant decompile endpoint should return decompiled code
-        self.assertIn("decompiled", result, "Result missing 'decompiled' field")
-        self.assertIsInstance(result["decompiled"], str, "Decompiled code must be a string")
-
-        # Verify complete function information
-        if "address" not in result and "function" in result and "address" in result["function"]:
-            # If address is in function object, it's accepted
-            pass
-        else:
-            self.assertIn("address", result, "Result missing 'address' field")
-        self.assertIn("function", result, "Result missing 'function' field")
-
+        # Function identity is reported via functionName / functionAddress
+        self.assertIn("functionName", result, "Result missing 'functionName' field")
+        self.assertIn("functionAddress", result, "Result missing 'functionAddress' field")
+        
     def test_disassemble_function_endpoint(self):
         """Test the /functions/{address}/disassembly endpoint"""
         # First get a function address from the functions endpoint
         response = requests.get(f"{BASE_URL}/functions?offset=0&limit=1")
-
+        
         # This might return 404 if no program is loaded, which is fine
         if response.status_code == 404:
             return
-
+            
         self.assertEqual(response.status_code, 200)
-
+        
         data = response.json()
         self.assertTrue(data.get("success", False), "API call failed") # Check success first
         self.assertIn("result", data)
         result = data["result"]
-
+        
         # Skip test if no functions available
         if not result:
             self.skipTest("No functions available to test disassemble function")
-
+        
         # Extract address based on whether result is a list or dict
         if isinstance(result, list) and result:
             func_address = result[0]["address"]
@@ -489,57 +485,52 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
             func_address = result["address"]
         else:
             self.skipTest("Unexpected result format, cannot test disassemble function")
-
+        
         # Now test the disassemble function endpoint
         response = requests.get(f"{BASE_URL}/functions/{func_address}/disassembly")
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure
         self.assertStandardSuccessResponse(data)
-
+        
         # Additional checks for disassembly result
         result = data["result"]
-
-        # HATEOAS-compliant disassembly endpoint should return instructions
-        self.assertIn("instructions", result, "Result missing 'instructions' field")
-        self.assertIsInstance(result["instructions"], list, "Instructions must be a list")
-        self.assertTrue(len(result["instructions"]) > 0, "Instructions list is empty")
+        
+        # Disassembly result is a list of instructions
+        self.assertIsInstance(result, list, "Disassembly result must be a list of instructions")
+        self.assertTrue(len(result) > 0, "Instructions list is empty")
 
         # Check the first instruction structure
-        first_instr = result["instructions"][0]
+        first_instr = result[0]
         self.assertIn("address", first_instr, "Instruction missing 'address' field")
         self.assertIn("mnemonic", first_instr, "Instruction missing 'mnemonic' field")
         self.assertIn("bytes", first_instr, "Instruction missing 'bytes' field")
 
-        # Verify function information
-        if "address" not in result and "function" in result and "address" in result["function"]:
-            # If address is in function object, it's accepted
-            pass
-        else:
-            self.assertIn("address", result, "Result missing 'address' field")
-        self.assertIn("function", result, "Result missing 'function' field")
-
+        # Function information is carried in the pagination meta block
+        self.assertIn("meta", data, "Response missing 'meta' field")
+        self.assertIn("function", data["meta"], "meta missing 'function' field")
+        
     def test_function_variables_endpoint(self):
         """Test the /functions/by-name/{name}/variables endpoint"""
         # First get a function name from the functions endpoint
         response = requests.get(f"{BASE_URL}/functions?offset=0&limit=1")
-
+        
         # This might return 404 or other error if no program is loaded, which is fine
         if response.status_code != 200:
             return
-
+            
         data = response.json()
         self.assertTrue(data.get("success", False), "API call failed") # Check success first
         self.assertIn("result", data)
         result = data["result"]
-
+        
         # Skip test if no functions available
         if not result:
             self.skipTest("No functions available to test function variables")
-
+        
         # Extract name based on whether result is a list or dict
         if isinstance(result, list) and result:
             func_name = result[0]["name"]
@@ -547,42 +538,131 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
             func_name = result["name"]
         else:
             self.skipTest("Unexpected result format, cannot test function variables")
-
+        
         # Now test the function variables endpoint (using HATEOAS path)
         response = requests.get(f"{BASE_URL}/functions/by-name/{func_name}/variables")
         self.assertEqual(response.status_code, 200)
-
+        
         # Verify response is valid JSON
         data = response.json()
-
+        
         # Check standard response structure
         self.assertStandardSuccessResponse(data)
-
+        
         # Additional checks for function variables result
         result = data["result"]
-
+        
         # HATEOAS-compliant variables endpoint should return structured data
         self.assertIn("variables", result, "Result missing 'variables' field")
         self.assertIsInstance(result["variables"], list, "Variables must be a list")
-
+        
         # Check variable structure if any variables exist
         if result["variables"]:
             var = result["variables"][0]
             self.assertIn("name", var, "Variable missing 'name' field")
-
+            
             # Adjust for field naming differences - accept either dataType or type
             if "dataType" not in var and "type" in var:
                 var["dataType"] = var["type"]
-
+            
             self.assertIn("dataType", var, "Variable missing 'dataType' field")
             self.assertIn("type", var, "Variable missing 'type' field")
-
+        
         # Verify function information
         self.assertIn("function", result, "Result missing 'function' field")
         self.assertIsInstance(result["function"], dict, "Function info must be an object")
         func_info = result["function"]
         self.assertIn("name", func_info, "Function info missing 'name' field")
         self.assertIn("address", func_info, "Function info missing 'address' field")
+
+    def test_function_fqn_roundtrip(self):
+        """Rename moves into a created namespace; FQN resolves; bare leaf 404s; restore via '::'."""
+        from urllib.parse import quote
+        resp = requests.get(f"{BASE_URL}/functions?is_external=false&limit=1")
+        self.assertEqual(resp.status_code, 200)
+        items = resp.json()["result"]
+        if not items:
+            self.skipTest("No functions in program")
+        addr = items[0]["address"]
+        orig_fqn = items[0]["name"]
+        try:
+            r = requests.patch(f"{BASE_URL}/functions/{addr}", json={"name": "GhydraTestNS::probe"})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["result"]["name"], "GhydraTestNS::probe")
+
+            r = requests.get(f"{BASE_URL}/functions/by-name/{quote('GhydraTestNS::probe')}")
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["result"]["address"], addr)
+
+            # Strict: a bare leaf does not resolve a namespaced function.
+            r = requests.get(f"{BASE_URL}/functions/by-name/probe")
+            self.assertEqual(r.status_code, 404)
+
+            # name_contains matches the FQN.
+            r = requests.get(f"{BASE_URL}/functions?name_contains=probe")
+            self.assertIn("GhydraTestNS::probe", [f["name"] for f in r.json()["result"]])
+
+            # FunctionDto no longer carries a separate namespace field.
+            self.assertNotIn("namespace", r.json()["result"][0])
+        finally:
+            # Restore: "::<orig_fqn>" forces global root, recreating any original namespace.
+            requests.patch(f"{BASE_URL}/functions/{addr}", json={"name": "::" + orig_fqn})
+
+    def test_symbol_dto_has_no_namespace_field(self):
+        """SymbolDto folds the namespace into the FQN name; no separate field."""
+        resp = requests.get(f"{BASE_URL}/symbols?limit=5")
+        self.assertEqual(resp.status_code, 200)
+        items = resp.json()["result"]
+        if not items:
+            self.skipTest("No symbols in program")
+        for sym in items:
+            self.assertIn("name", sym)
+            self.assertNotIn("namespace", sym)
+
+    def test_data_dto_uses_label(self):
+        """DataDto exposes the (now fully-qualified) name as 'label'."""
+        resp = requests.get(f"{BASE_URL}/data?limit=5")
+        self.assertEqual(resp.status_code, 200)
+        items = resp.json()["result"]
+        if not items:
+            self.skipTest("No defined data in program")
+        self.assertIn("label", items[0])
+
+    def test_local_variable_rejects_namespace(self):
+        """Local variables are not namespaced; '::' in a rename is a 400."""
+        from urllib.parse import quote
+        resp = requests.get(f"{BASE_URL}/functions?limit=50")
+        self.assertEqual(resp.status_code, 200)
+        target = None
+        for fn in resp.json()["result"]:
+            vresp = requests.get(f"{BASE_URL}/functions/{fn['address']}/variables")
+            if vresp.status_code != 200:
+                continue
+            for v in vresp.json().get("result", {}).get("variables", []):
+                if v.get("type") in ("local", "parameter"):
+                    target = (fn["address"], v["name"])
+                    break
+            if target:
+                break
+        if not target:
+            self.skipTest("No local variable found to test")
+        addr, var = target
+        r = requests.patch(
+            f"{BASE_URL}/functions/{addr}/variables/{quote(var)}",
+            json={"name": "bad::name"})
+        self.assertEqual(r.status_code, 400, r.text)
+
+    def test_xrefs_expose_function_fields(self):
+        """Xrefs carry from/to function names (now fully-qualified when namespaced)."""
+        fresp = requests.get(f"{BASE_URL}/functions?limit=1")
+        items = fresp.json()["result"]
+        if not items:
+            self.skipTest("No functions in program")
+        addr = items[0]["address"]
+        r = requests.get(f"{BASE_URL}/xrefs?to_addr={addr}")
+        self.assertEqual(r.status_code, 200, r.text)
+        for x in r.json().get("result", []):
+            self.assertIsInstance(x, dict)
 
     def test_error_handling(self):
         """Test error handling for non-existent endpoints"""
@@ -594,16 +674,16 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
         """Test the /address endpoint"""
         response = requests.get(f"{BASE_URL}/address")
         self.assertEqual(response.status_code, 200)
-
+        
         data = response.json()
         self.assertStandardSuccessResponse(data)
-
+        
         # Verify HATEOAS links
         self.assertIn("_links", data)
         links = data["_links"]
         self.assertIn("self", links)
         self.assertIn("program", links)
-
+        
         result = data.get("result", {})
         # Address can be directly in result or in a nested object
         if isinstance(result, dict):
@@ -622,51 +702,50 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
         """Test the /function endpoint"""
         response = requests.get(f"{BASE_URL}/function")
         self.assertEqual(response.status_code, 200)
-
+        
         data = response.json()
         self.assertStandardSuccessResponse(data)
-
+        
         # Verify HATEOAS links
         self.assertIn("_links", data)
         links = data["_links"]
         self.assertIn("self", links)
         self.assertIn("program", links)
-        self.assertIn("decompile", links)
-        self.assertIn("disassembly", links)
-
+        self.assertIn("by_address", links)
+        
         result = data.get("result", {})
         if isinstance(result, dict):
             # Check for standard function fields in any format
             has_name = "name" in result
             has_address = "address" in result
             has_signature = "signature" in result or "callingConvention" in result
-
+            
             # Either we have enough standard fields, or some other consistent structure
             self.assertTrue(
-                (has_name and has_address) or
+                (has_name and has_address) or 
                 (has_name and has_signature) or
                 (has_address and has_signature),
                 "Function result missing required fields"
             )
-
+            
     def test_callgraph_endpoint(self):
         """Test the /analysis/callgraph endpoint with both name and address parameters"""
         # First get a function to test with
         response = requests.get(f"{BASE_URL}/functions?limit=1")
-
+        
         # This might return 404 if no program is loaded, which is fine
         if response.status_code == 404:
             return
-
+            
         self.assertEqual(response.status_code, 200)
-
+        
         data = response.json()
         result = data.get("result", [])
-
+        
         # Skip test if no functions available
         if not result:
             self.skipTest("No functions available to test callgraph")
-
+        
         # Extract name and address based on whether result is a list or dict
         if isinstance(result, list) and result:
             func = result[0]
@@ -674,36 +753,36 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
             func = result
         else:
             self.skipTest("Unexpected result format, cannot test callgraph")
-
+            
         func_name = func.get("name")
         func_address = func.get("address")
-
+        
         if not func_name or not func_address:
             self.skipTest("Missing name or address for callgraph test")
-
+        
         # Test with the address parameter
         response = requests.get(f"{BASE_URL}/analysis/callgraph?address={func_address}&max_depth=2")
         self.assertEqual(response.status_code, 200)
-
+        
         data = response.json()
         self.assertStandardSuccessResponse(data)
-
+        
         result = data.get("result", {})
         self.assertIn("root", result, "Callgraph missing 'root' field")
-        self.assertIn("nodes", result, "Callgraph missing 'nodes' field")
-        self.assertIn("edges", result, "Callgraph missing 'edges' field")
-
+        self.assertIn("callees", result, "Callgraph missing 'callees' field")
+        self.assertIn("callers", result, "Callgraph missing 'callers' field")
+        
         # Test with the name parameter
         response = requests.get(f"{BASE_URL}/analysis/callgraph?name={func_name}&max_depth=2")
         self.assertEqual(response.status_code, 200)
-
+        
         data = response.json()
         self.assertStandardSuccessResponse(data)
-
+        
         result = data.get("result", {})
         self.assertIn("root", result, "Callgraph missing 'root' field")
-        self.assertIn("nodes", result, "Callgraph missing 'nodes' field")
-        self.assertIn("edges", result, "Callgraph missing 'edges' field")
+        self.assertIn("callees", result, "Callgraph missing 'callees' field")
+        self.assertIn("callers", result, "Callgraph missing 'callers' field")
 
     def test_data_operations(self):
         """Test data update operations including renaming and type changes"""
@@ -711,56 +790,41 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
         response = requests.get(f"{BASE_URL}/data?limit=1")
         if response.status_code != 200:
             self.skipTest("No data items available to test operations")
-
+            
         data = response.json()
         self.assertTrue(data.get("success", False), "API call failed")
-
+        
         result = data.get("result", [])
         if not result or not isinstance(result, list) or not result[0].get("address"):
             self.skipTest("No data items found or invalid response format")
-
+            
         address = result[0]["address"]
         original_name = result[0].get("label", "unnamed")
         original_type = result[0].get("dataType", "undefined")
-
+        
         try:
             # Test 1: Rename Only
             test_name = "TEST_DATA_RENAME"
-            payload = {
-                "address": address,
-                "newName": test_name
-            }
-
-            response = requests.post(f"{BASE_URL}/data", json=payload)
+            response = requests.patch(f"{BASE_URL}/data/{address}", json={"name": test_name})
             self.assertEqual(response.status_code, 200)
 
             data = response.json()
             self.assertStandardSuccessResponse(data)
             self.assertEqual(data["result"]["name"], test_name)
             self.assertEqual(data["result"]["address"], address)
-
+            
             # Test 2: Type Change Only
-            payload = {
-                "address": address,
-                "type": "int"
-            }
-
-            response = requests.post(f"{BASE_URL}/data/type", json=payload)
+            response = requests.patch(f"{BASE_URL}/data/{address}/type", json={"type": "int"})
             self.assertEqual(response.status_code, 200)
 
             data = response.json()
             self.assertStandardSuccessResponse(data)
             self.assertEqual(data["result"]["dataType"], "int")
             self.assertEqual(data["result"]["address"], address)
-
+            
             # Test 3: Both Name and Type Change
-            payload = {
-                "address": address,
-                "newName": "TEST_DATA_BOTH",
-                "type": "byte"
-            }
-
-            response = requests.post(f"{BASE_URL}/data/update", json=payload)
+            response = requests.patch(f"{BASE_URL}/data/{address}",
+                                      json={"name": "TEST_DATA_BOTH", "type": "byte"})
             self.assertEqual(response.status_code, 200)
 
             data = response.json()
@@ -768,25 +832,21 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
             self.assertEqual(data["result"]["name"], "TEST_DATA_BOTH")
             self.assertEqual(data["result"]["dataType"], "byte")
             self.assertEqual(data["result"]["address"], address)
-
+            
             # Restore original values
             if original_type != "undefined" and original_name != "unnamed":
-                payload = {
-                    "address": address,
-                    "newName": original_name,
-                    "type": original_type
-                }
-                requests.post(f"{BASE_URL}/data", json=payload)
+                requests.patch(f"{BASE_URL}/data/{address}",
+                               json={"name": original_name, "type": original_type})
         except Exception as e:
             self.fail(f"Data operations test failed: {str(e)}")
 
 def test_all_read_endpoints():
     """Function to exercise all read endpoints and display their responses.
     This is called separately from the unittest framework when requested."""
-
+    
     print("\n--- TESTING ALL READ ENDPOINTS ---\n")
     print(f"Base URL: {BASE_URL}")
-
+    
     # List of all endpoints to test
     endpoints = [
         "/",                                          # Root endpoint
@@ -808,7 +868,7 @@ def test_all_read_endpoints():
         "/function",                                  # Current function
         "/classes?limit=3"                            # Classes
     ]
-
+    
     # Function to test a specific endpoint
     def test_endpoint(endpoint):
         print(f"\n=== Testing endpoint: {endpoint} ===")
@@ -818,7 +878,7 @@ def test_all_read_endpoints():
             if response.status_code == 200:
                 data = response.json()
                 print(f"Response: {json.dumps(data, indent=2)}")
-
+                
                 # Test for a specific function and its sub-resources if we get functions
                 if endpoint == "/functions?limit=3" and data.get("success") and data.get("result"):
                     functions = data.get("result", [])
@@ -832,21 +892,21 @@ def test_all_read_endpoints():
                             test_endpoint(f"/functions/{addr}/decompile")
                             test_endpoint(f"/functions/{addr}/disassembly")
                             test_endpoint(f"/functions/{addr}/variables")
-
+                        
                         # Test by-name endpoint if name exists
                         if isinstance(func, dict) and "name" in func:
                             name = func["name"]
                             test_endpoint(f"/functions/by-name/{name}")
-
+                
             else:
                 print(f"Error response: {response.text}")
         except Exception as e:
             print(f"Exception testing {endpoint}: {e}")
-
+    
     # Test each endpoint
     for endpoint in endpoints:
         test_endpoint(endpoint)
-
+    
     print("\n--- END OF API TEST ---\n")
 
 if __name__ == "__main__":
@@ -854,6 +914,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--test-api":
         test_all_read_endpoints()
         sys.exit(0)
-
+    
     # Otherwise run the unittest suite
     unittest.main()

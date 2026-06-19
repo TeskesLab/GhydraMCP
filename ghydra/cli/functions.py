@@ -206,7 +206,7 @@ def get_prev(ctx, address):
 
 
 @functions.command('get')
-@click.option('--name', '-n', help='Function name')
+@click.option('--name', '-n', help='Function fully-qualified name (e.g. "FOM::Read"); a bare name matches the global namespace only')
 @click.option('--address', '-a', help='Function address (hex)')
 @click.pass_context
 def get_function(ctx, name, address):
@@ -255,7 +255,7 @@ def get_function(ctx, name, address):
 
 
 @functions.command('decompile')
-@click.option('--name', '-n', help='Function name')
+@click.option('--name', '-n', help='Function fully-qualified name (e.g. "FOM::Read"); a bare name matches the global namespace only')
 @click.option('--address', '-a', help='Function address (hex)')
 @click.option('--syntax-tree', is_flag=True, help='Include syntax tree in output')
 @click.option('--style', default='normalize', help='Decompiler style (default: normalize)')
@@ -334,7 +334,7 @@ def decompile(ctx, name, address, syntax_tree, style, no_constants, timeout, sta
 
 
 @functions.command('disassemble')
-@click.option('--name', '-n', help='Function name')
+@click.option('--name', '-n', help='Function fully-qualified name (e.g. "FOM::Read"); a bare name matches the global namespace only')
 @click.option('--address', '-a', help='Function address (hex)')
 @click.option('--offset', '-o', default=0, type=int, help='Number of instructions to skip')
 @click.option('--limit', '-l', default=0, type=int, help='Max instructions to return (0 = all)')
@@ -415,9 +415,9 @@ def create_function(ctx, address):
 
 
 @functions.command('rename')
-@click.option('--old-name', help='Current function name')
+@click.option('--old-name', help='Current fully-qualified function name; a bare name matches the global namespace only')
 @click.option('--address', '-a', help='Function address (hex)')
-@click.option('--new-name', required=True, help='New function name')
+@click.option('--new-name', required=True, help='New FQN; "A::B::foo" moves into namespace A::B (created if absent); leading "::" moves to global; bare keeps the current namespace')
 @click.pass_context
 def rename_function(ctx, old_name, address, new_name):
     """Rename a function.
@@ -461,7 +461,7 @@ def rename_function(ctx, old_name, address, new_name):
 
 
 @functions.command('set-signature')
-@click.option('--name', '-n', help='Function name')
+@click.option('--name', '-n', help='Function fully-qualified name (e.g. "FOM::Read"); a bare name matches the global namespace only')
 @click.option('--address', '-a', help='Function address (hex)')
 @click.option('--signature', required=True, help='Function signature (e.g., "int func(char *data, int size)")')
 @click.pass_context
@@ -506,8 +506,41 @@ def set_signature(ctx, name, address, signature):
         ctx.exit(1)
 
 
+@functions.command('delete')
+@click.option('--name', '-n', help='Function fully-qualified name (e.g. "FOM::Read"); a bare name matches the global namespace only')
+@click.option('--address', '-a', help='Function address (hex)')
+@click.pass_context
+def delete_function(ctx, name, address):
+    """Delete a function."""
+    if not name and not address:
+        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
+        ctx.exit(1)
+
+    if name and address:
+        rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
+        ctx.exit(1)
+
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+
+    try:
+        if address:
+            endpoint = f'functions/{validate_address(address)}'
+        else:
+            endpoint = f'functions/by-name/{quote(name)}'
+
+        response = client.delete(endpoint)
+        output = formatter.format_simple_result(response)
+        click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
 @functions.command('get-variables')
-@click.option('--name', '-n', help='Function name')
+@click.option('--name', '-n', help='Function fully-qualified name (e.g. "FOM::Read"); a bare name matches the global namespace only')
 @click.option('--address', '-a', help='Function address (hex)')
 @click.pass_context
 def get_variables(ctx, name, address):
@@ -588,134 +621,6 @@ def update_variable(ctx, address, variable_name, new_name, new_data_type):
         ctx.exit(1)
 
 
-@functions.command('get-cfg')
-@click.option('--name', '-n', help='Function name')
-@click.option('--address', '-a', help='Function address (hex)')
-@click.pass_context
-def get_cfg(ctx, name, address):
-    """Get control flow graph (basic blocks and edges).
-
-    Either --name or --address must be specified.
-
-    \b
-    Examples:
-        ghydra functions get-cfg --name main
-        ghydra functions get-cfg --address 0x401000
-    """
-    if not name and not address:
-        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
-        ctx.exit(1)
-    if name and address:
-        rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
-        ctx.exit(1)
-    client = ctx.obj['client']
-    formatter = ctx.obj['formatter']
-    config = ctx.obj['config']
-    try:
-        if address:
-            endpoint = f'functions/{validate_address(address)}/cfg'
-        else:
-            endpoint = f'functions/by-name/{quote(name)}/cfg'
-        response = client.get(endpoint)
-        output = formatter.format_simple_result(response)
-        if should_page(config, ctx.obj['output_json']):
-            page_output(output, use_pager=config.page_output)
-        else:
-            click.echo(output)
-    except GhidraError as e:
-        error_output = formatter.format_error(e)
-        rich_echo(error_output, err=True)
-        ctx.exit(1)
-
-
-@functions.command('get-pcode')
-@click.option('--name', '-n', help='Function name')
-@click.option('--address', '-a', help='Function address (hex)')
-@click.pass_context
-def get_pcode(ctx, name, address):
-    """Get pcode operations (low-level intermediate representation).
-
-    Either --name or --address must be specified.
-
-    \b
-    Examples:
-        ghydra functions get-pcode --name main
-        ghydra functions get-pcode --address 0x401000
-    """
-    if not name and not address:
-        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
-        ctx.exit(1)
-    if name and address:
-        rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
-        ctx.exit(1)
-    client = ctx.obj['client']
-    formatter = ctx.obj['formatter']
-    config = ctx.obj['config']
-    try:
-        if address:
-            endpoint = f'functions/{validate_address(address)}/pcode'
-        else:
-            endpoint = f'functions/by-name/{quote(name)}/pcode'
-        response = client.get(endpoint)
-        output = formatter.format_simple_result(response)
-        if should_page(config, ctx.obj['output_json']):
-            page_output(output, use_pager=config.page_output)
-        else:
-            click.echo(output)
-    except GhidraError as e:
-        error_output = formatter.format_error(e)
-        rich_echo(error_output, err=True)
-        ctx.exit(1)
-
-
-@functions.command('set-variable')
-@click.option('--name', '-n', help='Function name')
-@click.option('--address', '-a', help='Function address (hex)')
-@click.option('--variable', required=True, help='Current variable name')
-@click.option('--new-name', help='New name for the variable')
-@click.option('--data-type', help='New data type (e.g., int, char *, uint32_t)')
-@click.pass_context
-def set_variable(ctx, name, address, variable, new_name, data_type):
-    """Rename or change the type of a function variable.
-
-    Either --name or --address must be specified. At least one of --new-name
-    or --data-type must be specified.
-
-    \b
-    Examples:
-        ghydra functions set-variable --name main --variable buf --new-name buffer
-        ghydra functions set-variable --address 0x401000 --variable len --data-type "size_t"
-    """
-    if not name and not address:
-        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
-        ctx.exit(1)
-    if name and address:
-        rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
-        ctx.exit(1)
-    if not new_name and not data_type:
-        rich_echo("[red]Error:[/red] At least one of --new-name or --data-type is required", err=True)
-        ctx.exit(1)
-    client = ctx.obj['client']
-    formatter = ctx.obj['formatter']
-    try:
-        if address:
-            endpoint = f'functions/{validate_address(address)}/variables/{quote(variable)}'
-        else:
-            endpoint = f'functions/by-name/{quote(name)}/variables/{quote(variable)}'
-        data = {}
-        if new_name:
-            data['name'] = new_name
-        if data_type:
-            data['data_type'] = data_type
-        response = client.patch(endpoint, data=data)
-        output = formatter.format_simple_result(response)
-        click.echo(output)
-    except GhidraError as e:
-        error_output = formatter.format_error(e)
-        rich_echo(error_output, err=True)
-        ctx.exit(1)
-
-
 @functions.command('set-comment')
 @click.option('--address', '-a', required=True, help='Function address (hex)')
 @click.option('--comment', required=True, help='Comment text (empty string removes comment)')
@@ -752,3 +657,86 @@ def set_comment(ctx, address, comment):
             rich_echo(formatter.format_error(primary_err), err=True)
             rich_echo(formatter.format_error(fallback_err), err=True)
             ctx.exit(1)
+
+
+@functions.command('get-cfg')
+@click.option('--name', '-n', help='Function name')
+@click.option('--address', '-a', help='Function address (hex)')
+@click.pass_context
+def get_cfg(ctx, name, address):
+    """Get control flow graph (basic blocks and edges)."""
+    if not name and not address:
+        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
+        ctx.exit(1)
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    try:
+        if address:
+            endpoint = f'functions/{address}/cfg'
+        else:
+            endpoint = f'functions/by-name/{quote(name)}/cfg'
+        response = client.get(endpoint)
+        output = formatter.format_simple_result(response)
+        click.echo(output)
+    except GhidraError as e:
+        rich_echo(formatter.format_error(e), err=True)
+        ctx.exit(1)
+
+
+@functions.command('get-pcode')
+@click.option('--name', '-n', help='Function name')
+@click.option('--address', '-a', help='Function address (hex)')
+@click.pass_context
+def get_pcode(ctx, name, address):
+    """Get pcode operations (low-level intermediate representation)."""
+    if not name and not address:
+        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
+        ctx.exit(1)
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    try:
+        if address:
+            endpoint = f'functions/{address}/pcode'
+        else:
+            endpoint = f'functions/by-name/{quote(name)}/pcode'
+        response = client.get(endpoint)
+        output = formatter.format_simple_result(response)
+        click.echo(output)
+    except GhidraError as e:
+        rich_echo(formatter.format_error(e), err=True)
+        ctx.exit(1)
+
+
+@functions.command('set-variable')
+@click.option('--name', '-n', help='Function name')
+@click.option('--address', '-a', help='Function address (hex)')
+@click.option('--variable', required=True, help='Current variable name')
+@click.option('--new-name', help='New name for the variable')
+@click.option('--data-type', help='New data type (e.g., int, char *, uint32_t)')
+@click.pass_context
+def set_variable(ctx, name, address, variable, new_name, data_type):
+    """Rename or change the type of a function variable."""
+    if not name and not address:
+        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
+        ctx.exit(1)
+    if not new_name and not data_type:
+        rich_echo("[red]Error:[/red] At least one of --new-name or --data-type is required", err=True)
+        ctx.exit(1)
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    try:
+        if address:
+            endpoint = f'functions/{address}/variables/{quote(variable)}'
+        else:
+            endpoint = f'functions/by-name/{quote(name)}/variables/{quote(variable)}'
+        data = {}
+        if new_name:
+            data['name'] = new_name
+        if data_type:
+            data['data_type'] = data_type
+        response = client.patch(endpoint, data=data)
+        output = formatter.format_simple_result(response)
+        click.echo(output)
+    except GhidraError as e:
+        rich_echo(formatter.format_error(e), err=True)
+        ctx.exit(1)

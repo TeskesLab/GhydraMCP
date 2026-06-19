@@ -94,13 +94,15 @@ Common HTTP Status Codes:
 
 Resources like functions, data, and symbols often exist at specific memory addresses and may have names.
 
+Names are **fully-qualified** (FQN): the namespace path joined with `::` (e.g. `MyClass::myMethod`, `FOM::SharedMemory::ReadUInt`); members of the global namespace are unprefixed (e.g. `main`). **Breaking:** all name filters below match against the fully-qualified name, and a bare name (no `::`) resolves in the global namespace only (it no longer matches a symbol that lives in some namespace).
+
 - **By Address:** Use the resource's path with the address (hexadecimal, e.g., `0x401000` or `08000004`).
   - Example: `GET /functions/0x401000`
 - **Querying Lists:** List endpoints (e.g., `/functions`, `/symbols`, `/data`) support filtering via query parameters:
   - `?addr=[address in hex]`: Find item at a specific address.
-  - `?name=[full_name]`: Find item(s) with an exact name match (case-sensitive).
-  - `?name_contains=[substring]`: Find item(s) whose name contains the substring (case-insensitive).
-  - `?name_matches_regex=[regex]`: Find item(s) whose name matches the Java-compatible regular expression.
+  - `?name=[fqn]`: Find item(s) whose fully-qualified name matches exactly (case-sensitive). (`/data` uses `?label=` / `?label_contains=`.)
+  - `?name_contains=[substring]`: Find item(s) whose fully-qualified name contains the substring (case-insensitive).
+  - `?name_matches_regex=[regex]`: Find item(s) whose fully-qualified name matches the Java-compatible regular expression.
 
 ### Pagination
 
@@ -240,6 +242,8 @@ Represents the current binary loaded in Ghidra.
   }
   ```
 
+- **`POST /program/save`**: Persist the current program to the project (Ghidra's "Save"). Add `?all=true` to save every open program that has unsaved changes. A program with no changes returns `{ "saved": false, "detail": "no unsaved changes" }`.
+
 ### 3. Current Location
 
 Provides information about the current cursor position and function in Ghidra's CodeBrowser.
@@ -282,9 +286,9 @@ Provides information about the current cursor position and function in Ghidra's 
 
 ### 4. Functions
 
-Represents functions within the current program. Function names are **fully-qualified** (FQN), including their namespace path (e.g., `MyClass::myMethod` or `NS1::NS2::func`). Functions in the global namespace have no prefix (e.g., `main`).
+Represents functions within the current program. Function names are **fully-qualified** (FQN), including the namespace path (e.g. `FOM::SharedMemory::ReadUInt`); functions in the global namespace are unprefixed (e.g. `main`).
 
-- **`GET /functions`**: List functions. Supports searching (by name/address/regex) and pagination. All name filters match against the fully-qualified name.
+- **`GET /functions`**: List functions. Supports searching (by name/address/regex, all against the FQN) and pagination.
   ```json
   // Example Response Fragment
   "result": [
@@ -293,12 +297,12 @@ Represents functions within the current program. Function names are **fully-qual
   ]
   ```
 - **`POST /functions`**: Create a function at a specific address. Requires `address` in the request body. Returns the created function resource.
+- **`GET /functions/by-name/{fqn}`**: Get a function by its fully-qualified name. The FQN must be URL-encoded (e.g. `FOM::ReadUInt` -> `FOM%3A%3AReadUInt`); a bare name resolves in the global namespace only. `PATCH` and `DELETE` (and the `decompile`/`disassembly`/`variables` sub-resources) are also served under this path.
 - **`GET /functions/{address}`**: Get details for a specific function (name, signature, size, stack info, etc.).
-- **`GET /functions/by-name/{fqn}`**: Get details for a function by its fully-qualified name. The FQN must be URL-encoded (e.g., `FOM::ReadUInt` → `FOM%3A%3AReadUInt`).
   ```json
   // Example Response Fragment for GET /functions/0x4010a0
   "result": {
-    "name": "MyNamespace::process_data",
+    "name": "process_data",
     "address": "0x4010a0",
     "signature": "int process_data(char * data, int size)",
     "size": 128,
@@ -309,7 +313,6 @@ Represents functions within the current program. Function names are **fully-qual
   },
   "_links": {
     "self": { "href": "/functions/0x4010a0" },
-    "by_name": { "href": "/functions/by-name/MyNamespace%3A%3Aprocess_data" },
     "decompile": { "href": "/functions/0x4010a0/decompile" },
     "disassembly": { "href": "/functions/0x4010a0/disassembly" },
     "variables": { "href": "/functions/0x4010a0/variables" },
@@ -318,11 +321,11 @@ Represents functions within the current program. Function names are **fully-qual
   }
   ```
 - **`PATCH /functions/{address}`**: Modify a function. Payload can contain:
-  - `name`: New fully-qualified function name. Using `::` moves the function to that namespace (e.g., `MyClass::myMethod` moves to namespace `MyClass`).
+  - `name`: New fully-qualified name. `A::B::foo` moves the function into namespace `A::B` (created if absent); a leading `::` (or `Global::`) moves it to the global namespace; a bare name keeps the current namespace.
   - `signature`: Full function signature string (e.g., `void my_func(int p1, char * p2)`).
   - `comment`: Set/update the function's primary comment.
   ```json
-  // Example PATCH payload - renames and moves to namespace
+  // Example PATCH payload (rename and move into the Crypto namespace)
   { "name": "Crypto::calculate_checksum", "signature": "uint32_t calculate_checksum(uint8_t* buffer, size_t length)" }
   ```
 - **`DELETE /functions/{address}`**: Delete the function definition at the specified address.
@@ -367,7 +370,12 @@ Represents named locations (functions, data, labels).
 
 Represents defined data items in memory.
 
-- **`GET /data`**: List data items. Supports searching (by name/address/regex) and pagination. Can filter by type (`?type=string`, `?type=dword`, etc.). For `?addr=...` lookups, the endpoint returns defined data first and falls back to label symbols when no defined data exists at that address.
+- **`GET /data`**: List data items, with pagination and filters:
+  - `?label=[string]`: exact label (name) match.
+  - `?label_contains=[string]`: label substring match (case-insensitive).
+  - `?type=[string]`: filter by data type (`string`, `dword`, etc.).
+  - `?addr=[hex]`: look up a single address; returns defined data first, falling back to a label symbol when no defined data exists there.
+  - (The `data_list` bridge tool and `ghydra data list` expose `label`/`label_contains` as `name`/`name_contains`.)
 - **`POST /data`**: Define a new data item. Requires `address`, `type`, and optionally `size` or `length` in the payload.
 - **`GET /data/{address}`**: Get details of the data item at the specified address (type, size, value representation).
 - **`PATCH /data/{address}`**: Modify a data item (e.g., change `name`, `type`, `comment`). Payload specifies changes.
@@ -603,20 +611,21 @@ Provides functionality for creating and managing struct (composite) data types.
 
 ### 6.3 Scalars
 
-Search for scalar (constant) values in instructions, similar to Ghidra's "Search For Scalar" feature.
+Search for scalar (constant) values in instructions, like Ghidra's "Search For Scalars".
 
-- **`GET /scalars`**: Search for occurrences of a specific scalar value in instructions.
+- **`GET /scalars`**: Find occurrences of a specific scalar value in instruction operands.
   - Query Parameters:
-    - `?value=[int]`: **Required.** The scalar value to search for (hex `0x...` or decimal).
-    - `?in_function=[string]`: Filter to only include results in functions whose name contains this substring (case-insensitive). This filters by the **containing** function where the scalar appears.
-    - `?to_function=[string]`: Filter to only include results where the instruction is a call to a function whose name contains this substring (case-insensitive). Useful for finding specific arguments passed to a function.
+    - `?value=[int]`: **Required.** Value to search for (hex `0x...` / `-0x...`, or decimal).
+    - `?in_function=[string]`: Only matches inside functions whose name contains this substring (case-insensitive). On a large program this is much faster: it scans only the matching functions instead of every instruction.
+    - `?to_function=[string]`: Only matches where the instruction feeds a nearby call (within ~10 instructions) to a function whose name contains this substring. Useful for finding a specific argument passed to a function.
     - `?offset=[int]`: Pagination offset (default: 0).
-    - `?limit=[int]`: Maximum number of results to return (default: 100).
+    - `?limit=[int]`: Maximum results to return (default: 100).
+  - `meta.scanTruncated` is `true` when an unfiltered or `to_function` scan hit its time budget before finishing (large programs). Results are then partial; narrow with `in_function` or a more specific value for completeness.
   ```json
   // Example Response for GET /scalars?value=0&to_function=memset
   "result": [
     {
-      "address": "0x00401234",
+      "address": "00401234",
       "value": 0,
       "hexValue": "0x0",
       "bitLength": 32,
@@ -624,28 +633,28 @@ Search for scalar (constant) values in instructions, similar to Ghidra's "Search
       "operandIndex": 1,
       "instruction": "PUSH 0x0",
       "inFunction": "main",
-      "inFunctionAddress": "0x00401200",
+      "inFunctionAddress": "00401200",
       "toFunction": "memset",
-      "toFunctionAddress": "0x00402000"
+      "toFunctionAddress": "00402000"
     }
   ],
+  "meta": { "offset": 0, "limit": 100, "returned": 1, "scanTruncated": false },
   "_links": {
     "self": { "href": "/scalars?value=0&to_function=memset&offset=0&limit=100" },
-    "next": { "href": "/scalars?value=0&to_function=memset&offset=100&limit=100" },
     "program": { "href": "/program" }
   }
   ```
 
 ### 7. Memory Segments
 
-Represents memory blocks/sections defined in the program.
+Represents memory blocks/sections defined in the program. 
 
 - **`GET /segments`**: List all memory segments (e.g., `.text`, `.data`, `.bss`).
 - **`GET /segments/{segment_name}`**: Get details for a specific segment (address range, permissions, size).
 
 ### 8. Memory Access
 
-Provides raw memory access.
+Provides raw memory access. 
 
 - **`GET /memory/{address}`**: Read bytes from memory.
   - Query Parameters:
@@ -764,6 +773,29 @@ Provides access to Ghidra's analysis results.
       },
       // ... more steps
     ]
+  }
+  ```
+
+### 11. Scripts (gated)
+
+Run Ghidra scripts via the API, for multi-stage or batch operations (mass rename, signature transfer, etc.).
+
+**Disabled by default** because running a script is arbitrary code execution. Enable on the server with `-Dghydra.dev.allowScripts=true` or env `GHYDRA_ALLOW_SCRIPTS=1`; otherwise these return `403 SCRIPTS_DISABLED`. Only enable in a trusted/dev environment.
+
+- **`GET /scripts`**: List runnable scripts (name, path, category) from the enabled source directories.
+- **`POST /scripts/run`**: Run a script and return its captured output.
+  - Body (provide one of):
+    - `{ "name": "MyScript.java" }`: run an existing script by file name.
+    - `{ "source": "import ghidra.app.script.GhidraScript; public class X extends GhidraScript { public void run() throws Exception { println(\"hi\"); } }" }`: compile and run ad-hoc GhidraScript source (the class name must match; the file is written to the user script dir and removed after).
+    - `"args": ["a", "b"]` (optional): passed to the script (`getScriptArgs()`).
+  - Runs with the current program as `currentProgram`; use `println(...)` for output.
+  ```json
+  // Example Response
+  "result": {
+    "script": "X.java",
+    "output": "hi\n",
+    "success": true,
+    "error": null
   }
   ```
 

@@ -4,15 +4,18 @@
 
   <modelVersion>4.0.0</modelVersion>
   <groupId>eu.starsong.ghidra</groupId>
-  <artifactId>GhydraMCP</artifactId>
+  <artifactId>Ghydra</artifactId>
   <packaging>jar</packaging>
-  <version>2.4.1</version>
-  <name>GhydraMCP</name>
-  <url>https://github.com/TeskesLab/GhydraMCP</url>
-
+  <version>dev</version>
+  <name>Ghydra</name>
+  <url>https://github.com/starsong-consulting/GhydraMCP</url>
+  
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    <!-- Ghidra version this build targets; filtered into extension.properties.
+         CI's build matrix overrides it per leg with -Dghidra.version=<11.x|12.x>. -->
+    <ghidra.version>12.1.2</ghidra.version>
     <!-- Default paths to local lib - will be overridden if GHIDRA_HOME is set -->
     <ghidra.generic.jar>${project.basedir}/lib/Generic.jar</ghidra.generic.jar>
     <ghidra.softwaremodeling.jar>${project.basedir}/lib/SoftwareModeling.jar</ghidra.softwaremodeling.jar>
@@ -25,10 +28,24 @@
     <maven.install.skip>true</maven.install.skip>
     <maven.build.timestamp.format>yyyyMMdd-HHmmss</maven.build.timestamp.format>
     <revision>dev</revision>
-    <inner.zip.filename>GhydraMCP-v${project.version}.zip</inner.zip.filename>
+    <inner.zip.filename>Ghydra-${git.commit.id.describe}-${maven.build.timestamp}.zip</inner.zip.filename>
   </properties>
 
   <dependencies>
+    <!-- Javalin HTTP framework -->
+    <dependency>
+      <groupId>io.javalin</groupId>
+      <artifactId>javalin</artifactId>
+      <version>6.3.0</version>
+    </dependency>
+
+    <!-- SLF4J simple implementation for Javalin logging -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>2.0.9</version>
+    </dependency>
+
     <!-- JSON handling -->
     <dependency>
       <groupId>com.google.code.gson</groupId>
@@ -42,53 +59,53 @@
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Generic</artifactId>
-      <version>12.0.1</version>
+      <version>12.1.2</version>
       <scope>system</scope>
       <systemPath>${ghidra.generic.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>SoftwareModeling</artifactId>
-      <version>12.0.1</version>
+      <version>12.1.2</version>
       <scope>system</scope>
       <systemPath>${ghidra.softwaremodeling.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Project</artifactId>
-      <version>12.0.1</version>
+      <version>12.1.2</version>
       <scope>system</scope>
       <systemPath>${ghidra.project.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Docking</artifactId>
-      <version>12.0.1</version>
+      <version>12.1.2</version>
       <scope>system</scope>
       <systemPath>${ghidra.docking.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Decompiler</artifactId>
-      <version>12.0.1</version>
+      <version>12.1.2</version>
       <scope>system</scope>
       <systemPath>${ghidra.decompiler.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Utility</artifactId>
-      <version>12.0.1</version>
+      <version>12.1.2</version>
       <scope>system</scope>
       <systemPath>${ghidra.utility.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Base</artifactId>
-      <version>12.0.1</version>
+      <version>12.1.2</version>
       <scope>system</scope>
       <systemPath>${ghidra.base.jar}</systemPath>
     </dependency>
-
+    
     <!-- Test dependencies -->
     <dependency>
       <groupId>junit</groupId>
@@ -114,10 +131,14 @@
         <configuration>
           <source>21</source>
           <target>21</target>
-          <compilerArgument>-Xlint:-path</compilerArgument>
+          <compilerArgs>
+            <arg>-Xlint:-path</arg>
+            <arg>-Xlint:deprecation</arg>
+            <arg>-Xlint:removal</arg>
+          </compilerArgs>
         </configuration>
       </plugin>
-
+      
       <!-- Git Commit ID plugin to generate version info -->
       <plugin>
         <groupId>io.github.git-commit-id</groupId>
@@ -141,8 +162,8 @@
           <commitIdGenerationMode>full</commitIdGenerationMode>
         </configuration>
       </plugin>
-
-
+      
+      
       <!-- Use custom MANIFEST.MF -->
       <plugin>
         <artifactId>maven-jar-plugin</artifactId>
@@ -153,22 +174,73 @@
               <addDefaultImplementationEntries>false</addDefaultImplementationEntries>
             </manifest>
             <manifestEntries>
-              <Implementation-Title>GhydraMCP</Implementation-Title>
+              <Implementation-Title>Ghydra</Implementation-Title>
               <Implementation-Version>${git.commit.id.abbrev}-${maven.build.timestamp}</Implementation-Version>
-              <Plugin-Class>eu.starsong.ghidra.GhydraMCP</Plugin-Class>
-              <Plugin-Name>GhydraMCP</Plugin-Name>
+              <Plugin-Class>eu.starsong.ghidra.GhydraPlugin</Plugin-Class>
+              <Plugin-Name>Ghydra</Plugin-Name>
               <Plugin-Version>${git.commit.id.abbrev}-${maven.build.timestamp}</Plugin-Version>
-              <Plugin-Author>LaurieWired, Teal Bauer, Lucas Teske</Plugin-Author>
-              <Plugin-Description>Expose multiple Ghidra tools to MCP servers with variable management</Plugin-Description>
+              <Plugin-Author>Teal Bauer (based on ghidra-mcp by Laurie Wired)</Plugin-Author>
+              <Plugin-Description>Ghidra HATEOAS interface for all CodeBrowser instances in parallel</Plugin-Description>
             </manifestEntries>
           </archive>
-          <finalName>GhydraMCP</finalName>
+          <finalName>Ghydra</finalName>
           <excludes>
             <exclude>**/App.class</exclude>
           </excludes>
           <outputDirectory>${project.build.directory}</outputDirectory>
         </configuration>
       </plugin>
+
+      <!-- Shade runtime deps (Javalin, Jetty, SLF4J, Kotlin) into GhydraMCP.jar.
+           One jar in lib/, no per-jar classpath hygiene concerns. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.3</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <finalName>Ghydra</finalName>
+              <shadedArtifactAttached>false</shadedArtifactAttached>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
+                    <exclude>META-INF/versions/*/module-info.class</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <manifestEntries>
+                    <Plugin-Class>eu.starsong.ghidra.GhydraPlugin</Plugin-Class>
+                    <Plugin-Name>Ghydra</Plugin-Name>
+                    <Plugin-Version>${git.commit.id.abbrev}-${maven.build.timestamp}</Plugin-Version>
+                    <Plugin-Author>Teal Bauer (based on ghidra-mcp by Laurie Wired)</Plugin-Author>
+                    <Implementation-Title>Ghydra</Implementation-Title>
+                    <Implementation-Version>${git.commit.id.abbrev}-${maven.build.timestamp}</Implementation-Version>
+                  </manifestEntries>
+                </transformer>
+              </transformers>
+              <artifactSet>
+                <excludes>
+                  <exclude>ghidra:*</exclude>
+                  <exclude>com.google.code.gson:gson</exclude>
+                </excludes>
+              </artifactSet>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
 
       <!-- The Assembly Plugin -->
       <plugin>
@@ -179,7 +251,7 @@
           <!-- Execution for the Ghidra extension zip -->
           <execution>
             <id>plugin-assembly</id>
-            <phase>package</phase>
+            <phase>package</phase> 
             <goals>
               <goal>single</goal>
             </goals>
@@ -187,15 +259,15 @@
               <descriptors>
                 <descriptor>src/assembly/ghidra-extension.xml</descriptor>
               </descriptors>
-              <finalName>GhydraMCP-v${project.version}</finalName>
+              <finalName>Ghydra-${git.commit.id.describe}-${maven.build.timestamp}</finalName>
               <appendAssemblyId>false</appendAssemblyId>
             </configuration>
           </execution>
-
+          
           <!-- Execution for the complete package -->
           <execution>
             <id>complete-package</id>
-            <phase>package</phase>
+            <phase>package</phase> 
             <goals>
               <goal>single</goal>
             </goals>
@@ -203,13 +275,13 @@
               <descriptors>
                 <descriptor>src/assembly/complete-package.xml</descriptor>
               </descriptors>
-              <finalName>GhydraMCP-Complete-v${project.version}</finalName>
+              <finalName>Ghydra-Complete-${git.commit.id.describe}-${maven.build.timestamp}</finalName>
               <appendAssemblyId>false</appendAssemblyId>
             </configuration>
           </execution>
         </executions>
       </plugin>
-
+      
       <!-- Copy dependencies and validate system paths -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -228,7 +300,7 @@
               <includeScope>runtime</includeScope>
             </configuration>
           </execution>
-
+          
           <!-- Validate system dependency paths -->
           <execution>
             <id>validate-system-dependencies</id>
@@ -257,7 +329,7 @@
       </plugin>
     </plugins>
   </build>
-
+  
   <profiles>
     <!-- Profile activated when GHIDRA_HOME environment variable is set -->
     <profile>
@@ -297,7 +369,7 @@
         </plugins>
       </build>
     </profile>
-
+    
     <!-- Profile for building just the complete package -->
     <profile>
       <id>complete-only</id>
@@ -307,6 +379,12 @@
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-assembly-plugin</artifactId>
             <version>3.3.0</version>
+            <executions>
+              <execution>
+                <id>plugin-assembly</id>
+                <phase>none</phase>
+              </execution>
+            </executions>
           </plugin>
         </plugins>
       </build>

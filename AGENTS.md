@@ -6,19 +6,20 @@ GhydraMCP is a bridge between [Ghidra](https://ghidra-sre.org/) and AI assistant
 
 ## Architecture
 
-**3-tier**: LLM (MCP client) → `bridge_mcp_hydra.py` (Python MCP via FastMCP, stdio transport) → HTTP REST → `GhydraMCPPlugin.java` (Ghidra plugin HttpServer)
+**3-tier**: LLM (MCP client) → `bridge_mcp_hydra.py` (Python MCP via FastMCP, stdio transport) → HTTP REST → `GhydraPlugin.java` (Ghidra plugin, Javalin web server)
 
 - Each open CodeBrowser gets its own HTTP server instance on ports 8192-8447 (256 port range)
 - First CodeBrowser gets port 8192, second 8193, etc.
 - The Python bridge auto-discovers running instances on startup
-- ~71 MCP tools organized into namespaces: `instances_*`, `functions_*`, `data_*`, `structs_*`, `memory_*`, `xrefs_*`, `analysis_*`, `classes_*`, `symbols_*`, `segments_*`, `namespaces_*`, `variables_*`, `datatypes_*`, `scalars_*`, `project_*`, `comments_*`, `script_*`
-- CLI tool (`ghydra/`) provides standalone terminal access — human-readable tables + `--json` mode for scripting, 19 command groups, 64 subcommands
+- ~71 MCP tools organized into namespaces: `instances_*`, `functions_*`, `data_*`, `structs_*`, `memory_*`, `xrefs_*`, `analysis_*`, `classes_*`, `symbols_*`, `segments_*`, `namespaces_*`, `variables_*`, `datatypes_*`, `scalars_*`, `project_*`, `comments_*`, `scripts_*`
+- CLI tool (`ghydra/`) provides standalone terminal access — human-readable tables + `--json` mode for scripting, 20 command groups
+- **v3.0.0**: Migrated from raw `HttpServer` to **Javalin** with service/DTO/resource architecture. Targets **Ghidra 12.1.2**. **API_VERSION 3000** (breaking: fully-qualified names everywhere)
 
 ## Code Layout
 
 ```
 GhydraMCP/
-├── bridge_mcp_hydra.py          # Python MCP bridge (~3650 lines), all MCP tools defined here
+├── bridge_mcp_hydra.py          # Python MCP bridge, all MCP tools defined here
 ├── ghydra/                       # CLI tool (Python package)
 │   ├── cli/                      # Click-based CLI commands
 │   ├── client/                   # HTTP client for Ghidra API
@@ -26,28 +27,20 @@ GhydraMCP/
 │   ├── formatters/               # Output formatters
 │   └── utils/                    # Utility functions
 ├── src/main/java/eu/starsong/ghidra/
-│   ├── GhydraMCPPlugin.java      # Main plugin class, endpoint registration, HTTP server
+│   ├── GhydraPlugin.java         # Main plugin class, server lifecycle, resource registration
 │   ├── api/
-│   │   ├── ApiConstants.java     # Version constants (PLUGIN_VERSION, API_VERSION)
-│   │   ├── GhidraJsonEndpoint.java # Base JSON endpoint handler
-│   │   └── ResponseBuilder.java  # HATEOAS response construction
-│   ├── endpoints/                # REST API endpoint handlers (17 files)
-│   │   ├── AbstractEndpoint.java  # Base class for all endpoints
-│   │   ├── FunctionEndpoints.java # Function CRUD, decompile, disassemble, CFG, pcode
-│   │   ├── AnalysisEndpoints.java # Analysis status, callgraph
-│   │   ├── ProgramEndpoints.java  # Dataflow, callgraph handlers
-│   │   ├── DataEndpoints.java      # Data items, strings
-│   │   ├── StructEndpoints.java    # Struct CRUD
-│   │   ├── XrefsEndpoints.java     # Cross-references
-│   │   ├── MemoryEndpoints.java    # Memory read/write
-│   │   ├── InstanceEndpoints.java  # Multi-instance management
-│   │   └── ... (Class, DataType, Namespace, Scalar, Segment, Symbol, Variable, ProjectManagement)
-│   ├── model/                     # Data models (FunctionInfo, JsonResponse, ProgramInfo, etc.)
-│   └── util/                      # Utilities (GhidraUtil, HttpUtil, TransactionHelper, DecompilerCache)
-├── pom.xml                        # Maven build (Ghidra 12.0.1, Java 21)
+│   │   └── ApiConstants.java     # Version constants (PLUGIN_VERSION, API_VERSION)
+│   ├── server/                   # Javalin server, context, Gson mapper, Resource interface
+│   ├── resource/                 # REST route handlers (Javalin resources)
+│   ├── service/                  # Business logic services
+│   ├── dto/                      # Data Transfer Objects
+│   ├── hateoas/                  # HATEOAS response builders, pagination, links
+│   ├── middleware/               # CORS, error handling
+│   ├── datatype/                 # Custom data types (RawImage)
+│   └── util/                     # Utilities (GhidraUtil, GhidraSwing, TransactionHelper, etc.)
+├── pom.xml                        # Maven build (Ghidra 12.1.2, Java 21, Javalin 6.3.0)
 ├── pyproject.toml                 # Python package config
-├── .github/workflows/build.yml    # GitHub Actions CI/CD
-└── .gitea/workflows/build.yml     # Gitea Actions CI/CD
+└── .github/workflows/build.yml   # GitHub Actions CI/CD
 ```
 
 ## Build Commands
@@ -71,11 +64,12 @@ pip install -e .                   # Install CLI tool (`ghydra` command)
 ## Code Conventions
 
 ### Adding a New Java Endpoint
-1. Create handler method in the appropriate `*Endpoints.java` (extend `AbstractEndpoint`)
-2. Use `ResponseBuilder` for HATEOAS-compliant JSON responses
-3. Use `TransactionHelper` for any program modifications
-4. Use `GhidraUtil` for common operations (type resolution, address parsing, etc.)
-5. New top-level routes: register in `registerProgramDependentEndpoints()` in `GhydraMCPPlugin.java`
+1. Create a method in the appropriate `*Service.java` (business logic)
+2. Create or add to a `*Resource.java` (Javalin route handler, implements `Resource`)
+3. Use `Response.ok()` from `hateoas/` for HATEOAS-compliant JSON responses
+4. Use `TransactionHelper` for any program modifications
+5. Use `GhidraUtil` for common operations (type resolution, address parsing, etc.)
+6. Register the resource in `GhydraPlugin.java` via `server.register(new MyResource())`
 6. New sub-resource routes (e.g., `/functions/{addr}/cfg`): handled by existing dispatchers, no registration needed
 
 ### Adding a New MCP Tool

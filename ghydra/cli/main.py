@@ -90,6 +90,8 @@ from . import (
     data,
     structs,
     xrefs,
+    scalars,
+    scripts,
     analysis,
     ui,
     comments,
@@ -100,8 +102,6 @@ from . import (
     namespaces,
     variables,
     datatypes,
-    scalars,
-    script,
     raw_image,
 )
 
@@ -111,6 +111,8 @@ cli.add_command(memory.memory)
 cli.add_command(data.data)
 cli.add_command(structs.structs)
 cli.add_command(xrefs.xrefs)
+cli.add_command(scalars.scalars)
+cli.add_command(scripts.scripts)
 cli.add_command(analysis.analysis)
 cli.add_command(ui.ui)
 cli.add_command(comments.comments)
@@ -121,8 +123,6 @@ cli.add_command(segments.segments)
 cli.add_command(namespaces.namespaces)
 cli.add_command(variables.variables)
 cli.add_command(datatypes.datatypes)
-cli.add_command(scalars.scalars)
-cli.add_command(script.script)
 cli.add_command(raw_image.raw_image)
 
 

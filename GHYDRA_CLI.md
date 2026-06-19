@@ -1,12 +1,20 @@
-# Ghydra CLI v2.4.1
+# Ghydra CLI
 
-A standalone command-line interface for GhydraMCP — interact with Ghidra's reverse engineering capabilities directly from the terminal. No MCP client needed.
+A command-line interface for GhydraMCP that provides access to Ghidra's reverse engineering capabilities via a standalone tool.
+
+## Overview
+
+Ghydra CLI is a standalone command-line tool that exposes all the functionality of the GhydraMCP bridge in a terminal-friendly format. It supports both human-readable formatted output (with tables, syntax highlighting, and colors) and JSON output for scripting.
 
 ## Installation
 
 ```bash
+# Install in development mode
 cd /path/to/GhydraMCP
 pip install -e .
+
+# After installation, reshim if using asdf
+asdf reshim
 ```
 
 ## Quick Start
@@ -22,27 +30,36 @@ ghydra functions decompile --name main
 ghydra memory read --address 0x401000 --length 64
 
 # Get JSON output for scripting
-ghydra --json functions list | jq '.result[0]'
+ghydra --json functions list
 ```
 
 ## Global Options
 
-All commands support these options:
+All commands support these global options:
 
-| Flag | Short | Description |
-|---|---|---|
-| `--host` | `-h` | Ghidra host (default: from config or `localhost`) |
-| `--port` | `-p` | Ghidra port (default: from config or `8192`) |
-| `--json` | | Output raw JSON instead of formatted text |
-| `--no-color` | | Disable colored output |
-| `--verbose` | `-v` | Enable verbose output |
-| `--version` | | Show version and exit |
-| `--help` | | Show help message |
+- `--host, -h TEXT`: Ghidra host (default: from config or localhost)
+- `--port, -p INTEGER`: Ghidra port (default: from config or 8192)
+- `--json`: Output raw JSON instead of formatted text
+- `--no-color`: Disable colored output (also honored via the `NO_COLOR` environment variable)
+- `--verbose, -v`: Enable verbose output
+- `--version`: Show version and exit
+- `--help`: Show help message
+
+## Agent / programmatic use
+
+For scripts and AI agents, prefer one of these so output is parse-clean:
+
+- `--json` is the recommended programmatic path: structured output you can pipe to `jq`, e.g. `ghydra --json functions list | jq '.result[].name'`.
+- Colored (ANSI) output is auto-disabled whenever stdout is not a terminal (a pipe, a file, or a subprocess capture), so the default table output is already clean when captured by an agent. Color appears only in an interactive terminal.
+- `--no-color` (or `NO_COLOR=1`) forces plain output even in a terminal, if you want tables without ANSI styling.
+
+Earlier versions forced ANSI color codes on regardless of the output target, which corrupted hex-address parsing when an agent captured the output; that is fixed.
 
 ## Configuration
 
-Config file: `~/.ghydra/config.json`
+Configuration file: `~/.ghydra/config.json`
 
+Example configuration:
 ```json
 {
   "default_host": "localhost",
@@ -55,393 +72,422 @@ Config file: `~/.ghydra/config.json`
 ```
 
 Environment variables:
-- `GHYDRA_HOST`: Override default host
-- `GHYDRA_PORT`: Override default port
+- `GHYDRA_HOST`: Override default Ghidra host
+- `GHYDRA_PORT`: Override default Ghidra port
 
-## Command Reference
+## Implemented Command Groups
 
-### `ghydra instances` — Instance Management
+### Instances Commands
 
-Manage multiple Ghidra instances running with the GhydraMCP plugin.
-
-| Command | Description |
-|---|---|
-| `list` | List all instances with auto-discovery (scans ports 8192-8201) |
-| `discover` | Discover instances on custom host/port range |
-| `register` | Manually register an instance |
-| `use` | Set current working instance |
-| `current` | Show current instance info |
-| `unregister` | Remove instance from known list |
+Manage multiple Ghidra instances:
 
 ```bash
+# List all instances (auto-discovers on ports 8192-8201)
 ghydra instances list
-ghydra instances discover --host 192.168.1.100 --start-port 8192 --end-port 8220
+
+# Discover instances on custom range
+ghydra instances discover --start-port 8192 --end-port 8220
+
+# Discover on different host
+ghydra instances discover --host 192.168.1.100
+
+# Register an instance manually
 ghydra instances register --port 8195
+
+# Set current working instance
 ghydra instances use --port 8195
+
+# Get current instance info
 ghydra instances current
+
+# Unregister an instance
 ghydra instances unregister --port 8195
 ```
 
-### `ghydra functions` — Function Analysis
+### Functions Commands
 
-List, decompile, disassemble, and modify functions.
-
-| Command | Description |
-|---|---|
-| `list` | List all functions with optional filtering |
-| `search` | Search functions by name |
-| `get` | Get detailed function info |
-| `get-containing` | Find function containing an address |
-| `get-next` | Get next function after an address |
-| `get-prev` | Get previous function before an address |
-| `decompile` | Decompile to C pseudocode |
-| `disassemble` | Get disassembly |
-| `create` | Create function at address |
-| `rename` | Rename a function |
-| `set-signature` | Update function prototype |
-| `get-variables` | List function variables |
-| `set-comment` | Set function comment |
-| `get-cfg` | Get control flow graph |
-| `get-pcode` | Get pcode operations |
-| `set-variable` | Rename or retype a function variable |
-| `update-variable` | Update a function variable (alternative) |
+Analyze and manipulate functions:
 
 ```bash
+# List all functions
 ghydra functions list
+
+# List with filtering
 ghydra functions list --name-contains main
 ghydra functions list --name-matches "^sub_.*"
-ghydra functions list --containing-address 0x401234
 ghydra functions list --limit 50
-ghydra functions search ClassifyStar
-ghydra functions search --regex "^sub_.*"
+
+# Get function details
 ghydra functions get --name main
 ghydra functions get --address 0x401000
+
+# Decompile function
 ghydra functions decompile --name main
 ghydra functions decompile --address 0x401000
 ghydra functions decompile --name main --start-line 10 --end-line 20
 ghydra functions decompile --name main --max-lines 50
+
+# Disassemble function
 ghydra functions disassemble --name main
-ghydra functions disassemble --name main --offset 50 --limit 100
+ghydra functions disassemble --address 0x401000
+
+# Create function
 ghydra functions create --address 0x401500
+
+# Rename function
 ghydra functions rename --old-name sub_401000 --new-name main
 ghydra functions rename --address 0x401000 --new-name main
+
+# Set function signature
 ghydra functions set-signature --name main --signature "int main(int argc, char **argv)"
+
+# Get function variables
 ghydra functions get-variables --name main
+
+# Set function comment
 ghydra functions set-comment --address 0x401000 --comment "Main entry point"
-ghydra functions get-cfg --name main
-ghydra functions get-cfg --address 0x401000
-ghydra functions get-pcode --name main
-ghydra functions set-variable --name main --variable buf --new-name buffer
-ghydra functions set-variable --address 0x401000 --variable len --data-type "size_t"
-ghydra functions get-containing --address 0x401500
-ghydra functions get-next --address 0x401000
-ghydra functions get-prev --address 0x401000
-ghydra functions update-variable --address 0x401000 --variable-name buf --new-data-type "size_t"
 ```
 
-### `ghydra data` — Data Items
+## Remaining Command Groups to Implement
 
-Manage defined data items and strings.
+The following command groups follow the same pattern as `instances` and `functions`. Here's how to implement them:
 
-| Command | Description |
-|---|---|
-| `list` | List data items with filtering |
-| `search` | Search data items by name |
-| `list-strings` | List all defined strings |
-| `create` | Define new data item |
-| `rename` | Rename a data item |
-| `delete` | Delete a data item |
-| `set-type` | Change data type |
+### 1. Memory Commands (`ghydra/cli/memory.py`)
 
-```bash
-ghydra data list
-ghydra data list --type string
-ghydra data list --name-contains "user"
-ghydra data search user
-ghydra data search "error_msg" --type string
-ghydra data list-strings
-ghydra data list-strings --filter "error"
-ghydra data list-strings --limit 100
-ghydra data create --address 0x401000 --data-type string
-ghydra data create --address 0x401000 --data-type dword
-ghydra data rename --address 0x401000 --name "user_string"
-ghydra data delete --address 0x401000
-ghydra data set-type --address 0x401000 --data-type "uint32_t"
+```python
+"""Memory operations commands."""
+
+import click
+from ..client.exceptions import GhidraError
+from ..utils import should_page, page_output
+
+
+@click.group('memory')
+def memory():
+    """Memory read/write commands."""
+    pass
+
+
+@memory.command('read')
+@click.option('--address', '-a', required=True, help='Memory address (hex)')
+@click.option('--length', type=int, default=16, help='Number of bytes to read')
+@click.option('--format', type=click.Choice(['hex', 'base64', 'string']), default='hex', help='Output format')
+@click.pass_context
+def read_memory(ctx, address, length, format):
+    """Read bytes from memory.
+
+    Examples:
+        ghydra memory read --address 0x401000
+        ghydra memory read --address 0x401000 --length 64
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        params = {
+            'length': length,
+            'format': format
+        }
+
+        response = client.get(f'memory/{address.lstrip("0x")}', params=params)
+        output = formatter.format_memory(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        click.echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@memory.command('write')
+@click.option('--address', '-a', required=True, help='Memory address (hex)')
+@click.option('--bytes-data', required=True, help='Data to write')
+@click.option('--format', type=click.Choice(['hex', 'base64', 'string']), default='hex', help='Input format')
+@click.pass_context
+def write_memory(ctx, address, bytes_data, format):
+    """Write bytes to memory (use with caution).
+
+    Examples:
+        ghydra memory write --address 0x401000 --bytes-data "4883EC10"
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+
+    try:
+        data = {
+            'bytes': bytes_data,
+            'format': format
+        }
+
+        response = client.post(f'memory/{address.lstrip("0x")}', json_data=data)
+        output = formatter.format_simple_result(response)
+        click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        click.echo(error_output, err=True)
+        ctx.exit(1)
 ```
 
-### `ghydra structs` — Struct Types
+Then add to `main.py`:
+```python
+from . import instances, functions, memory
 
-Create and manage struct data types.
-
-| Command | Description |
-|---|---|
-| `list` | List struct data types |
-| `get` | Get detailed struct info |
-| `create` | Create a new struct |
-| `add-field` | Add field to struct |
-| `update-field` | Update struct field |
-| `delete` | Delete a struct |
-
-```bash
-ghydra structs list
-ghydra structs list --category "/winapi"
-ghydra structs get --name "MyStruct"
-ghydra structs create --name "MyStruct" --category "/custom"
-ghydra structs add-field --struct-name "MyStruct" --field-name "field1" --field-type "int"
-ghydra structs add-field --struct-name "MyStruct" --field-name "field2" --field-type "char" --offset 4
-ghydra structs update-field --struct-name "MyStruct" --field-name "field1" --new-type "uint32_t"
-ghydra structs update-field --struct-name "MyStruct" --field-offset 0 --new-name "newField1"
-ghydra structs delete --name "MyStruct"
+cli.add_command(memory.memory)
 ```
 
-### `ghydra memory` — Memory Operations
+### 2. Data Commands (`ghydra/cli/data.py`)
 
-Read, write, and disassemble raw memory.
+```python
+@click.group('data')
+def data():
+    """Data item management commands."""
+    pass
 
-| Command | Description |
-|---|---|
-| `read` | Read bytes from memory |
-| `disassemble` | Disassemble at arbitrary address (not tied to function) |
-| `write` | Write bytes to memory |
+@data.command('list')
+# Add options: --offset, --limit, --addr, --name, --name-contains, --type
+# Endpoint: GET /data with params
 
-```bash
-ghydra memory read --address 0x401000
-ghydra memory read --address 0x401000 --length 64
-ghydra memory read --address 0x401000 --format string
-ghydra memory disassemble --address 0x401000
-ghydra memory disassemble -a 0x401000 --limit 20
-ghydra memory disassemble -a 0x401000 --offset 10 --limit 30
-ghydra memory write --address 0x401000 --bytes-data "4883EC10"
-ghydra memory write --address 0x401000 --bytes-data "Hello" --format string
+@data.command('list-strings')
+# Options: --offset, --limit, --filter
+# Endpoint: GET /data/strings
+
+@data.command('create')
+# Options: --address, --data-type, --size
+# Endpoint: POST /data/{address}
+
+@data.command('rename')
+# Options: --address, --name
+# Endpoint: PATCH /data/{address}
+
+@data.command('delete')
+# Options: --address
+# Endpoint: DELETE /data/{address}
+
+@data.command('set-type')
+# Options: --address, --data-type
+# Endpoint: PATCH /data/{address}/type
 ```
 
-### `ghydra xrefs` — Cross-References
+### 3. Structs Commands (`ghydra/cli/structs.py`)
 
-Analyze cross-references between code and data.
+```python
+@click.group('structs')
+def structs():
+    """Struct data type management commands."""
+    pass
 
-| Command | Description |
-|---|---|
-| `list` | List xrefs with filtering |
-| `to` | Get xrefs TO an address |
-| `from` | Get xrefs FROM an address |
+@structs.command('list')
+# Options: --offset, --limit, --category
+# Endpoint: GET /structs
 
-```bash
-ghydra xrefs list --to-addr 0x401000
-ghydra xrefs list --from-addr 0x401000
-ghydra xrefs list --to-addr 0x401000 --type CALL
-ghydra xrefs to 0x401000
-ghydra xrefs to 0x401000 --type CALL
-ghydra xrefs from 0x401000
+@structs.command('get')
+# Options: --name
+# Endpoint: GET /structs/{name}
+
+@structs.command('create')
+# Options: --name, --category, --description
+# Endpoint: POST /structs
+
+@structs.command('add-field')
+# Options: --struct-name, --field-name, --field-type, --offset, --comment
+# Endpoint: POST /structs/{struct_name}/fields
+
+@structs.command('update-field')
+# Options: --struct-name, --field-name OR --field-offset, --new-name, --new-type, --new-comment
+# Endpoint: PATCH /structs/{struct_name}/fields/{field_name_or_offset}
+
+@structs.command('delete')
+# Options: --name
+# Endpoint: DELETE /structs/{name}
 ```
 
-### `ghydra analysis` — Program Analysis
+### 4. Xrefs Commands (`ghydra/cli/xrefs.py`)
 
-Run analysis and get structural information.
+```python
+@click.group('xrefs')
+def xrefs():
+    """Cross-reference analysis commands."""
+    pass
 
-| Command | Description |
-|---|---|
-| `run` | Trigger program analysis |
-| `status` | Check analysis status |
-| `get-callgraph` | Get function call graph |
-| `get-dataflow` | Perform data flow analysis |
-
-```bash
-ghydra analysis run
-ghydra analysis run --analysis-options '{"functionRecovery": true}'
-ghydra analysis status
-ghydra analysis get-callgraph --name main
-ghydra analysis get-callgraph --address 0x401000 --max-depth 5
-ghydra analysis get-callgraph  # Uses entry point
-ghydra analysis get-dataflow --address 0x401000
-ghydra analysis get-dataflow --address 0x401000 --direction backward
+@xrefs.command('list')
+# Options: --to-addr, --from-addr, --type, --offset, --limit
+# Endpoint: GET /xrefs with params
+# Note: At least one of --to-addr or --from-addr required
 ```
 
-### `ghydra symbols` — Symbol Table
+### 5. Analysis Commands (`ghydra/cli/analysis.py`)
 
-List symbols, imports, and exports.
+```python
+@click.group('analysis')
+def analysis():
+    """Program analysis commands."""
+    pass
 
-| Command | Description |
-|---|---|
-| `list` | List all symbols |
-| `imports` | List imported symbols |
-| `exports` | List exported symbols |
+@analysis.command('run')
+# Options: --analysis-options (JSON dict)
+# Endpoint: POST /analysis
 
-```bash
-ghydra symbols list
-ghydra symbols imports
-ghydra symbols exports --limit 50
+@analysis.command('get-callgraph')
+# Options: --name, --address, --max-depth
+# Endpoint: GET /analysis/callgraph/{name_or_address}
+
+@analysis.command('get-dataflow')
+# Options: --address, --direction (forward/backward), --max-steps
+# Endpoint: GET /analysis/dataflow/{address}
+
+@analysis.command('status')
+# Endpoint: GET /analysis/status
 ```
 
-### `ghydra classes` — Classes
+### 6. UI Commands (`ghydra/cli/ui.py`)
 
-List classes and namespaces.
+```python
+@click.group('ui')
+def ui():
+    """UI integration commands."""
+    pass
 
-| Command | Description |
-|---|---|
-| `list` | List classes and namespaces |
+@ui.command('get-current-address')
+# Endpoint: GET /ui/current-address
 
-```bash
-ghydra classes list
-ghydra classes list --limit 50
+@ui.command('get-current-function')
+# Endpoint: GET /ui/current-function
 ```
 
-### `ghydra segments` — Memory Segments
+### 7. Comments Commands (`ghydra/cli/comments.py`)
 
-List memory segments/blocks and their permissions.
+```python
+@click.group('comments')
+def comments():
+    """Comment management commands."""
+    pass
 
-| Command | Description |
-|---|---|
-| `list` | List memory segments |
-
-```bash
-ghydra segments list
-ghydra segments list --name .text
+@comments.command('set')
+# Options: --address, --comment, --comment-type (plate/pre/post/eol/repeatable)
+# Endpoint: POST /comments/{address}
 ```
 
-### `ghydra namespaces` — Namespaces
+### 8. Project Commands (`ghydra/cli/project.py`)
 
-List the namespace hierarchy.
+```python
+@click.group('project')
+def project():
+    """Project management commands."""
+    pass
 
-| Command | Description |
-|---|---|
-| `list` | List namespaces |
+@project.command('info')
+# Endpoint: GET /project
 
-```bash
-ghydra namespaces list
+@project.command('list-files')
+# Options: --folder, --recursive, --offset, --limit
+# Endpoint: GET /project/files
+
+@project.command('open-file')
+# Options: --path
+# Endpoint: POST /project/open
 ```
 
-### `ghydra variables` — Variables
+## Implementation Pattern
 
-List global and local variables.
+All command groups follow the same pattern:
 
-| Command | Description |
-|---|---|
-| `list` | List variables with optional filtering |
+1. **Create command group file** in `ghydra/cli/`
+2. **Define Click group** with `@click.group('name')`
+3. **Add commands** with `@group.command('command-name')`
+4. **Use context** with `@click.pass_context` to access client and formatter
+5. **Handle errors** with try/except and `GhidraError`
+6. **Format output** using `formatter.format_*()` methods
+7. **Page long output** using `should_page()` and `page_output()`
+8. **Import and register** in `main.py`
 
-```bash
-ghydra variables list
-ghydra variables list --global-only
-ghydra variables list --search counter
-```
+## Output Formatting
 
-### `ghydra datatypes` — Data Types
+The CLI supports two output modes:
 
-List and search data types.
+### Default Mode (Rich Terminal Output)
 
-| Command | Description |
-|---|---|
-| `list` | List data types with filtering |
-| `search` | Search data types by name |
-| `create-struct` | Create a new struct datatype |
-| `create-enum` | Create a new enum datatype |
-| `create-union` | Create a new union datatype |
+- Tables with colored columns
+- Syntax-highlighted code (C and assembly)
+- Panels for detailed info
+- Tree views for structured data
+- Hex dumps for memory
+- Auto-paging for long output
 
-```bash
-ghydra datatypes list
-ghydra datatypes list --kind struct
-ghydra datatypes list --category /MyCategory
-ghydra datatypes search MyStruct
-ghydra datatypes create-struct --name MyStruct --category /custom
-ghydra datatypes create-enum --name MyEnum --size 4
-ghydra datatypes create-union --name MyUnion --category /custom
-```
+### JSON Mode (`--json` flag)
 
-### `ghydra comments` — Comments
+- Raw JSON output from API
+- Pretty-printed by default
+- Suitable for scripting and automation
+- Can be piped to `jq` for processing
 
-Set comments at addresses.
+## Testing Against Running Ghidra
 
-| Command | Description |
-|---|---|
-| `set` | Set comment (plate, pre, post, eol, repeatable) |
-| `get` | Get comment at address |
+To test the CLI against a running Ghidra instance:
 
-```bash
-ghydra comments set --address 0x401000 --comment "This is the entry point"
-ghydra comments set --address 0x401000 --comment "Loop counter" --comment-type eol
-ghydra comments set --address 0x401000 --comment ""  # Remove comment
-ghydra comments get --address 0x401000
-```
+1. **Start Ghidra** with GhydraMCP plugin loaded
+2. **Open a binary** in CodeBrowser
+3. **Test basic commands**:
+   ```bash
+   ghydra instances list
+   ghydra functions list --limit 10
+   ghydra functions decompile --address <some_address>
+   ```
 
-### `ghydra project` — Project Management
+4. **Test JSON output**:
+   ```bash
+   ghydra --json functions list | jq '.result[0]'
+   ```
 
-Manage Ghidra projects and files.
+5. **Test error handling**:
+   ```bash
+   ghydra --port 9999 instances current  # Should fail gracefully
+   ghydra functions get --name nonexistent  # Should show error
+   ```
 
-| Command | Description |
-|---|---|
-| `info` | Get current project info |
-| `list-files` | List files in project |
-| `open-file` | Open file in new CodeBrowser |
-| `list-projects` | List Ghidra projects |
-| `get-project` | Get project details by name |
-| `list-programs` | List programs in a project |
-| `get-program` | Get program details by ID |
+## API Endpoint Reference
 
-```bash
-ghydra project info
-ghydra project list-files
-ghydra project list-files --folder "/malware"
-ghydra project list-files --no-recursive
-ghydra project open-file --path "/malware.exe"
-ghydra project list-projects
-ghydra project get-project --name MyProject
-ghydra project list-programs
-ghydra project get-program --program-id "MyProject:/malware.exe"
-```
+Reference `bridge_mcp_hydra.py` for the exact endpoint patterns:
 
-### `ghydra scalars` — Scalar Search
+- **Functions**: `/functions`, `/functions/{address}`, `/functions/by-name/{name}`
+- **Memory**: `/memory/{address}`
+- **Data**: `/data`, `/data/strings`, `/data/{address}`
+- **Structs**: `/structs`, `/structs/{name}`, `/structs/{name}/fields`
+- **Xrefs**: `/xrefs`
+- **Analysis**: `/analysis`, `/analysis/callgraph/{address}`, `/analysis/dataflow/{address}`
+- **UI**: `/ui/current-address`, `/ui/current-function`
+- **Comments**: `/comments/{address}`
+- **Project**: `/project`, `/project/files`, `/project/open`
+- **Instances**: `/plugin-version`, `/program`
 
-Find where constant values appear in instructions.
+## Tips for Implementation
 
-| Command | Description |
-|---|---|
-| `search` | Search for scalar value in instructions |
+1. **Copy existing patterns**: Use `instances.py` or `functions.py` as templates
+2. **Check MCP bridge**: Reference `bridge_mcp_hydra.py` for exact parameter names and endpoint paths
+3. **Test incrementally**: Implement one command at a time and test
+4. **Handle mutual exclusivity**: Use Click's validation for mutually exclusive options (like `--name` vs `--address`)
+5. **Use formatters**: Ensure `TableFormatter` has appropriate `format_*()` methods for each response type
+6. **Page output**: Long listings should use paging for better UX
+7. **Error messages**: Provide helpful error messages for common mistakes
+
+## Development Workflow
 
 ```bash
-ghydra scalars search 0x1234
-ghydra scalars search 256
-ghydra scalars search 0 --to-function memset
-ghydra scalars search 0x80 --in-function main
-```
+# Make changes to code
+# Reinstall in development mode
+pip install -e .
+asdf reshim  # If using asdf
 
-### `ghydra script` — Script Execution
+# Test immediately
+ghydra <command>
 
-Run Python 3 scripts inside Ghidra via PyGhidra.
-
-| Command | Description |
-|---|---|
-| `execute` | Execute a Python 3 script |
-| `capabilities` | Check available script runtimes |
-
-```bash
-ghydra script execute --code "print(currentProgram.getName())"
-ghydra script capabilities
-```
-
-### `ghydra raw-image` — Raw Image Data
-
-Define raw image data that renders inline in Ghidra's Listing view.
-
-| Command | Description |
-|---|---|
-| `define` | Define raw image at address with pixel format |
-
-```bash
-ghydra raw-image define --address 0x401000 --width 128 --height 64 --format RGB565
-ghydra raw-image define -a 0x402000 --width 320 --height 240 --format ARGB8888 --endian big
-```
-
-### `ghydra ui` — UI State
-
-Interact with Ghidra's UI state.
-
-| Command | Description |
-|---|---|
-| `get-current-address` | Get currently selected address |
-| `get-current-function` | Get currently selected function |
-
-```bash
-ghydra ui get-current-address
-ghydra ui get-current-function
+# Check help text
+ghydra <group> <command> --help
 ```
 
 ## Architecture
@@ -451,65 +497,46 @@ ghydra/
 ├── __init__.py
 ├── cli/
 │   ├── __init__.py
-│   ├── main.py           # CLI entry point, global options
-│   ├── instances.py      # Instance management (6 commands)
-│   ├── functions.py      # Function analysis (16 commands)
-│   ├── data.py           # Data items (7 commands)
-│   ├── structs.py        # Struct types (6 commands)
-│   ├── memory.py         # Memory operations (3 commands)
-│   ├── xrefs.py          # Cross-references (3 commands)
-│   ├── analysis.py       # Program analysis (4 commands)
-│   ├── symbols.py        # Symbols, imports, exports (3 commands)
-│   ├── classes.py        # Classes and namespaces (1 command)
-│   ├── segments.py       # Memory segments (1 command)
-│   ├── namespaces.py     # Namespace hierarchy (1 command)
-│   ├── variables.py      # Global and local variables (1 command)
-│   ├── datatypes.py      # Data type listing (5 commands)
-│   ├── scalars.py        # Scalar search (1 command)
-│   ├── script.py         # Script execution (2 commands)
-│   ├── raw_image.py      # Raw image definition (1 command)
-│   ├── comments.py       # Comment management (2 commands)
-│   ├── project.py        # Project management (7 commands)
-│   └── ui.py             # UI state (2 commands)
+│   ├── main.py          # Main CLI group with global options
+│   ├── instances.py     # ✅ Implemented (6 commands)
+│   ├── functions.py     # ✅ Implemented (8 commands)
+│   ├── memory.py        # ⏳ TODO (2 commands)
+│   ├── data.py          # ⏳ TODO (6 commands)
+│   ├── structs.py       # ⏳ TODO (6 commands)
+│   ├── xrefs.py         # ⏳ TODO (1 command)
+│   ├── analysis.py      # ⏳ TODO (4 commands)
+│   ├── ui.py            # ⏳ TODO (2 commands)
+│   ├── comments.py      # ⏳ TODO (2 commands)
+│   └── project.py       # ⏳ TODO (3 commands)
 ├── client/
 │   ├── __init__.py
-│   ├── http_client.py    # HTTP client with connection pooling
-│   ├── exceptions.py     # Custom exceptions
-│   └── models.py         # Data models
+│   ├── http_client.py   # ✅ HTTP client with connection pooling
+│   ├── exceptions.py    # ✅ Custom exceptions
+│   └── models.py        # ✅ Data models
 ├── formatters/
 │   ├── __init__.py
-│   ├── base.py           # Base formatter interface
-│   ├── json_formatter.py # JSON formatter
-│   └── table_formatter.py # Rich table formatter
+│   ├── base.py          # ✅ Base formatter interface
+│   ├── json_formatter.py    # ✅ JSON formatter
+│   └── table_formatter.py   # ✅ Table formatter with rich
 ├── config/
 │   ├── __init__.py
-│   ├── config_manager.py # Config file management
-│   └── defaults.py       # Default configuration
+│   ├── config_manager.py    # ✅ Config file management
+│   └── defaults.py      # ✅ Default configuration
 └── utils/
     ├── __init__.py
-    ├── pager.py          # Output paging
-    └── validators.py     # Input validation
+    ├── pager.py         # ✅ Output paging
+    └── validators.py    # ✅ Input validation
 ```
 
-## Output Modes
+## Contributing
 
-### Default (Rich Terminal)
+When implementing remaining command groups:
 
-- Tables with colored columns
-- Syntax-highlighted C and assembly
-- Panels for detailed info
-- Tree views for structured data
-- Hex dumps for memory
-- Auto-paging for long output
-
-### JSON (`--json`)
-
-- Raw JSON from the API
-- Pretty-printed by default
-- Pipe to `jq` for processing:
-  ```bash
-  ghydra --json functions list | jq '.result[0]'
-  ```
+1. Follow the established patterns in `instances.py` and `functions.py`
+2. Add appropriate formatters to `table_formatter.py` if needed
+3. Update this README with usage examples
+4. Test against running Ghidra instance
+5. Ensure help text is clear and includes examples
 
 ## License
 

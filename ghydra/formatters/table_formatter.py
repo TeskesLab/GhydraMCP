@@ -1,6 +1,8 @@
 """Table-based output formatter using rich library."""
 
 import io
+import os
+import sys
 from typing import Any, Dict
 
 from rich.console import Console
@@ -25,10 +27,14 @@ class TableFormatter(BaseFormatter):
         Args:
             use_colors: Enable colored output
         """
-        self.use_colors = use_colors
+        # Only colorize when stdout is a real terminal. The old force_terminal=use_colors
+        # leaked ANSI codes into piped output, corrupting programmatic/agent parsing of hex
+        # addresses. Auto-detect the TTY so default output is agent-clean without --no-color,
+        # and honor the NO_COLOR convention (https://no-color.org).
+        self._use_colors = use_colors and not os.environ.get("NO_COLOR") and sys.stdout.isatty()
         self.console = Console(
-            color_system="auto" if use_colors else None,
-            force_terminal=use_colors
+            color_system="auto" if self._use_colors else None,
+            force_terminal=self._use_colors or None,
         )
 
     def _capture(self, renderable) -> str:
@@ -41,11 +47,12 @@ class TableFormatter(BaseFormatter):
             Captured string output
         """
         buffer = io.StringIO()
-        # Create console with same color settings
+        # Mirror the main console's color decision (TTY-aware) so captured output is
+        # plain when stdout is piped.
         temp_console = Console(
             file=buffer,
-            color_system="auto" if self.use_colors else None,
-            force_terminal=self.use_colors
+            color_system="auto" if self._use_colors else None,
+            force_terminal=self._use_colors or None,
         )
         temp_console.print(renderable, soft_wrap=True)
         return buffer.getvalue().rstrip()
@@ -54,11 +61,11 @@ class TableFormatter(BaseFormatter):
         """Format function list as table."""
         result = data.get("result", [])
 
-        # Accept both current top-level pagination and older metadata wrappers.
-        metadata = data.get("meta") or data.get("metadata", {})
-        total = metadata.get("total", metadata.get("size", data.get("size", len(result))))
-        offset = metadata.get("offset", data.get("offset", 0))
-        limit = metadata.get("limit", data.get("limit", len(result)))
+        # Get total count from metadata
+        metadata = data.get("metadata", {})
+        total = metadata.get("size", len(result))
+        offset = metadata.get("offset", 0)
+        limit = metadata.get("limit", len(result))
 
         if not result:
             return self._capture("[yellow]No functions found[/yellow] (0 total)")
@@ -181,7 +188,7 @@ class TableFormatter(BaseFormatter):
         if not hex_bytes:
             return self._capture("[red]No memory data available[/red]")
 
-        lines = [f"[cyan]Memory at {addr}:[/cyan]\n"]
+        lines = [f"[cyan]Memory at 0x{addr}:[/cyan]\n"]
 
         if " " in hex_bytes.strip():
             byte_pairs = hex_bytes.split()
@@ -238,6 +245,43 @@ class TableFormatter(BaseFormatter):
             )
 
         return self._capture(table)
+
+    def format_scalars(self, data: Dict[str, Any]) -> str:
+        """Format scalar search results as table."""
+        results = data.get("result", [])
+        meta = data.get("meta", {}) or {}
+
+        if not results:
+            if meta.get("scanTruncated"):
+                return self._capture("[yellow]No scalars found[/yellow] (scan truncated; "
+                                     "narrow with --in-function or a more specific value)")
+            return self._capture("[yellow]No scalars found[/yellow]")
+
+        offset = meta.get("offset", 0)
+        table = Table(title=f"Scalars ({offset + 1}-{offset + len(results)})", show_lines=False)
+        table.add_column("Address", style="cyan", no_wrap=True)
+        table.add_column("Value", style="green", no_wrap=True)
+        table.add_column("Op", style="dim", no_wrap=True)
+        table.add_column("Instruction", style="yellow", overflow="fold")
+        table.add_column("In Function", style="white")
+        table.add_column("Calls", style="magenta")
+
+        for s in results:
+            table.add_row(
+                s.get("address", "?"),
+                s.get("hexValue", str(s.get("value", "?"))),
+                str(s.get("operandIndex", "")),
+                s.get("instruction", ""),
+                s.get("inFunction") or "-",
+                s.get("toFunction") or "",
+            )
+
+        output = self._capture(table)
+        if meta.get("scanTruncated"):
+            output += "\n" + self._capture("[yellow]Scan truncated to keep the UI responsive; "
+                                           "results may be incomplete - narrow with --in-function "
+                                           "or a more specific value.[/yellow]")
+        return output
 
     def format_data_list(self, data: Dict[str, Any]) -> str:
         """Format data items list as table."""
@@ -381,6 +425,17 @@ class TableFormatter(BaseFormatter):
         if isinstance(result, dict) and "message" in result:
             return self._capture(f"[green]{result['message']}[/green]")
 
+        if isinstance(result, list):
+            if not result:
+                return self._capture("[green]Success[/green] (no items)")
+            rows = []
+            for item in result:
+                if isinstance(item, dict):
+                    rows.append(", ".join(f"{k}: {v}" for k, v in item.items() if k != "_links"))
+                else:
+                    rows.append(str(item))
+            return self._capture("\n".join(rows))
+
         lines = []
         for key, value in result.items():
             if key not in ("_links",):
@@ -390,22 +445,6 @@ class TableFormatter(BaseFormatter):
             return self._capture("\n".join(lines))
 
         return self._capture("[green]Success[/green]")
-
-    def format_analysis_status(self, data: Dict[str, Any]) -> str:
-        """Format analysis status response."""
-        result = data.get("result", {})
-        if not isinstance(result, dict):
-            return self.format_simple_result(data)
-
-        program = result.get("programName") or result.get("program") or "?"
-        is_analyzing = result.get("isAnalyzing")
-        status = "running" if is_analyzing else "idle"
-
-        lines = [
-            f"[cyan]Program:[/cyan] {program}",
-            f"[cyan]Analysis:[/cyan] {status}",
-        ]
-        return self._capture("\n".join(lines))
 
     def format_classes_list(self, data: Dict[str, Any]) -> str:
         """Format classes list as table."""
@@ -437,15 +476,13 @@ class TableFormatter(BaseFormatter):
         table.add_column("Address", style="cyan", no_wrap=True)
         table.add_column("Type", style="yellow")
         table.add_column("Name", style="green")
-        table.add_column("Namespace", style="dim")
 
         for item in result:
             primary = " *" if item.get("isPrimary") else ""
             table.add_row(
                 item.get("address", "?"),
                 item.get("type", "?"),
-                item.get("name", "?") + primary,
-                item.get("namespace", "")
+                item.get("name", "?") + primary
             )
 
         return self._capture(table)
@@ -550,45 +587,12 @@ class TableFormatter(BaseFormatter):
     def format_callgraph(self, data: Dict[str, Any]) -> str:
         """Format analysis callgraph as a readable tree with summary.
 
-        Supports both the current Java graph DTO (nodes/edges) and the tree DTO
-        used by newer upstream servers.
+        Server shape: {root: {name, address, ...}, depth, direction,
+                       callers: [{function: {...}, callers: [...]}],
+                       callees: [{function: {...}, callees: [...]}]}
         """
         result = data.get("result", {})
-        if not isinstance(result, dict):
-            return self._capture("[yellow]No call graph data available[/yellow]")
-
-        if isinstance(result.get("nodes"), list):
-            nodes = result.get("nodes", [])
-            edges = result.get("edges", [])
-            root_name = result.get("rootFunction") or result.get("root") or "?"
-            root_addr = result.get("rootAddress") or result.get("root_address") or ""
-            depth = result.get("max_depth", result.get("depth"))
-
-            table = Table(
-                title=(f"Call Graph for {root_name} ({root_addr})"
-                       + (f" depth={depth}" if depth is not None else "")),
-                show_lines=False
-            )
-            table.add_column("Address", style="cyan", no_wrap=True)
-            table.add_column("Name", style="green")
-            table.add_column("Depth", style="yellow", justify="right")
-
-            for node in nodes[:200]:
-                if not isinstance(node, dict):
-                    continue
-                table.add_row(
-                    str(node.get("address", "?")),
-                    str(node.get("name", "?")),
-                    str(node.get("depth", ""))
-                )
-
-            table.caption = f"{len(nodes)} nodes, {len(edges)} edges"
-            if len(nodes) > 200:
-                table.caption += f"; showing first 200 nodes"
-
-            return self._capture(table)
-
-        if not isinstance(result.get("root"), dict):
+        if not isinstance(result, dict) or not isinstance(result.get("root"), dict):
             return self._capture("[yellow]No call graph data available[/yellow]")
 
         root = result["root"]

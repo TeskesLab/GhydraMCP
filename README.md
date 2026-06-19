@@ -1,100 +1,100 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/TeskesLab/GhydraMCP)](https://github.com/TeskesLab/GhydraMCP/releases)
-[![API Version](https://img.shields.io/badge/API-v2020-orange)](https://github.com/TeskesLab/GhydraMCP/blob/main/GHIDRA_HTTP_API.md)
-[![GitHub stars](https://img.shields.io/github/stars/TeskesLab/GhydraMCP)](https://github.com/TeskesLab/GhydraMCP/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/TeskesLab/GhydraMCP)](https://github.com/TeskesLab/GhydraMCP/network/members)
-[![GitHub contributors](https://img.shields.io/github/contributors/TeskesLab/GhydraMCP)](https://github.com/TeskesLab/GhydraMCP/graphs/contributors)
-[![Build Status](https://github.com/TeskesLab/GhydraMCP/actions/workflows/build.yml/badge.svg)](https://github.com/TeskesLab/GhydraMCP/actions/workflows/build.yml)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/starsong-consulting/GhydraMCP)](https://github.com/starsong-consulting/GhydraMCP/releases)
+[![API Version](https://img.shields.io/badge/API-v3000-orange)](https://github.com/starsong-consulting/GhydraMCP/blob/main/GHIDRA_HTTP_API.md)
+[![GitHub stars](https://img.shields.io/github/stars/starsong-consulting/GhydraMCP)](https://github.com/starsong-consulting/GhydraMCP/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/starsong-consulting/GhydraMCP)](https://github.com/starsong-consulting/GhydraMCP/network/members)
+[![GitHub contributors](https://img.shields.io/github/contributors/starsong-consulting/GhydraMCP)](https://github.com/starsong-consulting/GhydraMCP/graphs/contributors)
+[![Build Status](https://github.com/starsong-consulting/GhydraMCP/actions/workflows/build.yml/badge.svg)](https://github.com/starsong-consulting/GhydraMCP/actions/workflows/build.yml)
 
-# GhydraMCP v2.4.1
+# GhydraMCP
 
-GhydraMCP is a bridge between [Ghidra](https://ghidra-sre.org/) and AI assistants that enables comprehensive AI-assisted reverse engineering through a HATEOAS-driven REST API and the [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol/mcp).
+GhydraMCP connects [Ghidra](https://ghidra-sre.org/) to AI assistants for reverse engineering, over the [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol/mcp) or a command-line tool.
 
 ![GhydraMCP logo](https://github.com/user-attachments/assets/86b9b2de-767c-4ed5-b082-510b8109f00f)
 
 ## Overview
 
-GhydraMCP v2.4.1 integrates three key components:
+> **Note:** The MCP bridge (`bridge_mcp_hydra.py`) is being deprecated in favor of the CLI tool (`ghydra`). The CLI provides the same capabilities with better output formatting, `--json` mode for scripting and AI tool use, and doesn't require an MCP-capable client. The bridge will continue to work but is no longer the recommended integration path.
 
-1. **Modular Ghidra Plugin**: Exposes Ghidra's powerful reverse engineering capabilities through a HATEOAS-driven REST API
-2. **CLI Tool (`ghydra`)**: A standalone command-line interface for direct interaction with Ghidra — human-readable tables, `--json` mode for scripting and AI tool use. **This is the recommended integration path.**
-3. **MCP Bridge** *(legacy)*: A Python script that translates MCP requests into API calls — still functional but the CLI is preferred for new integrations
+GhydraMCP has four components:
 
-> **Tip:** The CLI tool provides the same capabilities as the MCP bridge with better output formatting and doesn't require an MCP-capable client. See [GHYDRA_CLI.md](GHYDRA_CLI.md) for the full command reference.
+1. **Ghidra plugin**: exposes Ghidra over a HATEOAS REST API
+2. **CLI tool (`ghydra`)**: a standalone terminal client; human-readable tables, plus `--json` for scripting and AI tool use
+3. **MCP bridge** *(deprecated)*: a Python script that translates MCP requests into API calls
+4. **Multiple instances**: connect several Ghidra windows to work on different binaries at once
 
-This architecture enables AI assistants like Claude to seamlessly:
-- Decompile and analyze binary code with customizable output formats
-- Map program structures, function relationships, and complex data types
-- Perform advanced binary analysis (cross-references, call graphs, data flow, etc.)
-- Make precise modifications to the analysis (rename, annotate, create/delete/modify data, etc.)
-- Read memory directly and manipulate binary at a low level
-- Navigate resources through discoverable HATEOAS links
+Through it, an assistant can:
+- Decompile and analyze binary code, with a few output formats
+- Map program structure, function relationships, and data types
+- Run binary analysis (cross-references, call graphs, data flow)
+- Edit the analysis (rename, annotate, create/delete/modify data)
+- Read and write memory
+- Follow HATEOAS links between resources
 
-GhydraMCP is based on [GhidraMCP by Laurie Wired](https://github.com/LaurieWired/GhidraMCP/) but has evolved into a comprehensive reverse engineering platform with enhanced multi-instance support, extensive data manipulation capabilities, and a robust HATEOAS-compliant API architecture.
+GhydraMCP started as a fork of [GhidraMCP by Laurie Wired](https://github.com/LaurieWired/GhidraMCP/) and added multi-instance support, data manipulation, and a HATEOAS REST API.
 
 # Features
 
-GhydraMCP version 2.4.1 provides a comprehensive set of reverse engineering capabilities through its HATEOAS-driven API and CLI:
+## Program analysis
 
-## Advanced Program Analysis
-
-- **Enhanced Decompilation**:
-  - Convert binary functions to readable C code
+- **Decompilation**:
+  - Convert binary functions to readable C code 
   - Toggle between clean C-like pseudocode and raw decompiler output
   - Show/hide syntax trees for detailed analysis
   - Multiple simplification styles for different analysis approaches
-
-- **Comprehensive Static Analysis**:
+  
+- **Static analysis**: 
   - Cross-reference analysis (find callers and callees)
-  - Complete call graph generation and traversal
+  - Call graph generation and traversal
   - Data flow analysis with variable tracking
   - Type propagation and reconstruction
   - Function relationship mapping
-
-- **Memory Operations**:
+  
+- **Memory**:
   - Direct memory reading with hex and raw byte representation
   - Address space navigation and mapping
   - Memory segment analysis
 
-- **Symbol Management**:
+- **Symbols**:
   - View and analyze imports and exports
   - Identify library functions and dependencies
   - Symbol table exploration and manipulation
   - Namespace hierarchy visualization
+  - Fully-qualified names: functions, symbols, data, variables, and xrefs are returned and matched by their namespace-qualified name (e.g. `MyClass::method`; global-namespace members are unprefixed). A bare name resolves in the global namespace only, and renaming with `::` moves a symbol into that namespace (created if absent)
 
-## Interactive Reverse Engineering
+## Interactive reverse engineering
 
-- **Code Understanding**:
-  - Explore function code with rich context
+- **Code understanding**:
+  - Explore function code in context
   - Analyze data structures and complex types
   - View disassembly with linking to decompiled code
   - Examine function prototypes and signatures
-
-- **Comprehensive Annotation**:
-  - Rename functions, variables, and data
+  
+- **Annotation**:
+  - Rename functions, variables, and data 
   - Add multiple comment types (EOL, plate, pre/post)
   - Create and modify data types
   - Set and update function signatures and prototypes
 
-## Complete Data Manipulation
+## Data manipulation
 
-- **Data Creation and Management**:
+- **Data**:
   - Create new data items with specified types
   - Delete existing data items
-  - Rename data items with proper scope handling
+  - Rename data items
   - Set and update data types for existing items
   - Combined rename and retype operations
   - Type definition management
 
-- **Function Manipulation**:
-  - Rename functions with proper scoping
+- **Functions**:
+  - Rename functions
   - Update function signatures with parameter information
   - Modify local variable names and types
   - Set function return types
 
-## Multi-instance and Project Management
+## Multiple instances and projects
 
-- **Multi-instance Support**:
+- **Instances**:
   - Run multiple Ghidra instances simultaneously on ports 8192-8447 (256 port range)
   - Analyze different binaries in parallel
   - Connect to specific instances using port numbers
@@ -102,14 +102,14 @@ GhydraMCP version 2.4.1 provides a comprehensive set of reverse engineering capa
   - Instance metadata with project and file information
   - Plugin version and API checking for compatibility
 
-- **Project Management**:
+- **Projects**:
   - Get current project information (name, location, file counts)
   - List all files in a project with filtering
   - Open project files in new CodeBrowser windows
   - Navigate project folder hierarchy
   - Automatic instance registration when opening new programs
 
-## Program Navigation and Discovery
+## Navigation and discovery
 
 - List and search functions, classes, and namespaces
 - View memory segments and layout
@@ -121,24 +121,25 @@ GhydraMCP version 2.4.1 provides a comprehensive set of reverse engineering capa
 # Installation
 
 ## Prerequisites
-- Install [Ghidra](https://ghidra-sre.org)
+- [Ghidra](https://ghidra-sre.org) 11.x or 12.x. Releases ship a separate build per Ghidra version; the extension's `ghidraVersion` must match your Ghidra version exactly.
+- Java 21 (Temurin 21 recommended) for building the plugin
 - Python3
 - MCP [SDK](https://github.com/modelcontextprotocol/python-sdk)
 
 ## Ghidra
-First, download the latest [release](https://github.com/TeskesLab/GhydraMCP/releases) from this repository. The "Complete" artifact contains the zipped Ghidra plugin and the Python MCP bridge. Unpack the outer archive, then, add the plugin to Ghidra:
+First, download the latest [release](https://github.com/starsong-consulting/GhydraMCP/releases) from this repository. The "Complete" artifact contains the zipped Ghidra plugin and the Python MCP bridge. Unpack the outer archive, then, add the plugin to Ghidra:
 
 1. Run Ghidra
 2. Select `File` -> `Install Extensions`
 3. Click the `+` button
-4. Select the `GhydraMCP-v[version].zip` file from the downloaded release
+4. Select the `Ghydra-*-ghidra<version>.zip` that matches your Ghidra version (e.g. `...-ghidra12.1.2.zip` for Ghidra 12.1.2)
 5. Restart Ghidra
-6. Make sure the GhydraMCPPlugin is enabled in `File` -> `Configure` -> `Developer`
+6. Make sure the Ghydra plugin is enabled in `File` -> `Configure` -> `Developer`
 
 > **Note:** By default, the first CodeBrowser opened in Ghidra gets port 8192, the second gets 8193, and so on. You can check which ports are being used by looking at the Console in the Ghidra main (project) window - click the computer icon in the bottom right to "Open Console". Look for log entries like:
 > ```
-> (HydraMCPPlugin) Plugin loaded on port 8193
-> (HydraMCPPlugin) HydraMCP HTTP server started on port 8193
+> (GhydraPlugin) GhydraMCP loaded on port 8193
+> (GhydraServer) GhydraMCP HTTP server started on port 8193
 > ```
 >
 > GhydraMCP now includes auto-discovery of running Ghidra instances, so manually registering each instance is typically not necessary. The MCP bridge will automatically discover and register instances on startup and periodically check for new ones.
@@ -149,7 +150,7 @@ https://github.com/user-attachments/assets/75f0c176-6da1-48dc-ad96-c182eb4648c3
 
 ## CLI Tool
 
-GhydraMCP includes `ghydra`, a command-line tool for interacting with Ghidra directly from the terminal. It works standalone — no MCP client needed.
+GhydraMCP includes `ghydra`, a command-line tool for interacting with Ghidra directly from the terminal. It works standalone, no MCP client needed.
 
 ```bash
 # Install
@@ -188,11 +189,11 @@ GhydraMCP works with any MCP-compatible client using **stdio transport**. It has
 
 See the [Client Setup](#client-setup) section below for detailed configuration instructions for each client.
 
-## API Reference (Updated for v2.4.1)
+## API Reference
 
 ### Available Tools
 
-GhydraMCP v2.4.1 organizes tools into logical namespaces for better discoverability and organization. 71 tools total.
+Tools are grouped into namespaces:
 
 **Instance Management** (`instances_*`):
 - `instances_list`: List active Ghidra instances (auto-discovers on default host) - **use this first**
@@ -203,27 +204,22 @@ GhydraMCP v2.4.1 organizes tools into logical namespaces for better discoverabil
 - `instances_current`: Get current working instance info
 
 **Function Analysis** (`functions_*`):
-- `functions_list`: List all functions (params: offset, limit, name_contains, name_matches_regex, containing_addr, port [optional])
-- `functions_get`: Get function details (params: name or address, port [optional])
-- `functions_get_containing`: Find function containing an address (params: address, port [optional])
-- `functions_get_next`: Get next function after an address (params: address, port [optional])
-- `functions_get_prev`: Get previous function before an address (params: address, port [optional])
-- `functions_decompile`: Get decompiled C code (params: name or address, syntax_tree, style, show_constants, timeout, start_line, end_line, max_lines, port [optional]); incomplete results return retry metadata and suggested timeout
-- `functions_disassemble`: Get disassembled instructions (params: name or address, offset, limit, port [optional])
+- `functions_list`: List all functions (params: offset, limit, port [optional])
+- `functions_get`: Get function details (params: name or address, port [optional]); `name` is the fully-qualified name (e.g. `MyClass::method`), a bare name resolves in the global namespace only
+- `functions_decompile`: Get decompiled C code (params: name or address, syntax_tree, style, timeout, port [optional]); incomplete results return retry metadata and suggested timeout
+- `functions_disassemble`: Get disassembled instructions (params: name or address, port [optional])
 - `functions_create`: Create function at address (params: address, port [optional])
-- `functions_rename`: Rename a function (params: old_name or address, new_name, port [optional])
+- `functions_rename`: Rename a function (params: old_name or address, new_name, port [optional]); a `new_name` containing `::` moves the function into that namespace (created if absent), a leading `::` moves it to the global namespace
 - `functions_set_signature`: Update function prototype (params: name or address, signature, port [optional])
+- `functions_delete`: Delete a function (params: name or address, port [optional])
 - `functions_get_variables`: Get function variables (params: name or address, port [optional])
-- `functions_set_variable`: Rename or retype a function variable (params: name or address, variable, new_name [optional], data_type [optional], port [optional])
 - `functions_update_variable`: Update a function variable (params: address, variable_name, new_name [optional], new_data_type [optional], port [optional])
-- `functions_get_cfg`: Get control flow graph (params: name or address, port [optional])
-- `functions_get_pcode`: Get pcode operations (params: name or address, port [optional])
 - `functions_set_comment`: Set function comment (params: address, comment, port [optional])
 
 **Data Manipulation** (`data_*`):
-- `data_list`: List data items (params: offset, limit, addr, name, name_contains, type, port [optional]); address lookups return defined data first, then label symbols if no defined data exists
-- `data_create`: Create data at address (params: address, data_type, size [optional], port [optional])
+- `data_list`: List data items (params: offset, limit, addr, name, name_contains, port [optional]); address lookups return defined data first, then label symbols if no defined data exists
 - `data_list_strings`: List all defined strings (params: offset, limit, filter, port [optional])
+- `data_create`: Create data at address (params: address, data_type, size [optional], port [optional])
 - `data_rename`: Rename data item (params: address, name, port [optional]); auto-defines a byte at the address if data is undefined
 - `data_delete`: Delete data item (params: address, port [optional])
 - `data_set_type`: Change data type (params: address, data_type, port [optional]); supports array syntax (e.g. `uint64_t[8]`) and auto-defines data when undefined
@@ -239,48 +235,15 @@ GhydraMCP v2.4.1 organizes tools into logical namespaces for better discoverabil
 **Memory Operations** (`memory_*`):
 - `memory_read`: Read bytes from memory (params: address, length, format, port [optional]); overlay-aware (`runtime::145e29b10` and plain offsets that map to overlays)
 - `memory_write`: Write bytes to memory (params: address, bytes_data, format, port [optional])
-- `memory_disassemble`: Disassemble at arbitrary address (params: address, offset, limit, port [optional])
 
 **Cross-References** (`xrefs_*`):
 - `xrefs_list`: List cross-references (params: to_addr [optional], from_addr [optional], type [optional], offset, limit, port [optional])
-
-**Scalar Search** (`scalars_*`):
-- `scalars_search`: Find scalar values in instructions (params: value, in_function [optional], to_function [optional], offset, limit, port [optional])
 
 **Analysis** (`analysis_*`):
 - `analysis_run`: Trigger program analysis (params: analysis_options [optional], background [optional], port [optional])
 - `analysis_status`: Check analysis status (params: port [optional])
 - `analysis_get_callgraph`: Get function call graph (params: name or address, max_depth, port [optional])
-- `analysis_get_dataflow`: Perform data flow analysis via pcode varnode tracing (params: address, direction, max_steps, port [optional])
-
-**Symbols, Classes, Segments, Namespaces, Variables, DataTypes**:
-- `classes_list`: List classes and namespaces (params: offset, limit, port [optional])
-- `symbols_list`: List all symbols (params: offset, limit, port [optional])
-- `symbols_imports`: List imported symbols (params: offset, limit, port [optional])
-- `symbols_exports`: List exported symbols (params: offset, limit, port [optional])
-- `segments_list`: List memory segments (params: offset, limit, name [optional], port [optional])
-- `namespaces_list`: List namespace hierarchy (params: offset, limit, port [optional])
-- `variables_list`: List variables (params: search, global_only, offset, limit, port [optional])
-- `datatypes_list`: List data types (params: offset, limit, category, kind, port [optional])
-- `datatypes_search`: Search data types by name (params: name, offset, limit, port [optional])
-- `datatypes_create_struct`: Create struct datatype (params: name, category [optional], fields [optional], port [optional])
-- `datatypes_create_enum`: Create enum datatype (params: name, size [optional], category [optional], values [optional], port [optional])
-- `datatypes_create_union`: Create union datatype (params: name, category [optional], fields [optional], port [optional])
-
-**Script Execution** (`script_*`):
-- `script_execute`: Execute Python 3 script inside Ghidra via PyGhidra (params: code, language, timeout, port [optional])
-- `script_capabilities`: Check available script runtimes (params: port [optional])
-
-**Special**:
-- `raw_image_define`: Define raw image data (RGB565, 1bpp, etc.) for inline Listing rendering (params: address, width, height, format, endian, port [optional])
-
-**UI** (`ui_*`):
-- `ui_get_current_address`: Get currently selected address in Ghidra UI
-- `ui_get_current_function`: Get currently selected function in Ghidra UI
-
-**Comments** (`comments_*`):
-- `comments_set`: Set comment at address (params: address, comment, type [plate/pre/post/eol/repeatable], port [optional])
-- `comments_get`: Get comment at address (params: address, comment_type [optional], port [optional])
+- `analysis_get_dataflow`: Perform reference-flow traversal from an address (params: address, direction, max_steps, port [optional])
 
 **Project Management** (`project_*`):
 - `project_info`: Get current project information (params: port [optional])
@@ -290,6 +253,31 @@ GhydraMCP v2.4.1 organizes tools into logical namespaces for better discoverabil
 - `projects_get`: Get project details by name (params: name, port [optional])
 - `programs_list`: List programs (params: project [optional], offset, limit, port [optional])
 - `programs_get`: Get program by ID or `current` (params: program_id [optional], port [optional])
+- `programs_delete`: Delete/close program by ID or `current` (params: program_id [optional], port [optional])
+
+> `programs_delete` and program import routes are currently exposed but may return `NOT_IMPLEMENTED` depending on plugin-side support.
+
+**Datatype Management** (`datatypes_*`):
+- `datatypes_list`: List data types (params: offset, limit, category [optional], kind [optional], port [optional])
+- `datatypes_search`: Search data types by name (params: name, offset, limit, port [optional])
+- `datatypes_create_struct`: Create struct datatype (params: name, category [optional], fields_json [optional], port [optional]); supports JSON field definitions
+- `datatypes_create_enum`: Create enum datatype (params: name, size [optional], category [optional], values_json [optional], port [optional]); supports JSON value definitions
+- `datatypes_create_union`: Create union datatype (params: name, category [optional], fields_json [optional], port [optional]); supports JSON field definitions
+
+**Comment Management** (`comments_*`):
+- `comments_set`: Set memory comment (params: address, comment [optional], comment_type [optional], port [optional])
+- `comments_get`: Get memory comment (params: address, comment_type [optional], port [optional])
+
+**UI Helpers** (`ui_*`):
+- `ui_get_current_address`: Get currently selected UI address (params: port [optional])
+- `ui_get_current_function`: Get currently selected UI function (params: port [optional])
+
+**Program Metadata** (`classes_*`, `symbols_*`, `segments_*`, `namespaces_*`, `variables_*`):
+- `classes_list`: List classes/namespaces (params: offset, limit, port [optional])
+- `symbols_list` / `symbols_imports` / `symbols_exports`: Enumerate symbols (params: offset, limit, port [optional])
+- `segments_list`: List memory blocks (params: offset, limit, name [optional], port [optional])
+- `namespaces_list`: List namespaces (params: offset, limit, port [optional])
+- `variables_list`: List variables (params: offset, limit, search [optional], global_only [optional], port [optional])
 
 **Example Usage**:
 ```python
@@ -365,7 +353,7 @@ GhydraMCP works with any MCP-compatible client. Below are configuration examples
 
 #### Recommended: Local Installation from Release
 
-Download the latest [release](https://github.com/TeskesLab/GhydraMCP/releases) to ensure the bridge and plugin versions are in sync.
+Download the latest [release](https://github.com/starsong-consulting/GhydraMCP/releases) to ensure the bridge and plugin versions are in sync.
 
 ```json
 {
@@ -399,7 +387,7 @@ If you want to use the latest development version, you can run directly from the
       "command": "uvx",
       "args": [
         "--from",
-        "git+https://github.com/TeskesLab/GhydraMCP",
+        "git+https://github.com/starsong-consulting/GhydraMCP",
         "ghydramcp"
       ],
       "env": {
@@ -484,7 +472,7 @@ After saving the configuration, restart Cline to load the GhydraMCP server.
 
 ## Example Session
 
-Below is an example of how an AI assistant might interact with Ghidra using GhydraMCP v2.2.0:
+An example of an AI assistant driving Ghidra through GhydraMCP:
 
 **User:**
 ```
@@ -603,11 +591,11 @@ This shows process_packet coordinates validation, parsing, and response transmis
 
 # JSON Communication
 
-GhydraMCP uses structured JSON for all communication between the Python bridge and Java plugin. This ensures consistent and reliable data exchange.
+GhydraMCP uses JSON for all communication between the bridge or CLI and the Java plugin.
 
 ## API Architecture
 
-GhydraMCP v2.4.1 implements a comprehensive HATEOAS-driven REST API that follows hypermedia design principles:
+The REST API is HATEOAS-driven:
 
 ### Core API Design
 
@@ -676,11 +664,11 @@ Error responses include detailed information:
 }
 ```
 
-This HATEOAS approach enables resource discovery and self-documenting APIs, making integration and exploration significantly easier.
+The links let a client discover related resources without hardcoding URLs.
 
 # Testing
 
-GhydraMCP includes comprehensive test suites for both the HTTP API and MCP bridge. See [TESTING.md](TESTING.md) for details on running the tests.
+GhydraMCP has test suites for the HTTP API and the MCP bridge. See [TESTING.md](TESTING.md) for how to run them.
 
 ## HTTP API Tests
 
@@ -700,7 +688,18 @@ Tests the MCP bridge functionality:
 
 # Building from Source
 
-You can build different artifacts with Maven:
+You can build different artifacts with Maven. The build needs the Ghidra module
+jars: either set `GHIDRA_HOME` to your Ghidra install (recommended), or place the
+jars in `lib/`.
+
+```
+# Build against a specific Ghidra install (recommended). Works for 11.x or 12.x.
+# -Dghidra.version stamps the extension's ghidraVersion (must match the install).
+GHIDRA_HOME=/path/to/ghidra_12.1.2_PUBLIC mvn clean package -Dghidra.version=12.1.2
+```
+
+CI builds a matrix over the latest Ghidra 11.x and 12.x and attaches a per-version
+plugin zip to each release.
 
 ## Build Everything (Default)
 Build both the Ghidra plugin and the complete package:
@@ -710,8 +709,12 @@ mvn clean package
 ```
 
 This creates:
-- `target/GhydraMCP-v[version].zip` - The Ghidra plugin only
-- `target/GhydraMCP-Complete-v[version].zip` - Complete package with plugin and bridge script
+- `target/Ghydra-[version].zip` - The Ghidra plugin only
+- `target/Ghydra-Complete-[version].zip` - Complete package with plugin and bridge script
+
+Install the plugin zip via Ghidra's `File` -> `Install Extensions` (first time);
+for later updates you can swap `lib/Ghydra.jar` in the installed extension and
+restart Ghidra.
 
 ## Build Ghidra Plugin Only
 If you only need the Ghidra plugin:
@@ -728,6 +731,6 @@ mvn clean package -P complete-only
 ```
 
 The Ghidra plugin includes these files required for Ghidra to recognize the extension:
-- lib/GhydraMCP.jar
+- lib/Ghydra.jar
 - extension.properties
 - Module.manifest

@@ -6,76 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [2.4.1] - 2026-06-12
+## [3.0.0-rc.1] - 2026-06-18
 
 ### Changed
-- **Upstream Sync**: Merged three upstream bridge/CLI fixes from `starsong-consulting/GhydraMCP`.
-- **Bridge/CLI compatibility**: Preserved current Java `nodes`/`edges` callgraph DTO support while accepting newer tree-shaped callgraph responses.
-- **Pagination metadata**: `functions_list` now exposes both legacy top-level `size`/`offset`/`limit` and nested `meta` pagination fields.
-
-### Fixed
-- **Plugin startup**: Removed duplicate `/analysis/dataflow` HTTP context registration that caused `GhydraMCPPlugin` construction to fail in Ghidra.
-- **CLI output**: Fixed memory table formatting to avoid rendering addresses as `0x0x...`.
-- **Analysis status output**: Added clearer table formatting for analysis status responses.
-
-## [2.4.0] - 2026-06-05
+- **Breaking: fully-qualified symbol names.** Functions, symbols, data labels, variables, and xrefs now use the fully-qualified name (namespace path, e.g. `FOM::SharedMemory::ReadUInt`; global-namespace members are unprefixed) for lookup, filtering, and output. `GET /functions/by-name/{fqn}` takes a URL-encoded FQN; a bare name resolves in the global namespace only. Renaming a function, data label, or symbol to an `A::B::name` value moves it into that namespace (created if absent); a leading `::` or `Global::` moves it to the global namespace. The separate `namespace` field is removed from function and symbol responses (folded into the FQN `name`). Local variable names stay bare and reject `::`. `API_VERSION` bumped to 3000. Reimplemented from PR #18 against the Javalin layer. (#18)
 
 ### Added
-- **Upstream Sync**: Merged changes from starsong-consulting/GhydraMCP (16 commits). New features:
-  - `functions_get_containing`, `functions_get_next`, `functions_get_prev` — function navigation by address
-  - `functions_update_variable` — alternative variable update endpoint
-  - `comments_get` — get comment at address
-  - `projects_list`, `projects_get` — project enumeration
-  - `programs_list`, `programs_get` — program lifecycle management
-  - `datatypes_create_struct`, `datatypes_create_enum`, `datatypes_create_union` — create datatypes programmatically
-  - `functions_list` — `addr_min`/`addr_max` address range filtering
-  - `memory_read` — `segment` parameter for overlay-aware reads
-  - `structs_create` — `size` parameter
-- **Java**: New `DataFlowUtil.java` utility, `GhidraSwing.java` EDT helper
-- **CLI**: New commands — `functions get-containing`, `functions get-next`, `functions get-prev`, `functions update-variable`, `comments get`, `datatypes create-struct`, `datatypes create-enum`, `datatypes create-union`, `project list-projects`, `project get-project`, `project list-programs`, `project get-program`
-
-### Changed
-- **Java endpoints**: All endpoints now use `GhidraSwing.runRead()` for EDT-safe DB iterator reads
-- **DataEndpoints**: Major refactor — fast-path address lookups, exact-name symbol lookup, per-item `matchesDataListFilters`
-- **FunctionEndpoints**: Uses `buildFunctionListEntry` for consistent output, proper `Pattern.find()` for regex, `GhidraSwing` wrappers
-- **ProgramEndpoints**: `analyzeReferenceFlow` via `DataFlowUtil`, `GhidraSwing`-wrapped callgraph/xrefs
-- Preserved FQN-based (`getName(true)`) filtering across all function and data endpoints
+- **`analysis` link on `/program`:** the program resource now advertises an `analysis` link (to `/analysis/status`) for HATEOAS discoverability.
+- **Run Ghidra scripts via the API:** `GET /scripts` (list) and `POST /scripts/run` (run an existing script by `name`, or compile and run ad-hoc GhidraScript `source`, with `args`), plus `scripts_list`/`scripts_run` bridge tools and `ghydra scripts list`/`run`. Captures the script's output. Lets an agent do multi-stage/batch work (mass rename, signature transfer) in one call. Arbitrary code execution, so it is disabled unless the server is started with `-Dghydra.dev.allowScripts=true` (or `GHYDRA_ALLOW_SCRIPTS=1`). (#3)
+- **Scalar search:** find constant values in instructions (`GET /scalars`, `scalars_search` bridge tool, `ghydra scalars search`), like Ghidra's "Search For Scalars". Filter by containing function (`in_function`) or by a nearby called function (`to_function`, e.g. the `0` passed to `memset`). The `in_function` filter scans only the matching functions; unfiltered scans on large programs are time-bounded and report `scanTruncated`. Reimplemented from PR #17 against the Javalin layer. (#17)
+- **Save endpoint:** `POST /program/save` persists the current program to the project (`?all=true` saves every open program with unsaved changes).
+- **Dev-only shutdown endpoint:** `POST /dev/shutdown` quits Ghidra so the build/deploy/restart loop can be automated. Off by default; enable with `-Dghydra.dev.allowShutdown=true` or `GHYDRA_DEV_SHUTDOWN=1`. With unsaved changes it refuses (409) unless `?save=true` (save, then exit) or `?force=true` (discard, then exit).
 
 ### Fixed
-- **Locked buffer crashes**: DB-iterator reads marshaled onto EDT via `GhidraSwing`
-- **Decompiler EDT crash**: `handleFunctionVariables` fallback no longer runs decompiler on EDT
-- **Disassembly format**: Handles list-shaped disassembly result in `format_disassembly`
-- **CLI decompilation output**: Table formatter reads from `decompilation` field
-- **Hex/decimal param parsing**: All integer params accept hex and decimal
+- **HATEOAS links:** templated links with a single string argument (an address or name) emitted a literal `{}` href with the value misplaced into a `method` field; they now substitute correctly across all endpoints. Action links use a new `linkWithMethod`.
+- **Disassembly truncation:** the bridge text output now reports the total instruction count and the next offset when a function's disassembly is paginated, instead of silently showing the first 100. `functions_disassemble` no longer documents `limit=0` as "all".
+- **Agent-clean CLI output:** color is auto-disabled when stdout is not a terminal (and honors `NO_COLOR`), so piped or captured `ghydra` output no longer carries ANSI codes that corrupted hex-address parsing.
 
-## [2.3.0] - 2025-05-14
-
-### Added
-- **Raw Image DataType**: New `raw_image_define` tool for defining raw image data (RGB565, RGB888, ARGB8888, RGB332, ARGB4444, 1-8bpp) that renders inline in Ghidra's Listing view.
-- **PyGhidra Script Execution**: New `script_execute` and `script_capabilities` tools for running Python 3 scripts inside Ghidra with access to `currentProgram`, JPype, and the full Ghidra API.
-- **Control Flow Graph**: New `functions_get_cfg` tool and `/functions/{addr}/cfg` endpoint for getting basic block CFG data.
-- **Pcode Operations**: New `functions_get_pcode` tool and `/functions/{addr}/pcode` endpoint for getting pcode intermediate representation.
-- **Variable Type Setting**: New `functions_set_variable` tool for changing local/global variable types.
-- **Data Flow Analysis**: Real data flow analysis via pcode varnode tracing (forward/backward).
-- **Memory Disassembly**: New `memory_disassemble` tool and `/memory/{addr}/disassembly` endpoint for disassembling at arbitrary addresses outside function boundaries.
-- **Scalar Search**: New `scalars_search` tool for finding scalar (constant) values in instructions, with `in_function` and `to_function` filters.
-- **Data Name Filters**: Implemented `name` and `name_contains` filters for data listing endpoints.
-- **CLI Tool — Full Coverage**: All 16 command groups now implemented (54 subcommands total): instances, functions, data, structs, memory, xrefs, analysis, symbols, classes, segments, namespaces, variables, datatypes, comments, project, ui.
-- **CLI — New Commands**: `functions search`, `functions set-comment`, `memory disassemble`, `data search`, `xrefs to`, `xrefs from`, `datatypes list`, `datatypes search`, and all symbols/classes/segments/namespaces/variables commands.
-- **Missing Data Name Filters**: Although name and name_contains were documented for data endpoints, they weren't actually implemented until now.
+## [3.0.0-beta] - 2026-06-16
 
 ### Changed
-- **Breaking: Ghidra 12.0.1 Update**: Updated Ghidra to 12.0.1.
-- **Breaking: Use Symbol FQN**: All endpoints now use fully-qualified symbol names to avoid collisions. Function lookups support granular searches for namespaced functions. Function renaming supports moving the function to other namespaces.
-- **Promoted CLI over MCP Bridge**: CLI tool (`ghydra`) is now the recommended integration path. MCP bridge remains functional but is marked as legacy.
-- **LRU Decompiler Cache**: Added caching for decompilation results to speed up repeated queries.
+- **Ghidra 11.x + 12.x:** The plugin builds and runs against both Ghidra 11.x and 12.x; CI builds a matrix over the latest of each. Per-version extension artifacts are stamped with the matching `ghidraVersion` (which must equal the running Ghidra exactly).
+- **Ghidra 12.x:** Migrated the plugin to build against Ghidra 12.x (tested on 12.1.2). Build with `GHIDRA_HOME` pointing at the install, or `-Dghidra.version=` to stamp the extension.
+- **Javalin HTTP server:** The plugin now embeds a Javalin/Jetty server with a layered `resource`/`service`/`dto`/`hateoas`/`middleware`/`server` structure, replacing the previous JDK `HttpServer` + `endpoints/` implementation. Shaded into a single `Ghydra.jar`.
 
 ### Fixed
-- **CFG TaskMonitor NPE**: Fixed null pointer exception in CFG endpoint when TaskMonitor is not available.
-- **Callgraph Root Name**: Fixed incorrect root node name in callgraph output.
-- **Dataflow Endpoint Registration**: Fixed missing dataflow endpoint registration in plugin.
-- **EDT Timeout**: Added EDT timeout to prevent HTTP thread hangs.
-- **HTTP Status Codes**: Fixed incorrect HTTP status codes across data type and variable endpoints.
+- **Locked buffer crashes:** DB-iterator traversals are marshalled onto the EDT (`GhidraSwing.runRead`), fixing `IOException: Locked buffer` crashes during concurrent analysis.
+- **StackOverflow containment:** A self-referential pointer made Ghidra's own label resolution recurse without bound; reads now contain the resulting `Error` and fail the request cleanly instead of crashing the EDT.
+- **Call graph callees:** Callee discovery scans the whole function body instead of just the entry address, so `/analysis/callgraph` and `/analysis/callees` return results.
+- **Client errors return 400:** Malformed input (bad addresses, hex, JSON bodies, invalid params) maps to HTTP 400 instead of 500; `/xrefs` pagination no longer returns empty pages past the first.
+- **Bridge/CLI field sync:** Bridge and CLI formatters match the server's response field names (decompilation, variables, xrefs, segments, memory), and integral JSON numbers are no longer rendered as floats.
 
 ## [2.0.0] - 2025-11-11
 
@@ -179,7 +139,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - Initial release of GhydraMCP bridge
 - Basic Ghidra instance management tools
-- Function analysis tools
+- Function analysis tools 
 - Variable manipulation tools
 
 ## [1.0] - 2025-03-24
@@ -188,13 +148,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Initial project setup
 - Basic MCP bridge functionality
 
-[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v2.4.1...HEAD
-[2.4.1]: https://github.com/TeskesLab/GhydraMCP/compare/v2.4.0...v2.4.1
-[2.4.0]: https://github.com/TeskesLab/GhydraMCP/compare/v2.3.0...v2.4.0
-[2.3.0]: https://github.com/TeskesLab/GhydraMCP/compare/v2.0.0...v2.3.0
-[2.0.0]: https://github.com/TeskesLab/GhydraMCP/compare/v1.4.0...v2.0.0
-[1.4.0]: https://github.com/TeskesLab/GhydraMCP/compare/v1.3.0...v1.4.0
-[1.3.0]: https://github.com/TeskesLab/GhydraMCP/compare/v1.2...v1.3.0
-[1.2]: https://github.com/TeskesLab/GhydraMCP/compare/v1.1...v1.2
-[1.1]: https://github.com/TeskesLab/GhydraMCP/compare/1.0...v1.1
-[1.0]: https://github.com/TeskesLab/GhydraMCP/releases/tag/1.0
+[unreleased]: https://github.com/starsong-consulting/GhydraMCP/compare/v3.0.0-rc.1...HEAD
+[3.0.0-rc.1]: https://github.com/starsong-consulting/GhydraMCP/compare/v3.0.0-beta...v3.0.0-rc.1
+[2.0.0]: https://github.com/teal-bauer/GhydraMCP/compare/v1.4.0...v2.0.0
+[1.4.0]: https://github.com/teal-bauer/GhydraMCP/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/teal-bauer/GhydraMCP/compare/v1.2...v1.3.0
+[1.2]: https://github.com/teal-bauer/GhydraMCP/compare/v1.1...v1.2
+[1.1]: https://github.com/teal-bauer/GhydraMCP/compare/1.0...v1.1
+[1.0]: https://github.com/teal-bauer/GhydraMCP/releases/tag/1.0

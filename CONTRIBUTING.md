@@ -15,23 +15,25 @@ Thank you for your interest in contributing to GhydraMCP! This document provides
 
 GhydraMCP consists of three main components:
 
-1. **Java Plugin for Ghidra** (`src/main/java/eu/starsong/ghidra/`):
-   - Main class: `GhydraMCPPlugin.java`
+1. **Java Plugin for Ghidra** (`src/main/java/eu/starsong/ghidra/`): a Javalin/Jetty
+   HTTP server embedded in Ghidra, layered as:
+   - Main class: `GhydraPlugin.java`
+   - HTTP server + routing: `server/` (Javalin setup, `GhidraContext`)
+   - REST resources (route handlers): `resource/` directory
+   - Business logic / program access: `service/` directory
+   - Response/request DTOs: `dto/` directory
+   - HATEOAS responses + pagination: `hateoas/` directory
+   - CORS / error handling: `middleware/` directory
    - API constants: `api/ApiConstants.java`
-   - Endpoints: `endpoints/` directory
-   - Data models: `model/` directory
-   - Utilities: `util/` directory
+   - Utilities (EDT marshalling, transactions, decompiler cache): `util/` directory
 
-2. **CLI Tool** (`ghydra/`):
-   - CLI entry point: `ghydra/cli/main.py`
-   - Command groups: `ghydra/cli/` directory (16 groups, 54 commands)
-   - HTTP client: `ghydra/client/`
-   - Output formatters: `ghydra/formatters/`
-   - Configuration: `ghydra/config/`
+2. **Python MCP Bridge** (`bridge_mcp_hydra.py`):
+   - Implements the Model Context Protocol (MCP)
+   - Connects AI assistants to the Ghidra plugin via HTTP
 
-3. **Python MCP Bridge** (`bridge_mcp_hydra.py`):
-   - Legacy MCP integration (CLI is preferred for new integrations)
-   - 58 MCP tools wrapping the HTTP API
+3. **Python CLI** (`ghydra/`):
+   - Click-based command-line tool with Rich formatting
+   - Talks to the same HTTP API as the bridge
 
 ## Development Setup
 
@@ -40,29 +42,29 @@ GhydraMCP consists of three main components:
 - Java 21 (required for plugin development)
 - Maven 3.8+
 - Python 3.11+
-- Ghidra (latest stable version recommended)
+- Ghidra 12.x (built/tested against 12.1.2). Build with `GHIDRA_HOME` pointing at your install.
 
 ### Building from Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/TeskesLab/GhydraMCP.git
+git clone https://github.com/starsong-consulting/GhydraMCP.git
 cd GhydraMCP
 
-# Build the project
-mvn clean package
+# Build the project (point GHIDRA_HOME at your Ghidra 12.x install)
+GHIDRA_HOME=/path/to/ghidra_12.1.2_PUBLIC mvn clean package
 ```
 
 This creates:
-- `target/GhydraMCP-v[version].zip` - The Ghidra plugin only
-- `target/GhydraMCP-Complete-v[version].zip` - Complete package with plugin and bridge script
+- `target/Ghydra-[version].zip` - The Ghidra plugin only
+- `target/Ghydra-Complete-[version].zip` - Complete package with plugin and bridge script
 
 ### Installing for Development
 
 1. Build the project as described above
 2. In Ghidra, go to `File` -> `Install Extensions`
 3. Click the `+` button
-4. Select the `GhydraMCP-v[version].zip` file
+4. Select the `Ghydra-[version].zip` file
 5. Restart Ghidra
 6. Enable the plugin in `File` -> `Configure` -> `Developer`
 
@@ -90,22 +92,12 @@ When making changes, update version numbers in these locations:
 
 1. **Plugin Version** in `src/main/java/eu/starsong/ghidra/api/ApiConstants.java`:
    ```java
-   public static final String PLUGIN_VERSION = "vX.Y.Z";
+   public static final String PLUGIN_VERSION = "v2.0.0";
    ```
 
 2. **Bridge Version** in `bridge_mcp_hydra.py`:
    ```python
-   BRIDGE_VERSION = "vX.Y.Z"
-   ```
-
-3. **CLI Version** in `ghydra/__init__.py`:
-   ```python
-   __version__ = "X.Y.Z"
-   ```
-
-4. **Package Version** in `pyproject.toml`:
-   ```toml
-   version = "X.Y.Z"
+   BRIDGE_VERSION = "v2.0.0"
    ```
 
 ### API Versions
@@ -114,12 +106,12 @@ The API version is tracked separately from the implementation version:
 
 1. **API Version** in `src/main/java/eu/starsong/ghidra/api/ApiConstants.java`:
    ```java
-   public static final int API_VERSION = 2020;
+   public static final int API_VERSION = 2;
    ```
 
 2. **Required API Version** in `bridge_mcp_hydra.py`:
    ```python
-   REQUIRED_API_VERSION = 2020
+   REQUIRED_API_VERSION = 2
    ```
 
 ### When to Update Versions
