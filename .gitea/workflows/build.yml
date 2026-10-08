@@ -27,7 +27,12 @@ jobs:
         mvn --version
 
     - name: Build with Maven
-      run: mvn -B package
+      # This runner has no Ghidra install, so the build compiles against the jars
+      # committed in lib/ (Ghidra 12.0.1). Stamp that version into
+      # extension.properties so the extension declares what it was actually built
+      # against. GitHub Actions instead downloads a real Ghidra and overrides both
+      # GHIDRA_HOME and ghidra.version per matrix leg.
+      run: mvn -B package -Dghidra.version=12.0.1
 
     - name: Upload nightly artifacts
       if: github.ref_type != 'tag'
@@ -35,7 +40,7 @@ jobs:
       with:
         name: GhydraMCP-nightly
         path: |
-          target/GhydraMCP-*.zip
+          target/Ghydra-*.zip
           bridge_mcp_hydra.py
 
     - name: Generate Release Notes from CHANGELOG
@@ -74,7 +79,7 @@ jobs:
         tea login add --name default --url "$GITEA_SERVER" --token "$TEA_TOKEN"
 
         ASSETS=()
-        for f in target/GhydraMCP-*.zip; do
+        for f in target/Ghydra-*.zip; do
           [ -f "$f" ] && ASSETS+=("--asset" "$f")
         done
         [ -f bridge_mcp_hydra.py ] && ASSETS+=("--asset" "bridge_mcp_hydra.py")

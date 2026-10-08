@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-08
+
+### Added
+- **Raw image rendering:** `POST /raw-image/define` (`raw_image_define` MCP tool, `ghydra raw-image define`) creates a `RawImage` data type at an address so captured framebuffers render inline in the Listing. Supports 9 pixel formats (RGB565, RGB888, ARGB8888, RGB332, ARGB4444, 1bpp, 2bpp, 4bpp, 8bpp) plus little/big endian. Backed by a new `RawImage` built-in DataType with width/height/format settings.
+- **Raw image cleanup:** `POST /raw-image/cleanup` (`raw_image_cleanup` MCP tool, `ghydra raw-image cleanup`) removes RawImage data items — one by address, or every one in the program with `all`. Runs collection and clearing in a single transaction, so a whole-program sweep is atomic and rolls back on failure. Idempotent, and refuses to clear data that is not a RawImage.
+- **CFG and pcode introspection:** `GET /functions/{address}/cfg` and `/pcode` (plus the `by-name` equivalents) expose a function's control-flow graph (`blocks`, `edges`, `blockCount`, `edgeCount`) and its decompiled p-code operations (`operations`, `opCount`). Reachable as `functions_get_cfg` / `functions_get_pcode` MCP tools, `ghydra functions get-cfg` / `get-pcode`, and via new `cfg`/`pcode` HATEOAS links on function responses. `/pcode` accepts `?timeout=` (default 60s).
+- **Variable editing from the CLI:** `ghydra functions set-variable` renames or retypes a function variable.
+- Gitea Actions workflow mirroring the GitHub Actions build and release flow.
+- `skills/ghydra-cli/SKILL.md`, an agent-facing skill for driving the `ghydra` CLI.
+
+### Changed
+- **Write failures now return `409`, not `500`.** `TransactionHelper.TransactionException` — raised when a write cannot be committed, almost always because the program is read-only or locked — is now mapped to `409 TRANSACTION_FAILED` by a server-wide exception handler instead of falling through to `500 INTERNAL_ERROR`. This affects every mutating endpoint. `TransactionException` also became unchecked so it passes through resources' generic `catch (Exception)` guards instead of being rewrapped.
+- **`mvn package` now defaults to `-Dghidra.version=12.0.1`**, matching the Ghidra jars committed in `lib/`. Previously a build with no `GHIDRA_HOME` compiled against 12.0.1 but stamped the extension as 12.1.2. Pass `-Dghidra.version` when building against any other install.
+- Version bumped to `3.0.0` across `ApiConstants.PLUGIN_VERSION`, `BRIDGE_VERSION`, `pyproject.toml`, and `extension.properties`.
+- Ghidra target updated to the 12.x series; CI builds a matrix against the latest Ghidra 11.x and 12.x.
+- Lucas Teske added as a contributor (`pyproject.toml` authors, plugin manifest).
+- CLI help URL now points at `https://github.com/TeskesLab/GhydraMCP`.
+
+### Removed
+- **`ghydra functions update-variable`** — a CLI-only duplicate of `functions set-variable` with different flag spellings (`--variable-name`/`--new-data-type` vs `--variable`/`--data-type`) and no ability to look the function up by name. Use `set-variable`. The `functions_update_variable` MCP tool and the `PATCH /functions/{address}/variables/{variable_name}` endpoint are unchanged.
+
+### Fixed
+- **`mcp==1.6.0` no longer breaks on modern pydantic.** `mcp` 1.6.0 imports `pydantic._internal._typing_extra.eval_type_backport`, which pydantic 2.14 removed, so a fresh dependency resolve died with `ImportError` before the bridge could start. Dependencies now pin `pydantic<2.14`.
+- **Corrected the MCP client launch command.** The documented `uv run /path/to/bridge_mcp_hydra.py` runs the file in a script-scoped environment that ignores `pyproject.toml`, so it never saw the pins above and failed. The correct invocation is `uv run python /path/to/bridge_mcp_hydra.py`.
+
 ## [3.0.0-rc.1] - 2026-06-18
 
 ### Changed

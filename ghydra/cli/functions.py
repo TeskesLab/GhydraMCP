@@ -588,39 +588,6 @@ def get_variables(ctx, name, address):
         ctx.exit(1)
 
 
-@functions.command('update-variable')
-@click.option('--address', '-a', required=True, help='Function address (hex)')
-@click.option('--variable-name', required=True, help='Existing variable name')
-@click.option('--new-name', help='New variable name')
-@click.option('--new-data-type', help='New variable data type')
-@click.pass_context
-def update_variable(ctx, address, variable_name, new_name, new_data_type):
-    """Update a local variable in a function."""
-    if not new_name and not new_data_type:
-        rich_echo("[red]Error:[/red] At least one of --new-name or --new-data-type is required", err=True)
-        ctx.exit(1)
-
-    client = ctx.obj['client']
-    formatter = ctx.obj['formatter']
-
-    try:
-        endpoint = f'functions/{validate_address(address)}/variables/{quote(variable_name)}'
-        data = {}
-        if new_name:
-            data['name'] = new_name
-        if new_data_type:
-            data['data_type'] = new_data_type
-
-        response = client.patch(endpoint, data=data)
-        output = formatter.format_simple_result(response)
-        click.echo(output)
-
-    except GhidraError as e:
-        error_output = formatter.format_error(e)
-        rich_echo(error_output, err=True)
-        ctx.exit(1)
-
-
 @functions.command('set-comment')
 @click.option('--address', '-a', required=True, help='Function address (hex)')
 @click.option('--comment', required=True, help='Comment text (empty string removes comment)')

@@ -16,17 +16,21 @@ The easiest way to run all tests is to use the test runner script:
 python run_tests.py
 ```
 
-This will run both the HTTP API tests and the MCP bridge tests and provide a summary of the results.
+This runs every suite and prints a summary.
 
 You can also run specific test suites:
 
 ```bash
-# Run only the HTTP API tests
-python run_tests.py --http
-
-# Run only the MCP bridge tests
-python run_tests.py --mcp
+python run_tests.py --http       # HTTP API tests
+python run_tests.py --mcp        # MCP bridge tests
+python run_tests.py --data       # data operations tests
+python run_tests.py --comments   # comment tests
+python run_tests.py --port       # Javalin port edge-case tests
 ```
+
+> **Every suite skips itself when Ghidra is not running.** Each `setUp` calls
+> `skipTest("Ghidra not running")`, so a green summary does not prove anything unless the
+> tests actually executed — check the output for skips before trusting a pass.
 
 ## HTTP API Tests
 
@@ -155,3 +159,43 @@ def test_new_tool(self):
     self.assertIsInstance(content, list)
     self.assertGreaterEqual(len(content), 1)
 ```
+
+## Java Unit Tests
+
+```bash
+mvn test
+```
+
+These run under JUnit with no Ghidra needed, but they only cover pure logic — `GhidraUtil`
+address/type parsing and the like. Anything that needs a live `Program` (transactions, the
+listing, data types) is **not** covered here, because the plugin's Ghidra dependencies are
+system-scoped jars in `lib/` and constructing a `Program` needs Ghidra's full runtime
+classpath plus its test framework, which Ghidra does not ship.
+
+## Java Integration Tests (GhidraScript)
+
+Service-level tests that do need a real `Program` live in `src/test/ghidra/` as GhidraScripts
+and run headless. They are outside `src/test/java`, so `mvn test` ignores them.
+
+```bash
+# Any binary works; the test derives its own addresses from the program's layout.
+analyzeHeadless /tmp/RawImageTest RawImageTest \
+    -import /path/to/some-binary \
+    -scriptPath src/test/ghidra \
+    -postScript TestRawImage
+```
+
+- `TestRawImage` — exercises `RawImageService`: pixel-format byte math across RGB565 /
+  ARGB8888 / 1bpp, single-address cleanup, whole-program sweeps, idempotency, the
+  refuse-to-clear-non-RawImage guard, and that every bad input raises
+  `IllegalArgumentException` (which the HTTP layer maps to `400`, not `500`).
+
+Each script throws on the first failed assertion, so headless reports `SCRIPT ERROR` and a
+non-zero exit — usable as a CI gate:
+
+```bash
+analyzeHeadless ... -postScript TestRawImage && echo PASS || echo FAIL
+```
+
+Note this requires the plugin to be **installed** in the Ghidra you point at, because the
+scripts import classes from the extension jar.

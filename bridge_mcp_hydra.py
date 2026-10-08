@@ -1215,6 +1215,7 @@ FORMATTERS = {
     "functions_get_cfg": format_cfg,
     "functions_get_pcode": format_pcode,
     "raw_image_define": format_generic_dict,
+    "raw_image_cleanup": format_generic_dict,
 }
 
 
@@ -4396,6 +4397,41 @@ def raw_image_define(address: str, width: int, height: int,
         "endian": endian,
     }
     response = safe_post(port, "raw-image/define", payload)
+    return simplify_response(response)
+
+
+@mcp.tool()
+@text_output
+def raw_image_cleanup(address: str = "", all: bool = False,
+                      port: int | None = None) -> dict:
+    """Remove RawImage data items created by raw_image_define
+
+    Clears the RawImage data at one address, or every RawImage in the program with all=True.
+    Clearing a code unit leaves the underlying bytes undefined again. Idempotent: cleaning up
+    when nothing is defined is not an error and reports removed=0.
+
+    Collection and clearing run in a single transaction, so a failure part-way through a
+    whole-program sweep rolls back everything.
+
+    Args:
+        address: Address of the raw image to clear. Ignored when all=True.
+        all: If True, clear every RawImage data item in the program (default: False)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Counts of what was cleared — mode, removed, bytes, and the addresses removed
+    """
+    if not all and not address:
+        return _missing_param("Provide an address, or set all=True to sweep the whole program")
+
+    port = _get_instance_port(port)
+    payload: dict = {}
+    if all:
+        payload["all"] = True
+    else:
+        payload["address"] = address
+
+    response = safe_post(port, "raw-image/cleanup", payload)
     return simplify_response(response)
 
 
