@@ -3,36 +3,51 @@ package eu.starsong.ghidra.resource;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
 import eu.starsong.ghidra.server.Resource;
-import eu.starsong.ghidra.util.TransactionHelper;
-import ghidra.program.model.address.AddressFormatException;
-import ghidra.program.model.data.BuiltInDataTypeManager;
-import ghidra.program.model.data.DataType;
+import eu.starsong.ghidra.service.RawImageService;
+import eu.starsong.ghidra.service.RawImageService.CleanupReport;
+import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Data;
-import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
-import ghidra.util.Msg;
 
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
 /**
- * Define raw image data types for inline rendering in Ghidra's Listing view.
+ * Raw image data types for inline rendering in Ghidra's Listing view.
  *
- * <p>POST /raw-image/define — creates a RawImage data item at the given address
- * with width, height, and pixel format settings.
+ * <ul>
+ *   <li>POST /raw-image/define — create a RawImage data item at an address with width, height,
+ *       and pixel format settings.</li>
+ *   <li>POST /raw-image/cleanup — remove RawImage data items, one by address or all at once.</li>
+ * </ul>
+ *
+ * All Ghidra work (and the transactions around it) lives in {@link RawImageService}; this class
+ * only validates the request shape and builds the HATEOAS response.
  */
 public class RawImageResource implements Resource {
 
-    /** Bits-per-pixel for each format ordinal (must match RawImageFormatSettingsDefinition). */
-    private static final int[] BPP = {16, 24, 32, 8, 16, 1, 2, 4, 8};
+    /** Cap on how many cleared addresses we echo back, so a whole-program sweep stays bounded. */
+    private static final int MAX_REPORTED_ADDRESSES = 100;
+
+    private final RawImageService rawImageService;
+
+    public RawImageResource() {
+        this(new RawImageService());
+    }
+
+    public RawImageResource(RawImageService rawImageService) {
+        this.rawImageService = rawImageService;
+    }
 
     @Override
     public void register(Javalin app, Function<Context, GhidraContext> contextFactory) {
         app.post("/raw-image/define", ctx -> define(contextFactory.apply(ctx)));
+        app.post("/raw-image/cleanup", ctx -> cleanup(contextFactory.apply(ctx)));
     }
 
     private void define(GhidraContext ctx) {
@@ -42,62 +57,14 @@ public class RawImageResource implements Resource {
         if (req.address == null || req.address.isEmpty()) {
             throw new IllegalArgumentException("address is required");
         }
-        if (req.width <= 0 || req.height <= 0) {
-            throw new IllegalArgumentException("width and height must be positive");
-        }
 
-        int formatOrdinal = parseFormat(req.format);
-        boolean bigEndian = "big".equalsIgnoreCase(req.endian);
-        int bpp = BPP[formatOrdinal];
-        int byteLen = (req.width * req.height * bpp + 7) / 8;
-
-        // Resolve the RawImage built-in data type
-        DataType rawImageDt = BuiltInDataTypeManager.getDataTypeManager().getDataType("/RawImage");
-        if (rawImageDt == null) {
-            throw new IllegalStateException(
-                "RawImage data type not found in BuiltInDataTypeManager");
-        }
-
-        var addressSpace = program.getAddressFactory().getDefaultAddressSpace();
-        ghidra.program.model.address.Address addr;
-        try {
-            addr = addressSpace.getAddress(req.address);
-        } catch (ghidra.program.model.address.AddressFormatException e) {
-            throw new IllegalArgumentException("Invalid address: " + req.address, e);
-        }
-        if (addr == null) {
-            throw new IllegalArgumentException("Invalid address: " + req.address);
-        }
-
-        final DataType dt = rawImageDt;
-        final int finalByteLen = byteLen;
-        final int finalFormat = formatOrdinal;
-        final int finalWidth = req.width;
-        final int finalHeight = req.height;
-
-        Data created;
-        try {
-            created = TransactionHelper.executeInTransaction(program, "define_raw_image", () -> {
-                Listing listing = program.getListing();
-                listing.clearCodeUnits(addr, addr.add(finalByteLen - 1), false);
-                Data data = listing.createData(addr, dt, finalByteLen);
-                if (data != null) {
-                    data.setValue("raw_image_width", finalWidth);
-                    data.setValue("raw_image_height", finalHeight);
-                    data.setValue("raw_image_format", finalFormat);
-                    if (bigEndian) {
-                        data.setValue("raw_image_endian", "big");
-                    }
-                }
-                return data;
-            });
-        } catch (TransactionHelper.TransactionException e) {
-            throw new RuntimeException("Transaction failed: " + e.getMessage(), e);
-        }
-
+        Data created = rawImageService.define(program, req.address, req.width, req.height,
+            req.format, req.endian);
         if (created == null) {
             throw new IllegalStateException("Failed to create raw image data at " + req.address);
         }
+
+        int byteLen = created.getLength();
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("address", req.address);
@@ -114,20 +81,34 @@ public class RawImageResource implements Resource {
             .build());
     }
 
-    private int parseFormat(String format) {
-        if (format == null) return 0; // RGB565
-        return switch (format.toUpperCase().replace("-", "_")) {
-            case "RGB565", "" -> 0;
-            case "RGB888" -> 1;
-            case "ARGB8888" -> 2;
-            case "RGB332" -> 3;
-            case "ARGB4444" -> 4;
-            case "1BPP", "1BPP_MONOCHROME" -> 5;
-            case "2BPP", "2BPP_GRAYSCALE" -> 6;
-            case "4BPP", "4BPP_GRAYSCALE" -> 7;
-            case "8BPP", "8BPP_GRAYSCALE" -> 8;
-            default -> throw new IllegalArgumentException("Unknown pixel format: " + format);
-        };
+    private void cleanup(GhidraContext ctx) {
+        Program program = ctx.requireProgram();
+        CleanupRequest req = ctx.bodyAsClass(CleanupRequest.class);
+
+        boolean sweepAll = req.all || req.address == null || req.address.isEmpty();
+        CleanupReport report = rawImageService.cleanup(program, sweepAll ? null : req.address);
+
+        List<Address> cleared = report.addresses();
+        boolean truncated = cleared.size() > MAX_REPORTED_ADDRESSES;
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("mode", sweepAll ? "all" : "single");
+        if (!sweepAll) {
+            result.put("address", req.address);
+        }
+        result.put("removed", cleared.size());
+        result.put("bytes", report.bytes());
+        result.put("addresses", cleared.subList(0, Math.min(cleared.size(), MAX_REPORTED_ADDRESSES))
+            .stream().map(Address::toString).toList());
+        result.put("addressesTruncated", truncated);
+        result.put("message", cleared.isEmpty()
+            ? "No RawImage data to clean up"
+            : "Cleared " + cleared.size() + " RawImage data item(s), " + report.bytes() + " bytes");
+
+        ctx.json(Response.ok(ctx.ctx(), ctx.port(), result)
+            .self("/raw-image/cleanup")
+            .linkWithMethod("define", "/raw-image/define", "POST")
+            .build());
     }
 
     private static class DefineRequest {
@@ -136,5 +117,10 @@ public class RawImageResource implements Resource {
         public int height;
         public String format = "RGB565";
         public String endian = "little";
+    }
+
+    private static class CleanupRequest {
+        public String address;
+        public boolean all;
     }
 }

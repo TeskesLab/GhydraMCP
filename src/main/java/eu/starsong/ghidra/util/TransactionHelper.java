@@ -83,7 +83,17 @@ public class TransactionHelper {
         return result.get();
     }
 
-    public static class TransactionException extends Exception {
+    /**
+     * Thrown when a write could not be committed — most often because the program is read-only
+     * or locked, or the transaction was aborted.
+     *
+     * <p>Unchecked on purpose. Resources guard service calls with
+     * {@code catch (RuntimeException e) { throw e; }} followed by a broader
+     * {@code catch (Exception e) { throw new RuntimeException(...) }}. As a checked exception it
+     * would be swallowed by that second clause and surface as a 500; as a RuntimeException it
+     * passes straight through and reaches GhydraServer's handler, which maps it to 409.
+     */
+    public static class TransactionException extends RuntimeException {
         public TransactionException(String message) { super(message); }
         public TransactionException(String message, Throwable cause) { super(message, cause); }
     }

@@ -33,6 +33,51 @@ Through it, an assistant can:
 
 GhydraMCP started as a fork of [GhidraMCP by Laurie Wired](https://github.com/LaurieWired/GhidraMCP/) and added multi-instance support, data manipulation, and a HATEOAS REST API.
 
+## What's new in 3.0.0
+
+`API_VERSION` is **3000** — see [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) for the full reference
+and [CHANGELOG.md](CHANGELOG.md) for the full list.
+
+**Breaking — fully-qualified symbol names.** Functions, symbols, data labels, variables, and
+xrefs now use the FQN (e.g. `FOM::SharedMemory::ReadUInt`; global-namespace members are
+unprefixed) for lookup, filtering, and output. A bare name resolves in the global namespace
+only. Renaming to `A::B::name` moves a symbol into that namespace, creating it if needed; a
+leading `::` or `Global::` targets the global namespace. The separate `namespace` field is gone
+from function and symbol responses.
+
+**New**
+
+- **Raw image rendering** — `POST /raw-image/define`, the `raw_image_define` MCP tool, and
+  `ghydra raw-image define` mark a memory region as image data so a captured framebuffer renders
+  inline in the Listing. 9 pixel formats plus little/big endian. Paired with
+  `raw_image_cleanup` / `ghydra raw-image cleanup`, which removes one image or sweeps the whole
+  program atomically.
+- **CFG and p-code introspection** — `GET /functions/{address}/cfg` and `/pcode`,
+  `functions_get_cfg` / `functions_get_pcode`, and `ghydra functions get-cfg` / `get-pcode`.
+- **Script execution** — `POST /scripts/run` runs an existing GhidraScript or ad-hoc source and
+  returns its output. Disabled unless Ghidra is started with `-Dghidra.dev.allowScripts=true`
+  (or `GHYDRA_ALLOW_SCRIPTS=1`), because it is arbitrary code execution.
+- **Program save and shutdown** — `POST /program/save` and a dev-only `POST /dev/shutdown`
+  (enable with `-Dghidra.dev.allowShutdown=true` or `GHYDRA_DEV_SHUTDOWN=1`) so the
+  build/deploy/restart loop can be automated.
+- **Scalar search** — `GET /scalars` finds constant values in instructions, like Ghidra's
+  "Search For Scalars".
+- **Variable editing from the CLI** — `ghydra functions set-variable` renames or retypes a
+  function local.
+
+**Changed**
+
+- The plugin was migrated from the raw JDK `HttpServer` to **Javalin** with a
+  service/DTO/resource layout, and now builds against the Ghidra 12.x series.
+- **Write failures return `409 TRANSACTION_FAILED`** instead of `500` — almost always a
+  read-only or locked program. This affects every mutating endpoint.
+
+**Removed**
+
+- `ghydra functions update-variable`, a duplicate of `functions set-variable` with different
+  flags. Use `set-variable`; the `functions_update_variable` MCP tool and the underlying
+  `PATCH /functions/{address}/variables/{variable_name}` endpoint are unchanged.
+
 # Features
 
 ## Program analysis
@@ -172,7 +217,7 @@ ghydra memory read --address 0x401000 --length 64
 ghydra --json functions list | jq '.result[].name'
 ```
 
-All commands support `--host`, `--port`, `--json`, and `--no-color` flags. See [GHYDRA_CLI.md](GHYDRA_CLI.md) for the full reference.
+All commands accept `--host`, `--port`, `--json`, and `--no-color`, but these are defined on the root command and must come **before** the subcommand: `ghydra --json functions list`. See [GHYDRA_CLI.md](GHYDRA_CLI.md) for the full reference.
 
 Timeout defaults are intentionally high for large binaries:
 - CLI/bridge HTTP timeout default: `900s` (`GHYDRA_TIMEOUT`)
@@ -345,6 +390,45 @@ client.use_tool("ghydra", "project_list_files", {"folder": "/", "recursive": Tru
 client.use_tool("ghydra", "project_open_file", {"path": "/malware_samples/sample2.exe"})
 ```
 
+#### CFG and pcode
+
+```python
+# Control-flow graph: basic blocks and the edges between them
+client.use_tool("ghydra", "functions_get_cfg", {"name": "main"})
+
+# Decompiled p-code operations (?timeout defaults to 60s)
+client.use_tool("ghydra", "functions_get_pcode", {"address": "0x00401000"})
+```
+
+The same data is on the CLI as `ghydra functions get-cfg` / `get-pcode`, and reachable over
+REST at `GET /functions/{address}/cfg` and `/pcode`.
+
+#### Raw images
+
+Mark a region of memory as image data so a captured framebuffer renders inline in the
+Listing instead of as an opaque byte blob.
+
+```python
+# RGB565 is the default; 9 formats plus little/big endian are supported
+client.use_tool("ghydra", "raw_image_define",
+                {"address": "0x00401000", "width": 320, "height": 240, "format": "ARGB8888"})
+
+# Remove one, or sweep every RawImage in the program
+client.use_tool("ghydra", "raw_image_cleanup", {"address": "0x00401000"})
+client.use_tool("ghydra", "raw_image_cleanup", {"all": True})
+```
+
+```bash
+ghydra raw-image define -a 0x401000 --width 320 --height 240 --format ARGB8888
+ghydra raw-image cleanup --address 0x401000
+ghydra raw-image cleanup --all
+```
+
+Cleanup runs collection and clearing in one transaction, so a whole-program sweep is atomic
+and rolls back if anything fails. It is idempotent (nothing to clear is not an error) and
+refuses to clear a data item that isn't a RawImage, so a mistyped address can't quietly
+destroy real data. REST equivalents: `POST /raw-image/define` and `POST /raw-image/cleanup`.
+
 ## Client Setup
 
 GhydraMCP works with any MCP-compatible client. Below are configuration examples for popular AI coding assistants.
@@ -362,10 +446,11 @@ Download the latest [release](https://github.com/starsong-consulting/GhydraMCP/r
       "command": "uv",
       "args": [
         "run",
+        "python",
         "/ABSOLUTE_PATH_TO/bridge_mcp_hydra.py"
       ],
       "env": {
-        "GHIDRA_HYDRA_HOST": "localhost"
+        "GHYDRA_HYDRA_HOST": "localhost"
       }
     }
   }
@@ -374,7 +459,14 @@ Download the latest [release](https://github.com/starsong-consulting/GhydraMCP/r
 
 Replace `/ABSOLUTE_PATH_TO/` with the actual path to your `bridge_mcp_hydra.py` file.
 
-> **Note:** You can also use `python` instead of `uv run`, but then you'll need to manually install the requirements first with `pip install mcp requests`.
+> The `python` in the args is required. `uv run script.py` runs the file in a *script-scoped*
+> environment that ignores this project's `pyproject.toml`, so it will not pick up the pinned
+> dependencies and currently fails to import `mcp`. `uv run python script.py` uses the project
+> environment instead.
+
+> **Note:** You can also use plain `python` instead of `uv run python`, but then you'll need to
+> install the requirements yourself first — `pip install -e .` (recommended, it also installs the
+> `ghydra` CLI) or `pip install mcp requests`.
 
 #### Alternative: Direct from Repository with uvx
 

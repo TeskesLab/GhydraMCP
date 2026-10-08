@@ -13,9 +13,15 @@
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-    <!-- Ghidra version this build targets; filtered into extension.properties.
+    <!-- Ghidra version this build targets; filtered into extension.properties as `ghidraVersion`,
+         which Ghidra checks against the running install — it must match, or the extension won't load.
+
+         This default matches the Ghidra jars committed in lib/ so that a bare `mvn package`
+         (no GHIDRA_HOME) builds and labels honestly. Override it whenever building against a
+         real install or another version:
+           GHIDRA_HOME=/path/to/ghidra_12.1.2_PUBLIC mvn clean package -Dghidra.version=12.1.2
          CI's build matrix overrides it per leg with -Dghidra.version=<11.x|12.x>. -->
-    <ghidra.version>12.1.2</ghidra.version>
+    <ghidra.version>12.0.1</ghidra.version>
     <!-- Default paths to local lib - will be overridden if GHIDRA_HOME is set -->
     <ghidra.generic.jar>${project.basedir}/lib/Generic.jar</ghidra.generic.jar>
     <ghidra.softwaremodeling.jar>${project.basedir}/lib/SoftwareModeling.jar</ghidra.softwaremodeling.jar>
@@ -59,49 +65,49 @@
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Generic</artifactId>
-      <version>12.1.2</version>
+      <version>12.0.1</version>
       <scope>system</scope>
       <systemPath>${ghidra.generic.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>SoftwareModeling</artifactId>
-      <version>12.1.2</version>
+      <version>12.0.1</version>
       <scope>system</scope>
       <systemPath>${ghidra.softwaremodeling.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Project</artifactId>
-      <version>12.1.2</version>
+      <version>12.0.1</version>
       <scope>system</scope>
       <systemPath>${ghidra.project.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Docking</artifactId>
-      <version>12.1.2</version>
+      <version>12.0.1</version>
       <scope>system</scope>
       <systemPath>${ghidra.docking.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Decompiler</artifactId>
-      <version>12.1.2</version>
+      <version>12.0.1</version>
       <scope>system</scope>
       <systemPath>${ghidra.decompiler.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Utility</artifactId>
-      <version>12.1.2</version>
+      <version>12.0.1</version>
       <scope>system</scope>
       <systemPath>${ghidra.utility.jar}</systemPath>
     </dependency>
     <dependency>
       <groupId>ghidra</groupId>
       <artifactId>Base</artifactId>
-      <version>12.1.2</version>
+      <version>12.0.1</version>
       <scope>system</scope>
       <systemPath>${ghidra.base.jar}</systemPath>
     </dependency>

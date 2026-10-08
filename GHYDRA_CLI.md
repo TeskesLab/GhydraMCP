@@ -35,7 +35,9 @@ ghydra --json functions list
 
 ## Global Options
 
-All commands support these global options:
+These are options on the **root** command, so they must come **before** the subcommand —
+`ghydra --json functions list`, not `ghydra functions list --json` (the latter errors with a
+usage error, since no subcommand redefines them):
 
 - `--host, -h TEXT`: Ghidra host (default: from config or localhost)
 - `--port, -p INTEGER`: Ghidra port (default: from config or 8192)
@@ -144,9 +146,77 @@ ghydra functions set-signature --name main --signature "int main(int argc, char 
 # Get function variables
 ghydra functions get-variables --name main
 
+# Rename or retype a local variable (by function name or address)
+ghydra functions set-variable --name main --variable size --data-type "uint32_t"
+ghydra functions set-variable --address 0x401000 --variable i --new-name index
+
+# Get the control-flow graph (basic blocks and edges)
+ghydra functions get-cfg --name main
+ghydra functions get-cfg --address 0x401000
+
+# Get decompiled p-code operations (runs a real decompilation)
+ghydra functions get-pcode --name main
+ghydra functions get-pcode --address 0x401000
+
 # Set function comment
 ghydra functions set-comment --address 0x401000 --comment "Main entry point"
 ```
+
+> `set-variable` is the single command for renaming or retyping a local variable. (The older
+> `update-variable`, which required `--address` and used `--variable-name`/`--new-data-type`,
+> was removed in 3.0.0 — use `set-variable`, which also accepts `--name`.)
+
+### Raw Image Commands
+
+Define raw image data so a captured framebuffer renders inline in the Listing view. Added in 3.0.0.
+
+```bash
+# Define a raw image at an address
+ghydra raw-image define --address 0x401000 --width 128 --height 64 --format RGB565
+
+# 320x240 ARGB8888, big-endian byte order
+ghydra raw-image define -a 0x402000 --width 320 --height 240 --format ARGB8888 --endian big
+
+# Always pair with --json for scripting
+ghydra --json raw-image define -a 0x401000 --width 64 --height 64 --format RGB565
+```
+
+Options:
+
+- `--address` / `-a` (**required**): where the image data starts.
+- `--width` / `--height` (**required**): dimensions in pixels, both positive.
+- `--format`: `RGB565` (default), `RGB888`, `ARGB8888`, `RGB332`, `ARGB4444`,
+  `1bpp`, `2bpp`, `4bpp`, `8bpp`, and the descriptive aliases `1bpp_Monochrome`,
+  `2bpp_Grayscale`, `4bpp_Grayscale`, `8bpp_Grayscale`.
+- `--endian`: `little` (default) or `big`.
+
+Backs `POST /raw-image/define`. The command clears any code units overlapping the target
+range and creates the data in a single transaction.
+
+```bash
+# Remove the raw image at one address
+ghydra raw-image cleanup --address 0x401000
+
+# Sweep every RawImage in the program
+ghydra raw-image cleanup --all
+
+# Machine-readable
+ghydra --json raw-image cleanup --all
+```
+
+Options:
+
+- `--address` / `-a`: the raw image to clear. Required unless `--all`.
+- `--all`: clear every RawImage data item in the program.
+
+Backs `POST /raw-image/cleanup`. Clearing a code unit leaves the bytes **undefined** — nothing is
+deleted. Collection and clearing run in one transaction, so a failure part-way through `--all`
+rolls the whole sweep back. Cleaning up when nothing is defined reports `removed: 0` rather than
+failing. `addresses` is capped at 100 in the response (`addressesTruncated` flags when the cap
+bites), but `removed` and `bytes` always reflect the full sweep.
+
+Passing `--address` where something other than a RawImage is defined is an error — the CLI will
+not clear an unrelated data item.
 
 ## Remaining Command Groups to Implement
 

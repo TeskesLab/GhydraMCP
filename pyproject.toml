@@ -11,6 +11,11 @@ authors = [
 ]
 dependencies = [
     "mcp==1.6.0",
+    # mcp 1.6.0 imports pydantic._internal._typing_extra.eval_type_backport, which
+    # pydantic 2.14 removed. Without this ceiling a fresh resolve picks pydantic
+    # >=2.14 and `import bridge_mcp_hydra` dies with an ImportError. Drop the pin
+    # (or raise it) when mcp is upgraded past that breakage.
+    "pydantic<2.14",
     "requests==2.32.3",
     "click>=8.1.0,<9",
     "rich>=13.0.0,<14",

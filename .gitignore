@@ -1,13 +1,70 @@
-# Maven target directory
+# ---------------------------------------------------------------------------
+# Java / Maven
+# ---------------------------------------------------------------------------
+# Build output. Anchored so a nested target/ elsewhere isn't swept up.
 /target/
-
-# Compiled class files
+/build/
 *.class
+hs_err_pid*
+replay_pid*
 
-# Logs
-*.log
+# NOTE: lib/*.jar are committed on purpose — they are the Ghidra module jars the
+# system-scoped Maven dependencies resolve from when GHIDRA_HOME isn't set.
+# Never add a blanket *.jar rule here.
 
-# IDE files
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Packaging / build metadata
+*.egg-info/
+*.egg
+.eggs/
+/dist/
+/wheelhouse/
+
+# ---------------------------------------------------------------------------
+# Virtual environments
+# ---------------------------------------------------------------------------
+# uv writes its own .gitignore inside .venv, but other tools may not.
+/.venv/
+/venv/
+/env/
+ENV/
+.env.venv/
+__pypackages__/
+
+# ---------------------------------------------------------------------------
+# Tooling caches and local state
+# ---------------------------------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+
+# Ghidra projects and imports created by the headless integration tests
+# (src/test/ghidra). Keep these out of the repo — they can be large.
+/*.gpr
+/*.rep/
+/*.rep
+*.rep.idx
+*.rep.tmp
+.ghidra/
+/ghidra_scripts/
+
+# ---------------------------------------------------------------------------
+# Editors and IDEs
+# ---------------------------------------------------------------------------
 # IntelliJ
 .idea/
 *.iml
@@ -18,37 +75,63 @@ out/
 .project
 .classpath
 .settings/
-bin/
+/bin/
 
 # VS Code
 .vscode/
+*.code-workspace
 
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Generic
+*~
+*.swp
+*.swo
+.history/
+*.bak
+
+# ---------------------------------------------------------------------------
+# OS metadata
+# ---------------------------------------------------------------------------
 # macOS
 .DS_Store
+.DS_Store?
 .AppleDouble
 .LSOverride
-
-# Thumbnails
 ._*
-
-# macOS metadata files
 .Spotlight-V100
 .Trashes
+.fseventsd
 
-# Maven Wrapper
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# ---------------------------------------------------------------------------
+# Secrets
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+
+# ---------------------------------------------------------------------------
+# Maven wrapper
+# ---------------------------------------------------------------------------
+# The project builds with a locally installed Maven; the wrapper is not used.
 .mvn/
 !/.mvn/wrapper/maven-wrapper.jar
 mvnw
 mvnw.cmd
-
-# Environment files
-.env
-.env.*
-
-# Java crash logs (if any)
-hs_err_pid*
-replay_pid*
-
-/__pycache__
-**/__pycache__/
-*.pyc

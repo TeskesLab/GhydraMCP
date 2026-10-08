@@ -188,8 +188,16 @@ Closes #123
 
 1. **Branch Naming Convention**:
    - Features: `feature/short-description`
-   - Fixes: `fix/issue-description`
-   - Documentation: `docs/description`
+   - Fixes: `bugfix/issue-description`
+   - Breaking API changes: `api/breaking-change`
+
+   These are the prefixes the CI workflows actually trigger on
+   (`.github/workflows/build.yml` and `.gitea/workflows/build.yml` both watch
+   `main`, `api-*`, `feature/*`, `feat/*`, `bugfix/*`, and pull requests against
+   `main`). GitHub Actions additionally accepts `feat/*`, but Gitea Actions does
+   not — prefer the names above so every push builds. Note that a `fix/*` or
+   `docs/*` branch will **not** run CI at all; open a PR from `feature/*` (or use
+   `feature/docs-*`) if the change needs a build to run against it.
 
 2. **Before Creating a PR**:
    - Ensure all tests pass

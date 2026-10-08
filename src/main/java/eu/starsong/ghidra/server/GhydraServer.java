@@ -4,6 +4,7 @@ import eu.starsong.ghidra.api.ApiConstants;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.middleware.CorsHandler;
 import eu.starsong.ghidra.middleware.ErrorHandler;
+import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.util.Msg;
 import io.javalin.Javalin;
@@ -144,6 +145,14 @@ public class GhydraServer {
         app.exception(BadRequestException.class, (e, ctx) -> {
             ctx.status(HttpStatus.BAD_REQUEST);
             ctx.json(Response.error(ctx, port, e.errorCode(), e.getMessage()).build());
+        });
+
+        // A write that couldn't be committed — almost always a read-only/locked program.
+        // That's a conflict with the program's current state, not a server fault, so 409
+        // rather than letting it fall through to the 500 handler below.
+        app.exception(TransactionHelper.TransactionException.class, (e, ctx) -> {
+            ctx.status(HttpStatus.CONFLICT);
+            ctx.json(Response.error(ctx, port, "TRANSACTION_FAILED", e.getMessage()).build());
         });
 
         // Validation failures conventionally surface as IllegalArgumentException

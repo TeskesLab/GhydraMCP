@@ -72,7 +72,6 @@ ghydra functions set-signature --name NAME --signature "int foo(char *buf, int l
 ghydra functions set-comment --address ADDR --comment "..."  # Set comment
 ghydra functions set-variable --name NAME --variable VAR --new-name NEW  # Rename variable
 ghydra functions set-variable --name NAME --variable VAR --data-type "size_t"  # Retype variable
-ghydra functions update-variable --address ADDR --variable-name VAR --new-data-type "size_t"  # Alt approach
 ghydra functions create --address ADDR         # Create function
 ```
 

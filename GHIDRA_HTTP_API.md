@@ -1,4 +1,4 @@
-# GhydraMCP Ghidra Plugin HTTP API v2
+# GhydraMCP Ghidra Plugin HTTP API (API_VERSION 3000)
 
 ## Overview
 
@@ -88,6 +88,8 @@ Common HTTP Status Codes:
 - `403 Forbidden`: Authenticated user lacks permission (if implemented).
 - `404 Not Found`: Resource or endpoint does not exist, or query yielded no results.
 - `405 Method Not Allowed`: HTTP verb not supported for this endpoint.
+- `409 Conflict`: A write could not be committed — most often the program is read-only or locked.
+  Returned with error code `TRANSACTION_FAILED`.
 - `500 Internal Server Error`: Unexpected error within the Ghidra plugin.
 
 ### Addressing and Searching
@@ -113,15 +115,15 @@ List endpoints support pagination using query parameters:
 ## Meta Endpoints
 
 ### `GET /plugin-version`
-Returns the version of the running Ghidra plugin and its API. Essential for compatibility checks by clients like the MCP bridge.
+Returns the version of the running Ghidra plugin and its API. Essential for compatibility checks by clients like the MCP bridge, which require an exact match against `REQUIRED_API_VERSION` (currently `3000`) at instance-registration time.
 ```json
 {
   "id": "req-meta-ver",
   "instance": "http://localhost:8192",
   "success": true,
   "result": {
-    "plugin_version": "v2.0.0", // Example plugin build version
-    "api_version": 2            // Ordinal API version
+    "plugin_version": "v3.0.0", // Example plugin build version
+    "api_version": 3000          // Ordinal API version
   },
   "_links": {
     "self": { "href": "/plugin-version" },
@@ -355,6 +357,55 @@ Represents functions within the current program. Function names are **fully-qual
   ```
 - **`GET /functions/{address}/variables`**: List local variables defined within the function. Supports searching by name.
 - **`PATCH /functions/{address}/variables/{variable_name}`**: Modify a local variable (rename, change type). Requires `name` and/or `type` in the payload.
+- **`GET /functions/{address}/cfg`**: Get the control-flow graph of the function — basic blocks and the edges between them. Built with Ghidra's `SimpleBlockModel`; the whole traversal is performed on the Swing EDT, so it is safe to call while the UI is busy.
+  ```json
+  // Example Response Fragment
+  "result": {
+    "function": "process_data",
+    "address": "0x4010a0",
+    "blocks": [
+      { "start": "0x4010a0", "end": "0x4010b7", "size": 24 },
+      { "start": "0x4010b7", "end": "0x4010c4", "size": 14 }
+      // ... more basic blocks
+    ],
+    "edges": [
+      { "from": "0x4010b7", "to": "0x4010c4", "type": "FALL_THROUGH" },
+      { "from": "0x4010b7", "to": "0x4010d8", "type": "CONDITIONAL_JUMP" }
+    ],
+    "blockCount": 5,
+    "edgeCount": 6
+  },
+  "_links": {
+    "self": { "href": "/functions/0x4010a0/cfg" },
+    "function": { "href": "/functions/0x4010a0" }
+  }
+  ```
+  `edge.type` is Ghidra's `FlowType` name (`FALL_THROUGH`, `CONDITIONAL_JUMP`, `UNCONDITIONAL_JUMP`, `CALL`, etc.). Edges whose destination block is null are omitted from `edges` entirely.
+- **`GET /functions/{address}/pcode`**: Get the decompiled p-code operations for the function. Runs a real decompilation, so it inherits the decompiler's cost.
+  - Query Parameters:
+    - `?timeout=[seconds]`: Decompiler timeout. Defaults to **60**. Lower it for very large functions to avoid a long stall.
+  ```json
+  // Example Response Fragment
+  "result": {
+    "function": "process_data",
+    "address": "0x4010a0",
+    "operations": [
+      { "address": "0x4010a0", "opcode": "INT_RETURN", "output": "return:4", "inputs": ["param1:4", "param2:4"] },
+      { "address": "0x4010a4", "opcode": "COPY", "output": "local4:4", "inputs": ["param1:4"] }
+      // ... more operations
+    ],
+    "opCount": 42
+  },
+  "_links": {
+    "self": { "href": "/functions/0x4010a0/pcode" },
+    "function": { "href": "/functions/0x4010a0" }
+  }
+  ```
+  `output` is the destination varnode rendered as `<name>:<bytes>`, or `""` when the operation writes nothing. Fails with an error if decompilation does not complete or yields no high function.
+
+Both sub-resources are also served under the by-name path: `GET /functions/by-name/{fqn}/cfg` and
+`GET /functions/by-name/{fqn}/pcode`. Function detail responses advertise them via the
+`cfg` and `pcode` HATEOAS links.
 
 ### 5. Symbols & Labels
 
@@ -798,6 +849,61 @@ Run Ghidra scripts via the API, for multi-stage or batch operations (mass rename
     "error": null
   }
   ```
+
+### 12. Raw Image
+
+Defines a `RawImage` data type at an address so a captured framebuffer renders inline in Ghidra's Listing view instead of as an opaque byte blob.
+
+- **`POST /raw-image/define`**: Create a `RawImage` data item at the given address. Clears any code units overlapping the target range and creates the data in a single transaction, so a failure leaves the Listing unchanged.
+  - Body:
+    - `address` (**required**): where the image data starts. Accepts the same forms as every other endpoint (`0x401000`, bare hex, `space::offset`).
+    - `width`, `height` (**required**): image dimensions in pixels. Must both be positive.
+    - `format` (optional, default `"RGB565"`): one of `RGB565`, `RGB888`, `ARGB8888`, `RGB332`, `ARGB4444`, `1bpp`, `2bpp`, `4bpp`, `8bpp`. The `1bpp`/`2bpp`/`4bpp`/`8bpp` forms accept the descriptive aliases `1bpp_monochrome`, `2bpp_grayscale`, `4bpp_grayscale`, `8bpp_grayscale`.
+    - `endian` (optional, default `"little"`): `little` or `big`. Only `big` is recorded on the data; `little` is the absence of the setting.
+  - The data length is derived from the format's bits-per-pixel: `ceil(width * height * bpp / 8)`.
+  ```json
+  // POST /raw-image/define
+  // { "address": "0x401000", "width": 320, "height": 240, "format": "ARGB8888", "endian": "big" }
+  "result": {
+    "address": "0x401000",
+    "width": 320,
+    "height": 240,
+    "format": "ARGB8888",
+    "bytes": 307200,
+    "message": "RawImage defined: 320x240 ARGB8888 at 0x401000 (307200 bytes)"
+  },
+  "_links": {
+    "self": { "href": "/raw-image/define" },
+    "memory": { "href": "/memory/0x401000" }
+  }
+  ```
+  Errors: `400 BAD_REQUEST` for a missing address, non-positive dimensions, or an unknown format. A transaction failure — most commonly that the program is read-only or locked — returns `409 TRANSACTION_FAILED`.
+
+- **`POST /raw-image/cleanup`**: Remove RawImage data items created by the endpoint above. Clearing a code unit leaves the underlying bytes **undefined** again — it does not delete them.
+  - Body (provide exactly one mode):
+    - `{ "address": "0x401000" }`: clear the single RawImage at that address.
+    - `{ "all": true }`: sweep every RawImage data item in the program. An empty body is treated as `all`.
+  - **Atomic.** Target collection and clearing happen inside one transaction, so the set cannot drift between the read and the write, and a failure part-way through a sweep rolls the whole thing back.
+  - **Idempotent.** Cleaning up when nothing is defined is *not* an error — it reports `removed: 0`.
+  ```json
+  // POST /raw-image/cleanup  { "address": "0x401000" }
+  "result": {
+    "mode": "single",
+    "address": "0x401000",
+    "removed": 1,
+    "bytes": 307200,
+    "addresses": ["0x401000"],
+    "addressesTruncated": false,
+    "message": "Cleared 1 RawImage data item(s), 307200 bytes"
+  },
+  "_links": {
+    "self": { "href": "/raw-image/cleanup" },
+    "define": { "href": "/raw-image/define", "method": "POST" }
+  }
+  ```
+  `addresses` is capped at 100 entries so a whole-program sweep stays bounded; when the cap bites, `addressesTruncated` is `true` and `removed`/`bytes` still reflect the full sweep.
+
+  Errors: `400 BAD_REQUEST` if `address` is unparseable, or if data is defined there that is **not** a RawImage (the message names the actual type) — this guard prevents clearing an unrelated data item. An empty `addresses` array in single mode means nothing was defined at that address.
 
 ## Design Considerations for AI Usage
 
