@@ -218,25 +218,36 @@ Closes #123
 
 ## Release Process
 
+Releases are driven by a single tag, `vX.Y.Z`, pushed to both remotes. The full
+runbook is in [RELEASING.md](RELEASING.md); the short version:
+
 1. **Preparation**:
    - Ensure all tests pass
-   - Update version numbers in:
-     - `src/main/java/eu/starsong/ghidra/api/ApiConstants.java`
-     - `bridge_mcp_hydra.py`
-   - Update CHANGELOG.md with release notes
-   - Move content from "Unreleased" section to a new release section
+   - Move the `Unreleased` notes into a dated release section and write the
+     version into every place that carries it, with one command:
+     ```bash
+     python scripts/prepare_release.py --version 3.1.0
+     ```
+     It updates `ApiConstants.PLUGIN_VERSION`, `bridge_mcp_hydra.py`'s
+     `BRIDGE_VERSION`, `pyproject.toml`, `ghydra/__init__.py` and
+     `extension.properties`, and refuses to continue if the result is
+     inconsistent.
    - Merge all changes to the main branch
 
 2. **Creating a Release**:
-   - Tag the release commit with the version number (e.g., `v2.0.0`)
-   - Push the tag to GitHub
-   - The GitHub Actions workflow will automatically:
-     - Build the release artifacts
-     - Create a GitHub release
-     - Upload the artifacts
+   - Commit the release preparation and tag it: `git tag v3.1.0`
+   - Push the commit and the tag to **both** remotes:
+     ```bash
+     git push github main && git push github v3.1.0
+     git push forgejo main && git push forgejo v3.1.0
+     ```
+   - The tag push triggers the release workflows, which automatically:
+     - Verify the version constants and the CHANGELOG entry for the tag
+     - Build the release artifacts for Ghidra 11.x and 12.x
+     - Create the release with the artifacts and a `SHA256SUMS` file
+     - Verify the release exists with its assets
 
 3. **Post-Release**:
-   - Update version numbers to next development version
    - Create a new "Unreleased" section in CHANGELOG.md
    - Announce the release in appropriate channels
 
