@@ -75,11 +75,12 @@ existing release is updated with `--clobber` (GitHub) or left alone (Forgejo)
 instead of failing.
 
 ```bash
-gh workflow run release.yml -f version=3.1.0
+gh workflow run release.yml -f version=3.1.0 -f dry_run=true
 ```
 
 The `workflow_dispatch` input also accepts `dry_run`, which runs the guards and
-the whole build but publishes nothing.
+the whole build — including the artifact download and the checksums — but
+publishes nothing.
 
 Note that Forgejo cannot delete a tag that already has a release, so a bad
 release has to be replaced by a new version rather than by re-tagging.

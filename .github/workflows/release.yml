@@ -33,10 +33,10 @@ on:
         type: string
         default: ''
       dry_run:
-        description: 'Validate and build, but publish nothing'
+        description: 'Set to "true" to validate and build, but publish nothing'
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: 'false'
 
 permissions:
   contents: write
@@ -54,6 +54,7 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
       sha: ${{ steps.sha.outputs.sha }}
+      publish: ${{ steps.meta.outputs.publish }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -65,6 +66,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -83,10 +85,18 @@ jobs:
             echo "::error::'$VERSION' is not a valid version"
             exit 1
           fi
+          # The dry-run flag is resolved here, once, and handed on as a job
+          # output. Comparing inputs.dry_run directly is not safe: a
+          # workflow_dispatch input arrives as the string "true", and
+          # GitHub's expression casts it to a number, so "true" != true
+          # evaluates to true and the publish step would run anyway.
+          PUBLISH=true
+          if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then PUBLISH=false; fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "Releasing $TAG (prerelease=$PRERELEASE)"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG (prerelease=$PRERELEASE, publish=$PUBLISH)"
 
       - name: Resolve the release commit
         id: sha
@@ -141,13 +151,14 @@ jobs:
       - name: Checksum the artifacts
         run: |
           set -euo pipefail
+          ls -1 dist
           cd dist
           sha256sum *.zip > SHA256SUMS
           cd ..
           cat dist/SHA256SUMS
 
       - name: Publish to GitHub
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ needs.guard.outputs.publish == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.guard.outputs.tag }}
@@ -162,7 +173,7 @@ jobs:
             gh release upload "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --clobber \
-              dist/*.zip dist/SHA256SUMS bridge_mcp_hydra.py
+              dist/*.zip dist/SHA256SUMS dist/bridge_mcp_hydra.py
           else
             gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
@@ -170,11 +181,11 @@ jobs:
               --notes-file notes/release_notes.md \
               --target "$SHA" \
               $FLAG \
-              dist/*.zip dist/SHA256SUMS bridge_mcp_hydra.py
+              dist/*.zip dist/SHA256SUMS dist/bridge_mcp_hydra.py
           fi
 
       - name: Verify the release
-        if: ${{ inputs.dry_run != true }}
+        if: ${{ needs.guard.outputs.publish == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.guard.outputs.tag }}
