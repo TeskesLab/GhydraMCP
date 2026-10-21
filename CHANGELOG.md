@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Release automation:** a release is now a single tag (`vX.Y.Z`) pushed to both remotes. `.github/workflows/release.yml` and `.gitea/workflows/release.yml` guard, build, publish and verify it, so a release can no longer exist on one platform only.
+- **`scripts/prepare_release.py`:** prepares a release locally — moves the `Unreleased` notes into a dated section and writes the version into every location that carries it.
+- **`scripts/version.py`:** single source of truth for the release version. `--check` fails when the plugin, the bridge, the Python package and the extension descriptor disagree, or when the plugin's `API_VERSION` and the bridge's `REQUIRED_API_VERSION` disagree.
+- **`scripts/release_notes.py`:** extracts the release notes for a version from `CHANGELOG.md` and fails when the section is missing or empty — the release used to ship with an empty body in that case.
+- **`SHA256SUMS`** is attached to every release alongside the artifacts.
+- **Release verification:** both workflows re-read the published release afterwards and fail if it or its assets are missing.
+
+### Changed
+- **GitHub Actions:** `build.yml` is now a reusable workflow and no longer creates releases — `release.yml` is the single release authority. Added a version-consistency gate that runs on every push and pull request, plus `workflow_dispatch` for manual builds.
+- **Gitea Actions:** `build.yml` is build-only; the release path moved to `release.yml`, which builds the same Ghidra 11.x/12.x matrix and publishes through the `tea` CLI.
+- **Checkout depth:** the workflows now fetch the full history so the artifact name can embed the tag instead of a bare commit sha.
+
 ## [3.0.0] - 2026-10-08
 
 ### Added

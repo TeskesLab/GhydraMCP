@@ -1,0 +1,190 @@
+name: Release
+
+# The single release authority for GitHub.
+#
+#   guard  -> version + CHANGELOG must agree with the tag
+#   build  -> build.yml (Ghidra 11.x and 12.x matrix)
+#   publish -> GitHub release with the artifacts and a SHA256SUMS file
+#   verify -> the release and its assets must actually exist afterwards
+#
+# The Forgejo mirror is published by .gitea/workflows/release.yml. Both are
+# driven by the same tag, so a release never exists on one platform only.
+#
+# Trigger it by pushing the tag:
+#   git push github main && git push github v3.1.0
+#   git push forgejo main && git push forgejo v3.1.0
+#
+# workflow_dispatch re-publishes an existing tag (useful after a partial
+# failure) and can validate a release without publishing it (dry_run).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version without the v prefix (e.g. 3.1.0)'
+        required: true
+        type: string
+      ref:
+        description: 'Commit the tag points at (default: the dispatched ref)'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'Validate and build, but publish nothing'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="${INPUT_VERSION#v}"
+            TAG="v$VERSION"
+            PRERELEASE=false
+          else
+            TAG="$REF_NAME"
+            VERSION="${TAG#v}"
+            # A tag with a suffix (v3.1.0-rc.1) is a pre-release.
+            PRERELEASE=false
+            case "$TAG" in *-*) PRERELEASE=true ;; esac
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$VERSION' is not a valid version"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG (prerelease=$PRERELEASE)"
+
+      - name: Resolve the release commit
+        id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Version constants must match the release version
+        # The plugin and the bridge each announce a version; if they do not
+        # match the tag, the published artifacts are mislabelled.
+        run: python3 scripts/version.py --check --expect "${{ steps.meta.outputs.version }}"
+
+      - name: CHANGELOG must have notes for this version
+        # Without this the release would ship with an empty body.
+        run: python3 scripts/release_notes.py --version "${{ steps.meta.outputs.version }}" --out release_notes.md
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: release_notes.md
+
+  build:
+    name: Build release artifacts
+    needs: guard
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ needs.guard.outputs.sha }}
+      artifact_prefix: release
+
+  publish:
+    name: Publish the release
+    needs: [ guard, build ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.guard.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Collect built artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: release-ghidra*
+          merge-multiple: true
+
+      - name: Collect release notes
+        uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: notes
+
+      - name: Checksum the artifacts
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum *.zip > SHA256SUMS
+          cd ..
+          cat dist/SHA256SUMS
+
+      - name: Publish to GitHub
+        if: ${{ inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.guard.outputs.tag }}
+          SHA: ${{ needs.guard.outputs.sha }}
+          PRERELEASE: ${{ needs.guard.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          FLAG=""
+          if [ "$PRERELEASE" = "true" ]; then FLAG="--prerelease"; fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, uploading assets to it"
+            gh release upload "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber \
+              dist/*.zip dist/SHA256SUMS bridge_mcp_hydra.py
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Release $TAG" \
+              --notes-file notes/release_notes.md \
+              --target "$SHA" \
+              $FLAG \
+              dist/*.zip dist/SHA256SUMS bridge_mcp_hydra.py
+          fi
+
+      - name: Verify the release
+        if: ${{ inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.guard.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isPrerelease,assets \
+            --jq '{tag: .tagName, prerelease: .isPrerelease, assets: [.assets[].name]}'
+          count=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')
+          if [ "$count" -lt 3 ]; then
+            echo "::error::release $TAG has only $count assets, expected the extension zips plus SHA256SUMS"
+            exit 1
+          fi

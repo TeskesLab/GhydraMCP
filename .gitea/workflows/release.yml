@@ -1,0 +1,170 @@
+name: Release
+
+# The Forgejo mirror of the GitHub release.
+#
+# Same guard as the GitHub workflow (version.py / release_notes.py), same
+# artifact set (Ghidra 11.x and 12.x), same SHA256SUMS. The release is created
+# with tea because the Forgejo instance is on the local network and is not
+# reachable from a GitHub-hosted runner.
+#
+# Trigger it by pushing the tag to this repository:
+#   git push forgejo main && git push forgejo v3.1.0
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version without the v prefix (e.g. 3.1.0)'
+        required: true
+        type: string
+
+jobs:
+  release:
+    name: Publish the release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the release version
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="${INPUT_VERSION#v}"
+          else
+            VERSION="${REF_NAME#v}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$VERSION' is not a valid version"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION"
+
+      - name: "Guard: version constants must match the release version"
+        run: python3 scripts/version.py --check --expect "${{ steps.meta.outputs.version }}"
+
+      - name: "Guard: CHANGELOG must have notes for this version"
+        run: python3 scripts/release_notes.py --version "${{ steps.meta.outputs.version }}" --out release_notes.md
+
+      - name: Install build tools
+        # This runner image ships without Maven, and jq/unzip are needed to
+        # resolve and unpack the Ghidra distributions.
+        run: |
+          apt-get update
+          apt-get install -y maven jq unzip curl python3
+          mvn --version
+
+      - name: Build the extension for each supported Ghidra series
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p target
+          for SERIES in 11 12; do
+            echo "::group::Ghidra ${SERIES}.x"
+            AUTH=()
+            if [ -n "${GH_TOKEN:-}" ]; then
+              AUTH=(-H "Authorization: Bearer ${GH_TOKEN}")
+            fi
+            json=$(curl -fsSL "${AUTH[@]}" \
+              "https://api.github.com/repos/NationalSecurityAgency/ghidra/releases?per_page=100")
+            url=$(echo "$json" | jq -r --arg s "$SERIES" '
+              [ .[] | select(.tag_name | test("^Ghidra_" + $s + "\\.")) ]
+              | sort_by(.published_at) | last
+              | .assets[] | select(.name | test("_PUBLIC_[0-9]+\\.zip$")) | .browser_download_url')
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
+              echo "Could not resolve a Ghidra ${SERIES}.x release"; exit 1
+            fi
+            ver=$(echo "$url" | grep -oP 'ghidra_\K[0-9]+\.[0-9]+(\.[0-9]+)?(?=_PUBLIC)')
+            echo "Ghidra ${SERIES}.x -> ${ver}"
+
+            # Each series builds in its own worktree: the artifact name embeds
+            # the build timestamp, so two builds sharing a target/ directory
+            # could collide on the same name.
+            WORK="build-${SERIES}"
+            git worktree add --detach "$WORK" HEAD
+            curl -fsSL -o "${WORK}/ghidra.zip" "$url"
+            mkdir -p "${WORK}/ghidra-install"
+            unzip -q "${WORK}/ghidra.zip" -d "${WORK}/ghidra-install"
+            (
+              cd "$WORK"
+              export GHIDRA_HOME="$(echo "$PWD"/ghidra-install/ghidra_*_PUBLIC)"
+              mvn -B package -Dghidra.version="$ver"
+              for f in target/Ghydra-*.zip; do
+                mv "$f" "${f%.zip}-ghidra${ver}.zip"
+              done
+              mv target/Ghydra-*.zip ../target/
+            )
+            git worktree remove --force "$WORK"
+            echo "::endgroup::"
+          done
+          ls -1 target/Ghydra-*.zip
+
+      - name: Checksum the artifacts
+        run: |
+          set -euo pipefail
+          cd target
+          sha256sum *.zip > SHA256SUMS
+          cd ..
+          cat target/SHA256SUMS
+
+      - name: Install tea CLI
+        run: |
+          curl -sL https://dl.gitea.io/tea/0.13.0/tea-0.13.0-linux-amd64 -o /usr/local/bin/tea
+          chmod +x /usr/local/bin/tea
+
+      - name: Create the release
+        env:
+          TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITEA_SERVER: ${{ gitea.server_url }}
+          GITEA_REPOSITORY: ${{ gitea.repository }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          REPO_OWNER="${GITEA_REPOSITORY%%/*}"
+          REPO_NAME="${GITEA_REPOSITORY#*/}"
+
+          tea login add --name default --url "$GITEA_SERVER" --token "$TEA_TOKEN"
+
+          if curl -sf -H "Authorization: token $TEA_TOKEN" \
+               "$GITEA_SERVER/api/v1/repos/$GITEA_REPOSITORY/releases/tags/$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, nothing to do"
+            exit 0
+          fi
+
+          ASSETS=()
+          for f in target/Ghydra-*.zip target/SHA256SUMS bridge_mcp_hydra.py; do
+            [ -f "$f" ] && ASSETS+=("--asset" "$f")
+          done
+
+          tea releases create \
+            --repo "${REPO_OWNER}/${REPO_NAME}" \
+            --login default \
+            --tag "$TAG" \
+            --title "Release $TAG" \
+            --note-file release_notes.md \
+            "${ASSETS[@]}"
+
+      - name: Verify the release
+        env:
+          TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITEA_SERVER: ${{ gitea.server_url }}
+          GITEA_REPOSITORY: ${{ gitea.repository }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          curl -sf -H "Authorization: token $TEA_TOKEN" \
+            "$GITEA_SERVER/api/v1/repos/$GITEA_REPOSITORY/releases/tags/$TAG" \
+            | jq '{tag: .tag_name, assets: [.assets[].name]}'
