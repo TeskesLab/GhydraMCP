@@ -126,8 +126,8 @@ jobs:
       - name: Create the release
         env:
           TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          GITEA_SERVER: ${{ gitea.server_url }}
-          GITEA_REPOSITORY: ${{ gitea.repository }}
+          GITEA_SERVER: ${{ github.server_url }}
+          GITEA_REPOSITORY: ${{ github.repository }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
@@ -159,8 +159,8 @@ jobs:
       - name: Verify the release
         env:
           TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          GITEA_SERVER: ${{ gitea.server_url }}
-          GITEA_REPOSITORY: ${{ gitea.repository }}
+          GITEA_SERVER: ${{ github.server_url }}
+          GITEA_REPOSITORY: ${{ github.repository }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
