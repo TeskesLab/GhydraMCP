@@ -129,10 +129,22 @@ jobs:
           done
           ls -1 target/Ghydra-*.zip
 
+      - name: Stage artifacts
+        # upload-artifact preserves the directory structure relative to the
+        # least common ancestor of the matched paths. Uploading the zips and
+        # the bridge from their own locations would put the zips under
+        # "target/" inside the artifact, and the release job would then look
+        # for dist/*.zip and find nothing. Staging them in one directory
+        # makes the artifact flat.
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/Ghydra-*.zip dist/
+          cp bridge_mcp_hydra.py dist/
+          ls -1 dist
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact_prefix || 'Ghydra-nightly' }}-ghidra${{ steps.ghidra.outputs.version }}
-          path: |
-            target/Ghydra-*.zip
-            bridge_mcp_hydra.py
+          path: dist/
