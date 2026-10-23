@@ -246,6 +246,16 @@ all — `uv run` resolves them:
 uv run bridge_mcp_hydra.py
 ```
 
+On NixOS, point `uv` at the interpreter that nix provides. Inside a `nix-shell`, `uv`
+cannot install its own managed Python and fails with `Python interpreter not found`:
+
+```bash
+nix-shell -p uv python3 --run 'uv run --script --python python3 bridge_mcp_hydra.py'
+```
+
+`--python python3` tells `uv` to use the nix-provided interpreter instead of
+downloading one.
+
 The bridge resolves the Kuna binary from `PATH` or from the `kuna.path` key in
 `~/.ghydra/config.json`, which is the way to point at a binary installed outside the
 default profile. See [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
