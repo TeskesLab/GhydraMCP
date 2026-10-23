@@ -38,6 +38,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up JDK 21
+        # The extension targets Java 21. The runner image ships an older JDK,
+        # and Maven fails with "invalid target release: 21" without this.
+        uses: actions/setup-java@v3
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
       - name: Resolve the release version
         id: meta
         env:
@@ -88,6 +96,8 @@ jobs:
         env:
           PROBE_GITHUB: ${{ secrets.GITHUB_TOKEN }}
           PROBE_GITEA: ${{ secrets.RELEASE_TOKEN }}
+          GITEA_SERVER: ${{ github.server_url }}
+          GITEA_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           echo "GITHUB_TOKEN secret: $([ -n "$PROBE_GITHUB" ] && echo present || echo empty)"
@@ -105,16 +115,21 @@ jobs:
           fi
           echo "github_token_usable=$GITHUB_USABLE" >> "$GITHUB_OUTPUT"
 
-          # A Gitea token is what creates the release here.
-          GITEA_USABLE=false
-          if [ -n "$PROBE_GITEA" ]; then
+          # Which secret can talk to this Gitea instance? Gitea fills the
+          # GITHUB_TOKEN secret with its own job token, so that one usually
+          # works here; a hand-made RELEASE_TOKEN works too.
+          SOURCE=none
+          for pair in "GITHUB_TOKEN:$PROBE_GITHUB" "RELEASE_TOKEN:$PROBE_GITEA"; do
+            name="${pair%%:*}"
+            value="${pair#*:}"
+            [ -z "$value" ] && continue
             code=$(curl -s -o /dev/null -w '%{http_code}' \
-              -H "Authorization: token $PROBE_GITEA" \
-              "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases")
-            echo "RELEASE_TOKEN against the Gitea API: HTTP $code"
-            if [ "$code" = "200" ]; then GITEA_USABLE=true; fi
-          fi
-          echo "gitea_token_usable=$GITEA_USABLE" >> "$GITHUB_OUTPUT"
+              -H "Authorization: token $value" \
+              "$GITEA_SERVER/api/v1/repos/$GITEA_REPOSITORY/releases")
+            echo "$name against the Gitea API: HTTP $code"
+            if [ "$code" = "200" ] && [ "$SOURCE" = "none" ]; then SOURCE="$name"; fi
+          done
+          echo "gitea_token_source=$SOURCE" >> "$GITHUB_OUTPUT"
 
       - name: Build the extension for each supported Ghidra series
         env:
@@ -186,21 +201,24 @@ jobs:
         if: ${{ steps.meta.outputs.publish != 'true' }}
         env:
           TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN_SOURCE: ${{ steps.probe.outputs.gitea_token_source }}
           GITEA_SERVER: ${{ github.server_url }}
           GITEA_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           REPO_OWNER="${GITEA_REPOSITORY%%/*}"
           REPO_NAME="${GITEA_REPOSITORY#*/}"
-          if [ -z "${TEA_TOKEN:-}" ]; then
-            echo "::error::the RELEASE_TOKEN secret is missing: create a Gitea token with the write:repository scope and store it in the repository settings (Actions -> Secrets). Gitea reserves the GITHUB_ and GITEA_ prefixes, so the secret cannot be called GITHUB_TOKEN."
+          if [ "$TOKEN_SOURCE" = "none" ]; then
+            echo "::error::no secret authenticates against this Gitea instance: neither GITHUB_TOKEN nor RELEASE_TOKEN works. Gitea reserves the GITHUB_ and GITEA_ prefixes, so a hand-made secret has to carry another name."
             exit 1
           fi
-          count=$(curl -sf -H "Authorization: token $TEA_TOKEN" \
+          TOKEN="${!TOKEN_SOURCE}"
+          count=$(curl -sf -H "Authorization: token $TOKEN" \
             "$GITEA_SERVER/api/v1/repos/$GITEA_REPOSITORY/releases" | jq 'length')
-          echo "the token authenticates: ${count} existing release(s)"
+          echo "the $TOKEN_SOURCE secret authenticates: ${count} existing release(s)"
           # The publish step logs in with the same token, so prove that too.
-          tea login add --name default --url "$GITEA_SERVER" --token "$TEA_TOKEN"
+          tea login add --name default --url "$GITEA_SERVER" --token "$TOKEN"
           tea releases ls --repo "${REPO_OWNER}/${REPO_NAME}" --login default
 
       - name: Create the release
@@ -208,8 +226,12 @@ jobs:
         env:
           # The Gitea token that creates the release. Gitea reserves the
           # GITHUB_ and GITEA_ prefixes for the secrets it provides itself,
-          # so a repository secret has to carry another name.
+          # so a repository secret has to carry another name - but the
+          # instance's own job token usually works, and the probe picks
+          # whichever one authenticates.
           TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN_SOURCE: ${{ steps.probe.outputs.gitea_token_source }}
           GITEA_SERVER: ${{ github.server_url }}
           GITEA_REPOSITORY: ${{ github.repository }}
           VERSION: ${{ steps.meta.outputs.version }}
@@ -218,17 +240,22 @@ jobs:
           TAG="v${VERSION}"
           REPO_OWNER="${GITEA_REPOSITORY%%/*}"
           REPO_NAME="${GITEA_REPOSITORY#*/}"
+          if [ "$TOKEN_SOURCE" = "none" ]; then
+            echo "::error::no secret authenticates against this Gitea instance: neither GITHUB_TOKEN nor RELEASE_TOKEN works"
+            exit 1
+          fi
+          TOKEN="${!TOKEN_SOURCE}"
 
-          tea login add --name default --url "$GITEA_SERVER" --token "$TEA_TOKEN"
+          tea login add --name default --url "$GITEA_SERVER" --token "$TOKEN"
 
-          if curl -sf -H "Authorization: token $TEA_TOKEN" \
+          if curl -sf -H "Authorization: token $TOKEN" \
                "$GITEA_SERVER/api/v1/repos/$GITEA_REPOSITORY/releases/tags/$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists, nothing to do"
             exit 0
           fi
 
           ASSETS=()
-          for f in target/Ghydra-*.zip target/SHA256SUMS bridge_mcp_hydra.py; do
+          for f in target/Ghidra-*.zip target/SHA256SUMS bridge_mcp_hydra.py; do
             [ -f "$f" ] && ASSETS+=("--asset" "$f")
           done
 
@@ -244,12 +271,19 @@ jobs:
         if: ${{ steps.meta.outputs.publish == 'true' }}
         env:
           TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN_SOURCE: ${{ steps.probe.outputs.gitea_token_source }}
           GITEA_SERVER: ${{ github.server_url }}
           GITEA_REPOSITORY: ${{ github.repository }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
           TAG="v${VERSION}"
-          curl -sf -H "Authorization: token $TEA_TOKEN" \
+          if [ "$TOKEN_SOURCE" = "none" ]; then
+            echo "::error::no secret authenticates against this Gitea instance"
+            exit 1
+          fi
+          TOKEN="${!TOKEN_SOURCE}"
+          curl -sf -H "Authorization: token $TOKEN" \
             "$GITEA_SERVER/api/v1/repos/$GITEA_REPOSITORY/releases/tags/$TAG" \
             | jq '{tag: .tag_name, assets: [.assets[].name]}'
