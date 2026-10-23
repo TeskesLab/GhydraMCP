@@ -10,7 +10,9 @@
 
 GhydraMCP connects [Ghidra](https://ghidra-sre.org/) to AI assistants for reverse engineering, over the [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol/mcp) or a command-line tool.
 
-![GhydraMCP logo](https://github.com/user-attachments/assets/86b9b2de-767c-4ed5-b082-510b8109f00f)
+![GhydraMCP logo](images/logo/ghydramcp-logo.png)
+
+<sub>[2K master](images/logo/ghydramcp-logo-2k.png) — the QR in the red seal is scannable at this size · [scannable seal, 1024](images/logo/ghydramcp-qr-seal.png) — scans down to 200px</sub>
 
 ## Overview
 
