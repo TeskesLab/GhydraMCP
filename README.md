@@ -163,6 +163,38 @@ from function and symbol responses.
 - Pagination for handling large result sets
 - Filtering capabilities across all resources
 
+## Kuna decompiler (optional)
+
+[Kuna](https://github.com/Noelo-Lab/kuna) is a standalone decompiler CLI. GhydraMCP can drive it directly — no Ghidra instance involved — which is useful for a file that is not open in Ghidra, a packed sample, or a second opinion on a function.
+
+The integration is **opt-in**, because it lets the bridge run a program on the host. Enable it with the environment variable:
+
+```bash
+export GHYDRA_KUNA=1
+```
+
+or in the CLI config file, which also accepts the path to the executable:
+
+```json
+{
+  "kuna": {
+    "enabled": true,
+    "path": "/usr/local/bin/kuna"
+  }
+}
+```
+
+The config file wins when both are set: `"enabled": false` keeps the integration off even with `GHYDRA_KUNA=1`. `ghydra kuna status` reports which one decided.
+
+Kuna loads and analyses the whole image on every invocation, so a large binary costs seconds per call. For a file of any size, export it once and read the result from disk:
+
+```bash
+ghydra kuna export ./challenge.exe -o ./challenge.kuna   # analyse once
+ghydra kuna export-read ./challenge.kuna main              # then read it
+```
+
+The MCP bridge exposes the same operations as `kuna_*` tools, including `kuna_export_start` / `kuna_export_status` / `kuna_export_read` for the export flow. See [GHYDRA_CLI.md](GHYDRA_CLI.md#kuna-commands) for the command reference.
+
 # Installation
 
 ## Prerequisites
@@ -323,6 +355,21 @@ Tools are grouped into namespaces:
 - `segments_list`: List memory blocks (params: offset, limit, name [optional], port [optional])
 - `namespaces_list`: List namespaces (params: offset, limit, port [optional])
 - `variables_list`: List variables (params: offset, limit, search [optional], global_only [optional], port [optional])
+
+**Kuna Decompiler** (`kuna_*`): local tools that drive the Kuna CLI; no Ghidra instance and no `port` parameter. Opt-in: `GHYDRA_KUNA=1` or `"kuna": {"enabled": true}` in `~/.ghydra/config.json`.
+- `kuna_status`: Report whether the integration is enabled, which binary it resolved and which opt-in decided
+- `kuna_summary`: Summarize a binary (params: binary_path, mode [optional])
+- `kuna_functions`: List the functions Kuna recovered (params: binary_path, name_filter [optional], offset, limit)
+- `kuna_decompile`: Decompile one function (params: binary_path, function, addr [optional], mode [optional], max_lines [optional])
+- `kuna_disassemble`: Disassemble a function or range (params: binary_path, target, count [optional], bytes [optional], addr [optional])
+- `kuna_read`: Read raw bytes as a hex dump (params: binary_path, target, bytes, addr [optional])
+- `kuna_strings`: Search strings; the pattern is required (params: binary_path, pattern, limit, min_length, encoding, section [optional])
+- `kuna_crypto`: Find crypto constants and the functions using them (params: binary_path, algorithm [optional], section [optional])
+- `kuna_xrefs`: Cross-references of a symbol (params: binary_path, target, direction, kind [optional])
+- `kuna_unpack`: Unpack a UPX image (params: binary_path, output [optional])
+- `kuna_export_start`: Export a binary to disk in the background (params: binary_path, functions [optional], jobs, job_id [optional])
+- `kuna_export_status`: Progress of an export job (params: job_id)
+- `kuna_export_read`: Read a function out of an export (params: job_id, function [optional], artifact, max_bytes)
 
 **Example Usage**:
 ```python

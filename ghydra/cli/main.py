@@ -103,6 +103,7 @@ from . import (
     variables,
     datatypes,
     raw_image,
+    kuna,
 )
 
 cli.add_command(instances.instances)
@@ -124,6 +125,7 @@ cli.add_command(namespaces.namespaces)
 cli.add_command(variables.variables)
 cli.add_command(datatypes.datatypes)
 cli.add_command(raw_image.raw_image)
+cli.add_command(kuna.kuna)
 
 
 @cli.command('version')

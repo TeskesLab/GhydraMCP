@@ -69,13 +69,25 @@ Example configuration:
   "timeout": 10,
   "use_colors": true,
   "page_output": true,
-  "max_pagination": 100
+  "max_pagination": 100,
+  "kuna": {
+    "enabled": false,
+    "path": ""
+  }
 }
 ```
 
 Environment variables:
 - `GHYDRA_HOST`: Override default Ghidra host
 - `GHYDRA_PORT`: Override default Ghidra port
+- `GHYDRA_KUNA`: Enable the Kuna decompiler integration (`1`, `true`, `yes`, `on`)
+- `GHYDRA_KUNA_PATH`: Path to the `kuna` executable
+- `GHYDRA_KUNA_TIMEOUT`: Timeout in seconds for a Kuna call (default: 900)
+
+The `kuna` section of the config file wins over the environment: `"enabled": false` keeps the
+Kuna integration off even when `GHYDRA_KUNA=1` is set, and `kuna.path` overrides
+`GHYDRA_KUNA_PATH`. A config file without an `enabled` value leaves the decision to the
+environment.
 
 ## Implemented Command Groups
 
@@ -217,6 +229,77 @@ bites), but `removed` and `bytes` always reflect the full sweep.
 
 Passing `--address` where something other than a RawImage is defined is an error — the CLI will
 not clear an unrelated data item.
+
+### Kuna Commands
+
+Drive the [Kuna](https://github.com/Noelo-Lab/kuna) decompiler CLI directly. These commands run on
+this machine and need **no Ghidra instance** — useful for a file that is not open in Ghidra, a
+packed sample, or a second opinion on a function.
+
+The integration is opt-in, because it lets the CLI run a program on the host:
+
+```bash
+export GHYDRA_KUNA=1
+```
+
+or in `~/.ghydra/config.json`:
+
+```json
+{ "kuna": { "enabled": true, "path": "/usr/local/bin/kuna" } }
+```
+
+The config file wins when both are set. `ghydra kuna status` reports which one decided.
+
+```bash
+# Is the integration enabled, and which binary did it resolve?
+ghydra kuna status
+
+# Size up a binary: function count, entry point, reachability
+ghydra kuna summary ./challenge.exe
+
+# List the recovered functions
+ghydra kuna functions ./challenge.exe --limit 20
+ghydra kuna functions ./challenge.exe --name main
+
+# Decompile one function
+ghydra kuna decompile ./challenge.exe main
+ghydra kuna decompile ./challenge.exe 0x401000 --addr
+
+# Disassemble and read bytes
+ghydra kuna disassemble ./challenge.exe main
+ghydra kuna read ./challenge.exe 0x401000 --bytes 32
+
+# Search strings (the pattern is required: an unfiltered scan is huge)
+ghydra kuna strings ./challenge.exe '(?i)password|flag'
+
+# Find crypto constants and the functions that use them
+ghydra kuna crypto ./challenge.exe --algorithm AES
+
+# Cross-references of a symbol
+ghydra kuna xrefs ./challenge.exe main --direction to
+
+# Unpack a UPX image
+ghydra kuna unpack ./packed.exe -o ./unpacked.exe
+
+# Machine-readable
+ghydra --json kuna summary ./challenge.exe
+```
+
+Kuna loads and analyses the whole image on every invocation, so a large binary costs seconds per
+call. Export it once and read the result from disk instead:
+
+```bash
+# Analyse once, write the recovered C, the disassembly and an index to disk
+ghydra kuna export ./challenge.exe -o ./challenge.kuna
+
+# Then read from the export
+ghydra kuna export-read ./challenge.kuna main
+ghydra kuna export-read ./challenge.kuna main --artifact asm
+ghydra kuna export-read ./challenge.kuna --artifact index
+```
+
+Without `-o`, the export goes to `~/.ghydra/kuna/<hash of path and mtime>/`, so re-analysing the
+same file reuses the same directory.
 
 ## Remaining Command Groups to Implement
 

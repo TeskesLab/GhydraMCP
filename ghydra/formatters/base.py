@@ -168,6 +168,19 @@ class BaseFormatter(ABC):
         pass
 
     @abstractmethod
+    def format_kuna(self, data: Dict[str, Any]) -> str:
+        """Format a Kuna decompiler result.
+
+        Args:
+            data: Result with 'kind' (what was requested) and 'data' (the
+                  payload returned by Kuna)
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
     def format_error(self, error: Exception) -> str:
         """Format error message.
 

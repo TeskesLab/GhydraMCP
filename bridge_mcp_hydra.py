@@ -9,9 +9,13 @@
 # Provides namespaced tools for interacting with Ghidra's reverse engineering capabilities
 import base64
 import functools
+import hashlib
+import json
 import os
 import re
+import shutil
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -78,6 +82,336 @@ def _http_session() -> requests.Session:
         session = requests.Session()
         _http_local.session = session
     return session
+
+
+# ================= Kuna integration =================
+# Kuna (https://github.com/Noelo-Lab/kuna) is a standalone decompiler CLI.
+# The bridge shells out to it, so the kuna_* tools need no Ghidra instance
+# and work against any Ghidra version - nothing here touches the REST API.
+#
+# Shelling out is an elevation of privilege for the bridge (it normally only
+# speaks HTTP to Ghidra), so the integration is opt-in:
+#
+#   * the GHYDRA_KUNA environment variable (1/true/yes/on), or
+#   * "kuna": {"enabled": true} in ~/.ghydra/config.json
+#
+# The config file wins when both are present. The config file also carries
+# "kuna": {"path": ...} to point at a specific binary.
+
+KUNA_ENV_ENABLED = "GHYDRA_KUNA"
+KUNA_ENV_PATH = "GHYDRA_KUNA_PATH"
+KUNA_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".ghydra")
+KUNA_CONFIG_FILE = os.path.join(KUNA_CONFIG_DIR, "config.json")
+KUNA_WORK_DIR = os.path.join(KUNA_CONFIG_DIR, "kuna")
+
+# Kuna loads and analyses the whole image on every invocation, so a large
+# binary costs seconds per call. The default timeout matches the bridge's own
+# read timeout; GHYDRA_KUNA_TIMEOUT lowers it for callers that would rather
+# fail fast than wait.
+KUNA_DEFAULT_TIMEOUT = int(os.environ.get("GHYDRA_KUNA_TIMEOUT", str(DEFAULT_TIMEOUT)))
+
+# Refuse to pull an unbounded answer into the agent's context. 8 MiB is well
+# above a full function listing and well below the payload that stalls an
+# MCP client.
+KUNA_MAX_OUTPUT = 8 * 1024 * 1024
+
+# Export jobs started by kuna_export_start, keyed by job id. The registry
+# lives in the bridge process: a job started by one bridge is invisible to
+# another.
+_kuna_jobs: Dict[str, dict] = {}
+_kuna_jobs_lock = Lock()
+
+
+def _kuna_config() -> dict:
+    """Read the "kuna" section of ~/.ghydra/config.json.
+
+    Never raises: a missing or malformed config simply means "not configured".
+    """
+    try:
+        with open(KUNA_CONFIG_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    section = data.get("kuna")
+    return section if isinstance(section, dict) else {}
+
+
+def _kuna_truthy(value: Any) -> bool:
+    """Interpret an opt-in value coming from the environment or the config."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on", "enabled")
+    return False
+
+
+def _kuna_enabled() -> bool:
+    """Is the Kuna integration enabled? The config file wins over the env var.
+
+    A config file that carries no "enabled" value (or a null one) leaves the
+    decision to GHYDRA_KUNA; an explicit true or false in the file wins.
+    """
+    config = _kuna_config()
+    if config.get("enabled") is not None:
+        return _kuna_truthy(config["enabled"])
+    return _kuna_truthy(os.environ.get(KUNA_ENV_ENABLED))
+
+
+def _kuna_candidates() -> List[str]:
+    """Where the kuna binary may live, most specific first."""
+    candidates: List[str] = []
+    configured = _kuna_config().get("path") or os.environ.get(KUNA_ENV_PATH)
+    if configured:
+        candidates.append(os.path.expanduser(str(configured)))
+    found = shutil.which("kuna")
+    if found:
+        candidates.append(found)
+    home = os.path.expanduser("~")
+    candidates.append(os.path.join(home, "scoop", "shims", "kuna.exe"))
+    candidates.append(os.path.join(home, "scoop", "apps", "kuna", "current", "kuna.exe"))
+    return candidates
+
+
+def _kuna_binary() -> Optional[str]:
+    """Resolve the kuna executable, or None when it is not installed."""
+    for candidate in _kuna_candidates():
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _kuna_error(message: str, code: str = "KUNA_ERROR") -> dict:
+    """Build the bridge's error envelope for a Kuna failure."""
+    return {"success": False, "error": {"code": code, "message": message}}
+
+
+def _kuna_guard() -> Optional[dict]:
+    """Return an error envelope when the integration is off, else None."""
+    if _kuna_enabled():
+        return None
+    return _kuna_error(
+        "the Kuna integration is disabled. Enable it with the GHYDRA_KUNA=1 "
+        "environment variable, or by adding 'kuna': {'enabled': true} to "
+        f"{KUNA_CONFIG_FILE}",
+        code="KUNA_DISABLED",
+    )
+
+
+def _kuna_target(binary_path: str) -> Union[str, dict]:
+    """Validate a binary path.
+
+    Returns the absolute path, or an error envelope when the path is empty
+    or names no file.
+    """
+    if not binary_path:
+        return _kuna_error("binary_path is required")
+    path = os.path.abspath(os.path.expanduser(binary_path))
+    if not os.path.isfile(path):
+        return _kuna_error(f"no such file: {binary_path}")
+    return path
+
+
+def _kuna_run(args: List[str], timeout: Optional[int] = None) -> dict:
+    """Run the kuna binary with args.
+
+    Returns {"code": int, "stdout": str, "stderr": str}. A missing binary is
+    reported as 127 and a timeout as 124, the conventional shell codes.
+    """
+    executable = _kuna_binary()
+    if not executable:
+        return {"code": 127, "stdout": "", "stderr": "the kuna binary was not found"}
+    limit = timeout if timeout is not None else KUNA_DEFAULT_TIMEOUT
+    try:
+        completed = subprocess.run(
+            [executable, *args],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=limit,
+        )
+    except subprocess.TimeoutExpired:
+        return {"code": 124, "stdout": "", "stderr": f"kuna timed out after {limit}s"}
+    except OSError as exc:
+        return {"code": 126, "stdout": "", "stderr": f"could not launch kuna: {exc}"}
+    return {
+        "code": completed.returncode,
+        "stdout": completed.stdout or "",
+        "stderr": completed.stderr or "",
+    }
+
+
+def _kuna_json(args: List[str], timeout: Optional[int] = None) -> dict:
+    """Run kuna and parse its JSON output.
+
+    Returns the bridge envelope: {"success": True, "result": <parsed>} or
+    {"success": False, "error": {...}}.
+    """
+    command = " ".join(args[:1])
+    outcome = _kuna_run(args, timeout=timeout)
+    stdout = outcome["stdout"].strip()
+    parsed: Any = None
+    if stdout:
+        try:
+            parsed = json.loads(stdout)
+        except ValueError:
+            parsed = None
+
+    if outcome["code"] != 0:
+        detail = outcome["stderr"].strip() or stdout or "no output"
+        if isinstance(parsed, dict) and parsed.get("error"):
+            detail = str(parsed["error"])
+        return _kuna_error(f"kuna {command} failed (exit {outcome['code']}): {detail}")
+
+    if parsed is None:
+        return _kuna_error(f"kuna {command} did not return JSON")
+
+    if len(stdout) > KUNA_MAX_OUTPUT:
+        return _kuna_error(
+            f"kuna {command} returned {len(stdout)} bytes of JSON, above the "
+            f"{KUNA_MAX_OUTPUT} byte cap; narrow the request"
+        )
+
+    if isinstance(parsed, dict) and parsed.get("error"):
+        return _kuna_error(f"kuna {command}: {parsed['error']}")
+
+    return {"success": True, "result": parsed}
+
+
+def _kuna_work_dir(binary: str) -> str:
+    """Where the export of a binary lives.
+
+    Keyed by path and mtime, so a rebuilt binary gets a fresh directory while
+    a re-analysis of the same file reuses it.
+    """
+    try:
+        mtime = os.path.getmtime(binary)
+    except OSError:
+        mtime = 0.0
+    digest = hashlib.sha256(f"{binary}|{mtime}".encode("utf-8")).hexdigest()[:12]
+    return os.path.join(KUNA_WORK_DIR, digest)
+
+
+def _kuna_job_view(job: dict) -> dict:
+    """The public view of an export job, with live progress when present."""
+    view = {
+        "id": job["id"],
+        "binary": job["binary"],
+        "dir": job["dir"],
+        "status": job["status"],
+        "started_at": job["started_at"],
+        "finished_at": job.get("finished_at"),
+        "returncode": job.get("returncode"),
+        "error": job.get("error"),
+    }
+    streaming = os.path.join(job["dir"], ".streaming")
+    if os.path.isfile(streaming):
+        try:
+            with open(streaming, "r", encoding="utf-8") as handle:
+                view["streaming"] = json.load(handle)
+        except (OSError, ValueError):
+            view["streaming"] = None
+    return view
+
+
+def _kuna_index_records(work_dir: str) -> List[dict]:
+    """Read index.jsonl from an export directory.
+
+    Only newline-terminated records are read: an unfinished last record is
+    deferred until the next read, because a streamed export appends a record
+    only after that function's C block is complete.
+    """
+    path = os.path.join(work_dir, "index.jsonl")
+    if not os.path.isfile(path):
+        return []
+    records: List[dict] = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if not line.endswith("\n"):
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict):
+                    records.append(record)
+    except OSError:
+        return []
+    return records
+
+
+def _kuna_export_file(work_dir: str, suffix: str) -> Optional[str]:
+    """Find the single export artifact with the given suffix."""
+    try:
+        entries = sorted(os.listdir(work_dir))
+    except OSError:
+        return None
+    for entry in entries:
+        if entry.endswith(suffix) and os.path.isfile(os.path.join(work_dir, entry)):
+            return os.path.join(work_dir, entry)
+    return None
+
+
+def _kuna_extract_c(work_dir: str, record: dict, max_bytes: int) -> Optional[str]:
+    """Slice one function's C block out of the exported .c file."""
+    path = _kuna_export_file(work_dir, ".c")
+    if not path:
+        return None
+    offset = record.get("c_offset")
+    length = record.get("c_len")
+    if not isinstance(offset, int) or not isinstance(length, int):
+        return None
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(offset)
+            blob = handle.read(length)
+    except OSError:
+        return None
+    text = blob.decode("utf-8", errors="replace")
+    if max_bytes and len(text) > max_bytes:
+        text = text[:max_bytes] + f"\n... truncated at {max_bytes} bytes"
+    return text
+
+
+def _kuna_extract_asm(work_dir: str, name: str, max_bytes: int) -> Optional[str]:
+    """Slice one function's disassembly out of the exported .asm file.
+
+    The file is streamed: a function block runs from its label line to the
+    next label, and labels sit at column zero while instructions are
+    indented.
+    """
+    path = _kuna_export_file(work_dir, ".asm")
+    if not path:
+        return None
+    label = f"{name}:"
+    block: List[str] = []
+    inside = False
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if not inside:
+                    if line.startswith(label):
+                        inside = True
+                        block.append(line)
+                    continue
+                if line and not line[0].isspace() and not line.startswith(";"):
+                    break
+                block.append(line)
+    except OSError:
+        return None
+    if not inside:
+        return None
+    text = "".join(block)
+    if max_bytes and len(text) > max_bytes:
+        text = text[:max_bytes] + f"\n... truncated at {max_bytes} bytes"
+    return text
 
 
 instructions = """
@@ -1212,6 +1546,334 @@ def format_pcode(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+# ================= Kuna formatters =================
+
+def format_kuna_status(response: dict, **kwargs) -> str:
+    """Format the Kuna integration status"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    state = "enabled" if result.get("enabled") else "disabled"
+    binary = result.get("binary") or "not found"
+    version = result.get("version")
+    lines = [
+        f"Kuna integration: {state} (opt-in via {result.get('source', 'unknown')})",
+        f"  Binary: {binary}" + (f"  [{version}]" if version else ""),
+        f"  Config: {result.get('config_file', '')}",
+        f"  Work:   {result.get('work_dir', '')}",
+    ]
+
+    jobs = result.get("jobs") or []
+    lines.append("")
+    if jobs:
+        lines.append(f"Export jobs ({len(jobs)}):")
+        for job in jobs:
+            lines.append(f"  {job.get('id')}  {job.get('status')}  {job.get('binary')}")
+    else:
+        lines.append("Export jobs: none")
+
+    return "\n".join(lines)
+
+
+def format_kuna_summary(response: dict, **kwargs) -> str:
+    """Format the kuna binary summary"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    summary = result.get("summary") or {}
+    entry = summary.get("entry") or {}
+    main = summary.get("main") or {}
+
+    lines = [
+        f"Summary for {result.get('binary', '?')}",
+        f"  Functions:  {result.get('count', '?')} (total {result.get('total', '?')})",
+    ]
+    if entry:
+        lines.append(f"  Entry:      {entry.get('name')} @ {entry.get('address_hex')}")
+    if main:
+        lines.append(f"  Main:       {main.get('name')} @ {main.get('address_hex')}")
+    lines.append(f"  Reachable:  {summary.get('reachable_from_entry', '?')} from entry")
+    lines.append(f"  No callers: {summary.get('no_callers', '?')}")
+    lines.append(f"  Code bytes: {summary.get('code_bytes', '?')}")
+
+    runtime = summary.get("runtime")
+    if runtime:
+        lines.append(f"  Runtime:    {runtime}")
+
+    buckets = summary.get("size_buckets") or []
+    if buckets:
+        lines.append("")
+        lines.append("  Size buckets:")
+        for bucket in buckets:
+            lines.append(f"    {bucket.get('bucket', '?'):>10}  {bucket.get('count', 0)}")
+
+    largest = summary.get("largest") or []
+    if largest:
+        lines.append("")
+        lines.append("  Largest functions:")
+        for fn in largest[:10]:
+            lines.append(
+                f"    {fn.get('name', '?'):<28} {fn.get('size', 0):>7} bytes  @ {fn.get('address_hex', '?')}"
+            )
+
+    warnings = result.get("warnings") or []
+    if warnings:
+        lines.append("")
+        lines.append("  Warnings:")
+        for warning in warnings:
+            lines.append(f"    {warning}")
+
+    return "\n".join(lines)
+
+
+def format_kuna_functions(response: dict, offset: int = 0, limit: int = 100, **kwargs) -> str:
+    """Format the kuna function list"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    items = response.get("result", [])
+    total = _list_total(response, items)
+
+    lines = [f"Functions ({offset + 1}-{offset + len(items)} of {total}):", ""]
+    for fn in items:
+        lines.append(
+            f"  {fn.get('address_hex', '???'):<18} {fn.get('name', '???'):<32} {fn.get('size', 0):>7}B"
+        )
+
+    if offset + len(items) < total:
+        lines.append(f"\n  ... {total - offset - len(items)} more (use offset={offset + limit})")
+
+    return "\n".join(lines)
+
+
+def format_kuna_decompile(response: dict, **kwargs) -> str:
+    """Format a kuna decompilation"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    functions = result.get("functions") or []
+    if not functions:
+        return f"Kuna returned no function (count={result.get('count', 0)})"
+
+    fn = functions[0]
+    lines = [
+        f"{fn.get('name', '?')} @ {fn.get('address_hex', '?')} ({fn.get('size', 0)} bytes)",
+        "",
+    ]
+
+    code = fn.get("code") or ""
+    max_lines = kwargs.get("max_lines")
+    if code and max_lines:
+        code = "\n".join(code.splitlines()[:max_lines])
+
+    if fn.get("error"):
+        lines.append(f"// kuna error: {fn['error']}")
+    lines.append(code or "// no output")
+
+    return "\n".join(lines)
+
+
+def format_kuna_disassemble(response: dict, **kwargs) -> str:
+    """Format a kuna disassembly"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    target = result.get("target") or {}
+    lines = [
+        f"Disassembly of {target.get('name', '?')} "
+        f"({result.get('start_hex', '?')}-{result.get('end_hex', '?')}), "
+        f"{result.get('count', 0)} instructions, {result.get('bytes', 0)} bytes",
+        "",
+    ]
+
+    for instruction in result.get("instructions", []):
+        lines.append(
+            f"  {instruction.get('address_hex', '?'):<18} "
+            f"{instruction.get('bytes', ''):<30} {instruction.get('text', '')}"
+        )
+
+    if result.get("truncated"):
+        lines.append("  (output truncated)")
+
+    return "\n".join(lines)
+
+
+def format_kuna_read(response: dict, **kwargs) -> str:
+    """Format a kuna byte read as a hex dump"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    lines = [
+        f"Bytes at {result.get('start_hex', '?')} ({result.get('bytes', 0)} bytes):",
+        "",
+    ]
+
+    for row in result.get("rows", []):
+        lines.append(
+            f"  {row.get('address_hex', '?'):<18} {row.get('bytes', ''):<34} {row.get('ascii', '')}"
+        )
+
+    return "\n".join(lines)
+
+
+def format_kuna_strings(response: dict, **kwargs) -> str:
+    """Format a kuna string search"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    strings = result.get("strings", [])
+    total = result.get("count", len(strings))
+
+    lines = [f"Strings matching /{result.get('filter', '')}/ ({len(strings)} of {total}):", ""]
+    for entry in strings:
+        text = str(entry.get("text", "")).replace("\n", "\\n")
+        lines.append(
+            f"  {entry.get('address_hex', '?'):<18} {text!r}  "
+            f"[{entry.get('section', '?')}]  xrefs: {entry.get('xrefs_count', 0)}"
+        )
+        functions = entry.get("functions") or []
+        if functions:
+            names = ", ".join(fn.get("name", "?") for fn in functions[:3])
+            if len(functions) > 3:
+                names += f" (+{len(functions) - 3} more)"
+            lines.append(f"      -> {names}")
+
+    return "\n".join(lines)
+
+
+def format_kuna_crypto(response: dict, **kwargs) -> str:
+    """Format a kuna crypto constant scan"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    constants = result.get("constants", [])
+
+    lines = [f"Crypto constants in {result.get('binary', '?')} ({len(constants)}):", ""]
+    for entry in constants:
+        detail = " ".join(str(part) for part in (entry.get("kind"), entry.get("layout")) if part)
+        lines.append(
+            f"  {entry.get('algorithm', '?'):<10} {entry.get('name', '')}"
+            f"  @ {entry.get('address_hex', '?')}  [{entry.get('section', '?')}]"
+        )
+        if detail:
+            lines.append(f"      {detail}  xrefs: {entry.get('xrefs_count', 0)}")
+        for fn in (entry.get("functions") or [])[:5]:
+            lines.append(f"      -> {fn.get('name', '?')} @ {fn.get('address_hex', '?')}")
+
+    return "\n".join(lines)
+
+
+def format_kuna_xrefs(response: dict, **kwargs) -> str:
+    """Format kuna cross-references"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    target = result.get("target") or {}
+    xrefs = result.get("xrefs", [])
+
+    lines = [
+        f"Cross-references {result.get('direction', '?')} {target.get('name', '?')} ({len(xrefs)}):",
+        "",
+    ]
+    for xref in xrefs:
+        lines.append(
+            f"  {xref.get('address_hex', '?'):<18} {xref.get('kind', '?'):<6} {xref.get('instruction', '')}"
+        )
+
+    return "\n".join(lines)
+
+
+def format_kuna_unpack(response: dict, **kwargs) -> str:
+    """Format a kuna unpack result"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    output = result.get("output", result.get("unpacked", result.get("path", "?")))
+    return f"Unpacked {result.get('binary', '?')}\n  Output: {output}"
+
+
+def format_kuna_export_start(response: dict, **kwargs) -> str:
+    """Format the start of a kuna export job"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    job_id = result.get("id", "?")
+    return "\n".join([
+        f"Export job {job_id} started",
+        f"  Binary: {result.get('binary')}",
+        f"  Dir:    {result.get('dir')}",
+        f"  Status: {result.get('status')}",
+        "",
+        f"Poll it with kuna_export_status(job_id='{job_id}').",
+    ])
+
+
+def format_kuna_export_status(response: dict, **kwargs) -> str:
+    """Format the status of a kuna export job"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    lines = [
+        f"Export job {result.get('id', '?')}",
+        f"  Binary: {result.get('binary')}",
+        f"  Dir:    {result.get('dir')}",
+        f"  Status: {result.get('status')}",
+    ]
+    if result.get("finished_at"):
+        lines.append(f"  Ended:  {result.get('finished_at')}")
+    if result.get("returncode") is not None:
+        lines.append(f"  Exit:   {result.get('returncode')}")
+    if result.get("error"):
+        lines.append(f"  Error:  {result.get('error')}")
+
+    streaming = result.get("streaming")
+    if streaming:
+        lines.append(f"  Phase:  {streaming.get('phase', '?')}")
+        if streaming.get("counts"):
+            lines.append(f"  Counts: {streaming.get('counts')}")
+        if streaming.get("error"):
+            lines.append(f"  Failed: {streaming.get('error')}")
+
+    return "\n".join(lines)
+
+
+def format_kuna_export_read(response: dict, **kwargs) -> str:
+    """Format a read from a kuna export"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    artifact = result.get("artifact", "?")
+
+    functions = result.get("functions")
+    if functions is not None:
+        lines = [
+            f"Exported functions ({result.get('total', len(functions))}):",
+            "",
+        ]
+        for record in functions:
+            error = f"  ERROR: {record.get('error')}" if record.get("error") else ""
+            lines.append(
+                f"  {record.get('addr', '?'):<18} {record.get('name', '?'):<32} "
+                f"{record.get('size', 0):>7}B{error}"
+            )
+        return "\n".join(lines)
+
+    header = f"{artifact} for {result.get('function') or result.get('binary', '?')}"
+    return f"{header}\n\n{result.get('text', '')}"
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -1257,6 +1919,19 @@ FORMATTERS = {
     "functions_get_pcode": format_pcode,
     "raw_image_define": format_generic_dict,
     "raw_image_cleanup": format_generic_dict,
+    "kuna_status": format_kuna_status,
+    "kuna_summary": format_kuna_summary,
+    "kuna_functions": format_kuna_functions,
+    "kuna_decompile": format_kuna_decompile,
+    "kuna_disassemble": format_kuna_disassemble,
+    "kuna_read": format_kuna_read,
+    "kuna_strings": format_kuna_strings,
+    "kuna_crypto": format_kuna_crypto,
+    "kuna_xrefs": format_kuna_xrefs,
+    "kuna_unpack": format_kuna_unpack,
+    "kuna_export_start": format_kuna_export_start,
+    "kuna_export_status": format_kuna_export_status,
+    "kuna_export_read": format_kuna_export_read,
 }
 
 
@@ -3772,6 +4447,632 @@ def functions_set_comment(address: str, comment: str = "", port: int | None = No
     # Fallback: Set as a "pre" comment using the comments_set tool
     print(f"Falling back to setting 'pre' comment for address {address}", file=sys.stderr)
     return comments_set(address=address, comment=comment, comment_type="pre", port=port_to_use)
+
+
+# ================= Kuna tools =================
+# Kuna is a standalone decompiler CLI. These tools drive it on the machine
+# where the bridge runs: they need no Ghidra instance and never touch the
+# REST API. The integration is opt-in (see the Kuna integration section).
+
+@mcp.tool()
+@text_output
+def kuna_status() -> dict:
+    """Report whether the Kuna integration is enabled and ready to use.
+
+    Kuna (https://github.com/Noelo-Lab/kuna) is a standalone decompiler CLI
+    that the bridge drives directly, so the kuna_* tools need no running
+    Ghidra instance and work with any Ghidra version.
+
+    The integration is opt-in, because it lets the bridge run a program on
+    the host: enable it with the GHYDRA_KUNA=1 environment variable, or with
+    "kuna": {"enabled": true} in ~/.ghydra/config.json. The config file wins
+    when both are set.
+
+    Returns:
+        dict: 'enabled', the resolved binary path and version, where the
+              opt-in came from, and the export jobs known to this bridge
+    """
+    config = _kuna_config()
+    if config.get("enabled") is not None:
+        source = "the config file"
+    elif KUNA_ENV_ENABLED in os.environ:
+        source = f"${KUNA_ENV_ENABLED}"
+    else:
+        source = "nothing (the integration is off)"
+
+    executable = _kuna_binary()
+    version = None
+    if executable:
+        outcome = _kuna_run(["--version"], timeout=30)
+        if outcome["code"] == 0:
+            version = outcome["stdout"].strip() or None
+
+    with _kuna_jobs_lock:
+        jobs = [_kuna_job_view(job) for job in _kuna_jobs.values()]
+
+    return {
+        "success": True,
+        "result": {
+            "enabled": _kuna_enabled(),
+            "source": source,
+            "binary": executable,
+            "version": version,
+            "config_file": KUNA_CONFIG_FILE,
+            "work_dir": KUNA_WORK_DIR,
+            "jobs": jobs,
+        },
+    }
+
+
+@mcp.tool()
+@text_output
+def kuna_summary(binary_path: str, mode: str | None = None) -> dict:
+    """Summarize a binary: function count, entry point, reachability, size.
+
+    This is the cheapest way to size up an image. It still loads and
+    analyses the whole binary, so a large file costs seconds - for a full
+    analysis, start an export with kuna_export_start and read the result
+    from disk.
+
+    Args:
+        binary_path: Path to the executable to analyze
+        mode: Optional kuna mode preset (auto, reliable, aggressive, fast)
+
+    Returns:
+        dict: The kuna summary document
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    target = _kuna_target(binary_path)
+    if isinstance(target, dict):
+        return target
+
+    args = ["functions", target, "--summary", "--json"]
+    if mode:
+        args += ["--mode", mode]
+    return _kuna_json(args)
+
+
+@mcp.tool()
+@text_output
+def kuna_functions(binary_path: str, name_filter: str | None = None,
+                   offset: int = 0, limit: int = 100) -> dict:
+    """List the functions kuna recovered from a binary.
+
+    Args:
+        binary_path: Path to the executable to analyze
+        name_filter: Optional case-insensitive substring filter on the name
+        offset: Pagination offset
+        limit: Maximum number of functions to return
+
+    Returns:
+        dict: The function list, with 'meta.total' holding the full count
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    target = _kuna_target(binary_path)
+    if isinstance(target, dict):
+        return target
+
+    outcome = _kuna_json(["functions", target, "--json"])
+    if not outcome.get("success"):
+        return outcome
+
+    result = outcome["result"]
+    functions = result.get("functions", []) if isinstance(result, dict) else []
+    if name_filter:
+        needle = name_filter.lower()
+        functions = [fn for fn in functions if needle in str(fn.get("name", "")).lower()]
+
+    total = len(functions)
+    window = functions[offset:offset + limit]
+    return {
+        "success": True,
+        "result": window,
+        "meta": {"total": total, "offset": offset, "limit": limit},
+    }
+
+
+@mcp.tool()
+@text_output
+def kuna_decompile(binary_path: str, function: str, addr: bool = False,
+                   mode: str | None = None, max_lines: int | None = None) -> dict:
+    """Decompile one function with kuna.
+
+    Args:
+        binary_path: Path to the executable
+        function: Function name, or an address when addr is true
+        addr: Treat the target as an address instead of a name
+        mode: Optional kuna mode preset (auto, reliable, aggressive, fast)
+        max_lines: Optional cap on the number of returned lines
+
+    Returns:
+        dict: The decompiled function
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    target = _kuna_target(binary_path)
+    if isinstance(target, dict):
+        return target
+
+    args = ["decompile", target, function, "--json"]
+    if addr:
+        args.append("--addr")
+    if mode:
+        args += ["--mode", mode]
+    return _kuna_json(args)
+
+
+@mcp.tool()
+@text_output
+def kuna_disassemble(binary_path: str, target: str, count: int | None = None,
+                     bytes: int | None = None, addr: bool = False,
+                     mode: str | None = None) -> dict:
+    """Disassemble a function or an address range with kuna.
+
+    Args:
+        binary_path: Path to the executable
+        target: Function name, address, or "0xstart-0xend" range
+        count: Optional maximum number of instructions
+        bytes: Optional maximum number of bytes
+        addr: Treat the target as an address instead of a name
+        mode: Optional kuna mode preset
+
+    Returns:
+        dict: The disassembled instructions
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    binary = _kuna_target(binary_path)
+    if isinstance(binary, dict):
+        return binary
+
+    args = ["disassemble", binary, target, "--json"]
+    if count is not None:
+        args += ["--count", str(count)]
+    if bytes is not None:
+        args += ["--bytes", str(bytes)]
+    if addr:
+        args.append("--addr")
+    if mode:
+        args += ["--mode", mode]
+    return _kuna_json(args)
+
+
+@mcp.tool()
+@text_output
+def kuna_read(binary_path: str, target: str, bytes: int = 64,
+              addr: bool = False) -> dict:
+    """Read raw bytes with kuna, as a hex dump.
+
+    Args:
+        binary_path: Path to the executable
+        target: Function name, address, or "0xstart-0xend" range
+        bytes: Number of bytes to read
+        addr: Treat the target as an address instead of a name
+
+    Returns:
+        dict: The bytes, as a hex dump
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    binary = _kuna_target(binary_path)
+    if isinstance(binary, dict):
+        return binary
+
+    args = ["read", binary, target, "--bytes", str(bytes), "--json"]
+    if addr:
+        args.append("--addr")
+    return _kuna_json(args)
+
+
+@mcp.tool()
+@text_output
+def kuna_strings(binary_path: str, pattern: str, limit: int = 50,
+                 min_length: int = 5, encoding: str = "ascii",
+                 section: str | None = None) -> dict:
+    """Search the strings of a binary with kuna.
+
+    A filter is mandatory: an unfiltered scan of a large binary returns
+    hundreds of kilobytes of text, which is noise for the caller.
+
+    Args:
+        binary_path: Path to the executable
+        pattern: Regular expression the string must match
+        limit: Maximum number of strings to return
+        min_length: Minimum length of a string
+        encoding: ascii, utf16 or all
+        section: Optional section name to restrict the scan to
+
+    Returns:
+        dict: The matching strings, with the functions that reference them
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    if not pattern:
+        return _kuna_error("pattern is required: an unfiltered string scan is too large to return")
+
+    binary = _kuna_target(binary_path)
+    if isinstance(binary, dict):
+        return binary
+
+    args = ["strings", binary, "--filter", pattern, "--min-length", str(min_length),
+            "--encoding", encoding, "--json"]
+    if section:
+        args += ["--section", section]
+
+    outcome = _kuna_json(args)
+    if not outcome.get("success"):
+        return outcome
+
+    result = outcome["result"]
+    strings = result.get("strings", []) if isinstance(result, dict) else []
+    total = result.get("count", len(strings))
+    trimmed = dict(result) if isinstance(result, dict) else {}
+    trimmed["strings"] = strings[:limit]
+    trimmed["count"] = total
+    trimmed["returned"] = len(trimmed["strings"])
+    return {"success": True, "result": trimmed}
+
+
+@mcp.tool()
+@text_output
+def kuna_crypto(binary_path: str, algorithm: str | None = None,
+                section: str | None = None) -> dict:
+    """Scan a binary for crypto constants with kuna.
+
+    Finds AES/SHA/MD5/CRC/TEA/Base64 constants and the functions that use
+    them, which is where a cryptographic routine usually starts.
+
+    Args:
+        binary_path: Path to the executable
+        algorithm: Optional algorithm name filter (e.g. AES, SHA)
+        section: Optional section name to restrict the scan to
+
+    Returns:
+        dict: The constants found, with their referencing functions
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    binary = _kuna_target(binary_path)
+    if isinstance(binary, dict):
+        return binary
+
+    args = ["crypto", binary, "--json"]
+    if algorithm:
+        args += ["--algorithm", algorithm]
+    if section:
+        args += ["--section", section]
+    return _kuna_json(args)
+
+
+@mcp.tool()
+@text_output
+def kuna_xrefs(binary_path: str, target: str, direction: str = "from",
+               kind: str | None = None) -> dict:
+    """Find the cross-references of a symbol or address with kuna.
+
+    Args:
+        binary_path: Path to the executable
+        target: Function name or address
+        direction: "from" (who references it) or "to" (what it references)
+        kind: Optional reference kind filter (call, jump, data, read, write)
+
+    Returns:
+        dict: The cross-references
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    binary = _kuna_target(binary_path)
+    if isinstance(binary, dict):
+        return binary
+
+    if direction not in ("from", "to"):
+        return _kuna_error("direction must be 'from' or 'to'")
+
+    args = ["xrefs", binary, f"--{direction}", target, "--json"]
+    if kind:
+        args += ["--kind", kind]
+    return _kuna_json(args)
+
+
+@mcp.tool()
+@text_output
+def kuna_unpack(binary_path: str, output: str | None = None) -> dict:
+    """Unpack a UPX-packed executable with kuna.
+
+    Args:
+        binary_path: Path to the packed executable
+        output: Optional path for the unpacked file
+
+    Returns:
+        dict: The unpack result
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    binary = _kuna_target(binary_path)
+    if isinstance(binary, dict):
+        return binary
+
+    args = ["unpack", binary, "--json"]
+    if output:
+        args += ["-o", os.path.abspath(os.path.expanduser(output))]
+    return _kuna_json(args)
+
+
+@mcp.tool()
+@text_output
+def kuna_export_start(binary_path: str, functions: str | None = None,
+                      jobs: str = "auto", job_id: str | None = None) -> dict:
+    """Export a binary to disk with kuna, in the background.
+
+    "kuna decompile-project" loads and analyses the image once, then writes
+    the recovered C, the disassembly and an index.jsonl into a directory.
+    That export is the cheap way to work on a large binary: every function is
+    then read from the files on disk instead of paying the analysis cost
+    again on each call.
+
+    Args:
+        binary_path: Path to the executable to export
+        functions: Optional comma-separated function names to export
+        jobs: Worker count for the export ("auto" by default)
+        job_id: Optional id for the job (generated when omitted)
+
+    Returns:
+        dict: The job record: id, binary, directory and status
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    target = _kuna_target(binary_path)
+    if isinstance(target, dict):
+        return target
+
+    executable = _kuna_binary()
+    if not executable:
+        return _kuna_error("the kuna binary was not found")
+
+    work_dir = _kuna_work_dir(target)
+
+    with _kuna_jobs_lock:
+        for job in _kuna_jobs.values():
+            if job["dir"] == work_dir and job["status"] == "running":
+                return _kuna_error(
+                    f"an export is already running for this binary (job {job['id']})"
+                )
+
+    try:
+        os.makedirs(work_dir, exist_ok=True)
+    except OSError as exc:
+        return _kuna_error(f"could not create the export directory {work_dir}: {exc}")
+
+    args = ["decompile-project", target, "-o", work_dir, "--stream", "--jobs", str(jobs)]
+    if functions:
+        args += ["--functions", functions]
+
+    identifier = job_id or ("kuna-" + hashlib.sha256(
+        f"{target}|{time.time()}".encode("utf-8")).hexdigest()[:8])
+
+    log_path = os.path.join(work_dir, "export.log")
+    err_path = os.path.join(work_dir, "export.err")
+    try:
+        log_handle = open(log_path, "w", encoding="utf-8")
+        err_handle = open(err_path, "w", encoding="utf-8")
+    except OSError as exc:
+        return _kuna_error(f"could not open the export logs: {exc}")
+
+    try:
+        process = subprocess.Popen(
+            [executable, *args],
+            stdout=log_handle,
+            stderr=err_handle,
+            stdin=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        log_handle.close()
+        err_handle.close()
+        return _kuna_error(f"could not launch kuna: {exc}")
+
+    job = {
+        "id": identifier,
+        "binary": target,
+        "dir": work_dir,
+        "status": "running",
+        "started_at": time.time(),
+        "finished_at": None,
+        "returncode": None,
+        "error": None,
+        "pid": process.pid,
+    }
+    with _kuna_jobs_lock:
+        _kuna_jobs[identifier] = job
+
+    def _watch() -> None:
+        returncode = process.wait()
+        log_handle.close()
+        err_handle.close()
+        detail = None
+        if returncode != 0:
+            try:
+                with open(err_path, "r", encoding="utf-8", errors="replace") as handle:
+                    detail = handle.read().strip()[-2000:] or None
+            except OSError:
+                detail = None
+        with _kuna_jobs_lock:
+            job["status"] = "failed" if returncode != 0 else "done"
+            job["returncode"] = returncode
+            job["finished_at"] = time.time()
+            job["error"] = detail
+
+    threading.Thread(target=_watch, daemon=True, name=f"KunaExport-{identifier}").start()
+
+    return {"success": True, "result": _kuna_job_view(job)}
+
+
+@mcp.tool()
+@text_output
+def kuna_export_status(job_id: str) -> dict:
+    """Report the progress of a kuna export job.
+
+    Args:
+        job_id: The id returned by kuna_export_start
+
+    Returns:
+        dict: The job record, including the live counters kuna writes while
+              it streams
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    with _kuna_jobs_lock:
+        job = _kuna_jobs.get(job_id)
+    if job is None:
+        return _kuna_error(
+            f"unknown job id '{job_id}'; jobs live in the bridge process that started them"
+        )
+    return {"success": True, "result": _kuna_job_view(job)}
+
+
+@mcp.tool()
+@text_output
+def kuna_export_read(job_id: str, function: str | None = None,
+                     artifact: str = "c", max_bytes: int = 40000) -> dict:
+    """Read a function out of a kuna export.
+
+    Args:
+        job_id: The id returned by kuna_export_start
+        function: Function name to read. Without it, the exported function
+                  names are listed.
+        artifact: "c" (recovered C), "asm" (disassembly), "index" (the
+                  function index) or "readme" (the export report)
+        max_bytes: Maximum bytes of text to return
+
+    Returns:
+        dict: The requested text, or the list of exported functions
+    """
+    guard = _kuna_guard()
+    if guard:
+        return guard
+
+    with _kuna_jobs_lock:
+        job = _kuna_jobs.get(job_id)
+    if job is None:
+        return _kuna_error(
+            f"unknown job id '{job_id}'; jobs live in the bridge process that started them"
+        )
+
+    work_dir = job["dir"]
+    records = _kuna_index_records(work_dir)
+
+    if artifact == "readme":
+        path = os.path.join(work_dir, "README.md")
+        if not os.path.isfile(path):
+            return _kuna_error("the export has no README.md")
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read(max_bytes if max_bytes else -1)
+        except OSError as exc:
+            return _kuna_error(f"could not read the export README: {exc}")
+        return {"success": True, "result": {"artifact": "readme", "text": text}}
+
+    if not records:
+        return _kuna_error(
+            f"the export for {job['binary']} has no index yet (job status: {job['status']})"
+        )
+
+    if artifact == "index":
+        return {
+            "success": True,
+            "result": {
+                "artifact": "index",
+                "binary": job["binary"],
+                "total": len(records),
+                "functions": [
+                    {
+                        "name": record.get("name"),
+                        "addr": record.get("addr"),
+                        "size": record.get("size"),
+                        "error": record.get("error"),
+                    }
+                    for record in records
+                ],
+            },
+        }
+
+    if artifact not in ("c", "asm"):
+        return _kuna_error("artifact must be one of: c, asm, index, readme")
+
+    if not function:
+        return {
+            "success": True,
+            "result": {
+                "artifact": artifact,
+                "binary": job["binary"],
+                "total": len(records),
+                "functions": [
+                    {
+                        "name": record.get("name"),
+                        "addr": record.get("addr"),
+                        "size": record.get("size"),
+                        "error": record.get("error"),
+                    }
+                    for record in records
+                ],
+            },
+        }
+
+    record = None
+    for candidate in records:
+        if candidate.get("name") == function:
+            record = candidate
+            break
+    if record is None:
+        lowered = function.lower()
+        for candidate in records:
+            if str(candidate.get("name", "")).lower() == lowered:
+                record = candidate
+                break
+    if record is None:
+        return _kuna_error(f"function '{function}' is not in the export index")
+
+    if artifact == "c":
+        text = _kuna_extract_c(work_dir, record, max_bytes)
+    else:
+        text = _kuna_extract_asm(work_dir, record.get("name", function), max_bytes)
+
+    if text is None:
+        return _kuna_error(f"could not read the {artifact} of '{function}' from the export")
+
+    return {
+        "success": True,
+        "result": {
+            "artifact": artifact,
+            "function": record.get("name"),
+            "addr": record.get("addr"),
+            "size": record.get("size"),
+            "text": text,
+        },
+    }
 
 
 # ================= Project Management =================

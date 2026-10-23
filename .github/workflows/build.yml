@@ -50,6 +50,12 @@ jobs:
         # themselves, so this gate runs on every push and pull request.
         run: python3 scripts/version.py --check
 
+      - name: Python sources must compile
+        # The bridge ships as a single script and the CLI as a package. A
+        # syntax error in either breaks the release without failing the
+        # Java build, so it gets its own gate.
+        run: python3 -m compileall -q bridge_mcp_hydra.py ghydra
+
   build:
     name: Build ${{ matrix.ghidra-series }}.x
     needs: verify

@@ -26,11 +26,15 @@ python run_tests.py --mcp        # MCP bridge tests
 python run_tests.py --data       # data operations tests
 python run_tests.py --comments   # comment tests
 python run_tests.py --port       # Javalin port edge-case tests
+python run_tests.py --kuna       # Kuna integration tests
 ```
 
 > **Every suite skips itself when Ghidra is not running.** Each `setUp` calls
 > `skipTest("Ghidra not running")`, so a green summary does not prove anything unless the
 > tests actually executed — check the output for skips before trusting a pass.
+>
+> The Kuna suite is the exception: it needs neither Ghidra nor the Kuna binary, so it
+> always runs and always gives a signal.
 
 ## HTTP API Tests
 
@@ -88,6 +92,29 @@ The test script will:
 - Mutating operations (tested by changing and reverting):
   - Function renaming
   - Comment addition/removal
+
+## Kuna Integration Tests
+
+The `test_kuna.py` script covers the Kuna decompiler integration. It needs **neither** a running
+Ghidra **nor** the Kuna binary, so it is the one suite that always gives a signal:
+
+```bash
+python run_tests.py --kuna
+```
+
+### What's Being Tested
+
+- The opt-in precedence: the config file wins over `GHYDRA_KUNA`, and a config file that never
+  mentions `enabled` (or sets it to `null`) leaves the decision to the environment
+- The bridge and the CLI agree on that decision
+- Every `kuna_*` bridge tool has a `FORMATTERS` entry (a missing key silently degrades the
+  output to "Done") and is registered in the MCP server
+- No `kuna_*` tool takes a `port` — they are local
+- With the integration off, every tool refuses instead of running the binary
+- The formatters survive an empty payload and report errors
+- The CLI commands run, and the formatters handle every payload shape
+- The export readers slice the C and the disassembly out of an export directory, and defer an
+  unfinished trailing index record
 
 ## Troubleshooting
 

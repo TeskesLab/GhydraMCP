@@ -7,6 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Kuna integration:** the bridge gains a `kuna_*` namespace and the CLI a `ghydra kuna` command group that drive the [Kuna](https://github.com/Noelo-Lab/kuna) decompiler CLI locally. No Ghidra instance is involved: these tools work on any binary, with any Ghidra version. The integration is opt-in, because it lets the bridge run a program on the host — enable it with `GHYDRA_KUNA=1` or with `"kuna": {"enabled": true}` in `~/.ghydra/config.json`, and the config file wins when both are set.
+- **Kuna export flow:** Kuna loads and analyses the whole image on every invocation, so a large binary costs seconds per call. `kuna_export_start` / `kuna_export_status` / `kuna_export_read` (bridge) and `ghydra kuna export` / `ghydra kuna export-read` (CLI) analyse a binary once, write the recovered C, the disassembly and a function index to disk, and read the result from those files.
+- **Kuna test suite:** `test_kuna.py` (`python run_tests.py --kuna`) covers the opt-in precedence, the bridge/CLI contract and the export readers. It needs neither Ghidra nor the Kuna binary, so it is the one suite that always gives a signal.
 - **Release automation:** a release is now a single tag (`vX.Y.Z`) pushed to both remotes. `.github/workflows/release.yml` and `.gitea/workflows/release.yml` guard, build, publish and verify it, so a release can no longer exist on one platform only.
 - **`scripts/prepare_release.py`:** prepares a release locally — moves the `Unreleased` notes into a dated section and writes the version into every location that carries it.
 - **`scripts/version.py`:** single source of truth for the release version. `--check` fails when the plugin, the bridge, the Python package and the extension descriptor disagree, or when the plugin's `API_VERSION` and the bridge's `REQUIRED_API_VERSION` disagree.
@@ -15,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Release verification:** both workflows re-read the published release afterwards and fail if it or its assets are missing.
 
 ### Changed
+- **CI:** the `verify` job now also compiles the Python sources (`bridge_mcp_hydra.py` and the `ghydra` package). A syntax error in either broke the release without failing the Java build.
 - **GitHub Actions:** `build.yml` is now a reusable workflow and no longer creates releases — `release.yml` is the single release authority. Added a version-consistency gate that runs on every push and pull request, plus `workflow_dispatch` for manual builds.
 - **Gitea Actions:** `build.yml` is build-only; the release path moved to `release.yml`, which builds the same Ghidra 11.x/12.x matrix and publishes through the `tea` CLI.
 - **Checkout depth:** the workflows now fetch the full history so the artifact name can embed the tag instead of a bare commit sha.
