@@ -7,42 +7,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Release automation:** a release is now a single tag (`vX.Y.Z`) pushed to both remotes. `.github/workflows/release.yml` and `.gitea/workflows/release.yml` guard, build, publish and verify it, so a release can no longer exist on one platform only.
-- **`scripts/prepare_release.py`:** prepares a release locally — moves the `Unreleased` notes into a dated section and writes the version into every location that carries it.
-- **`scripts/version.py`:** single source of truth for the release version. `--check` fails when the plugin, the bridge, the Python package and the extension descriptor disagree, or when the plugin's `API_VERSION` and the bridge's `REQUIRED_API_VERSION` disagree.
-- **`scripts/release_notes.py`:** extracts the release notes for a version from `CHANGELOG.md` and fails when the section is missing or empty — the release used to ship with an empty body in that case.
-- **`SHA256SUMS`** is attached to every release alongside the artifacts.
-- **Release verification:** both workflows re-read the published release afterwards and fail if it or its assets are missing.
+- **Kuna integration:** the bridge gains a `kuna_*` namespace and the CLI a `ghydra kuna` command group that drive the [Kuna](https://github.com/Noelo-Lab/kuna) decompiler CLI locally. No Ghidra instance is involved: these tools work on any binary, with any Ghidra version. The integration is opt-in, because it lets the bridge run a program on the host — enable it with `GHYDRA_KUNA=1` or with `"kuna": {"enabled": true}` in `~/.ghydra/config.json`, and the config file wins when both are set.
+- **Kuna export flow:** Kuna loads and analyses the whole image on every invocation, so a large binary costs seconds per call. `kuna_export_start` / `kuna_export_status` / `kuna_export_read` (bridge) and `ghydra kuna export` / `ghydra kuna export-read` (CLI) analyse a binary once, write the recovered C, the disassembly and a function index to disk, and read the result from those files.
+- **Kuna test suite:** `test_kuna.py` (`python run_tests.py --kuna`) covers the opt-in precedence, the bridge/CLI contract, the export readers and the reference document. It needs neither Ghidra nor the Kuna binary, so it is the one suite that always gives a signal.
+- **Kuna documentation:** `GHYDRA_KUNA.md` is the full reference for the integration — the opt-in and its precedence, every tool and command, the export layout, the measured performance and the limits.
 
 ### Changed
-- **GitHub Actions:** `build.yml` is now a reusable workflow and no longer creates releases — `release.yml` is the single release authority. Added a version-consistency gate that runs on every push and pull request, plus `workflow_dispatch` for manual builds.
-- **Gitea Actions:** `build.yml` is build-only; the release path moved to `release.yml`, which builds the same Ghidra 11.x/12.x matrix and publishes through the `tea` CLI.
-- **Checkout depth:** the workflows now fetch the full history so the artifact name can embed the tag instead of a bare commit sha.
+- **CI:** the `verify` job now also compiles the Python sources (`bridge_mcp_hydra.py` and the `ghydra` package). A syntax error in either broke the release without failing the Java build.
+- **Release credentials:** the GitHub workflows take the automatic job token from `github.token` instead of `secrets.GITHUB_TOKEN`, and the Gitea release workflow probes which secret authenticates against which API. On Gitea the `GITHUB_TOKEN` secret is the instance's own job token: it works against the Gitea API and is rejected by GitHub, so the public Ghidra release list is read unauthenticated.
+- **Gitea release build:** the release workflow installs the JDK each Ghidra series needs (21 for 11.x, 25 for 12.2) instead of a fixed one, because a single job builds both series and `javac` cannot read a newer class file.
 
-## [3.0.0] - 2026-10-08
+## [3.0.0] - 2026-10-23
+
+Changes since the last published TeskesLab release, [`v2.4.1`](https://github.com/TeskesLab/GhydraMCP/releases/tag/v2.4.1), including the upstream 3.0.0 beta and release-candidate changes.
+
+### Breaking changes
+- **REST API 3000:** the plugin now uses Javalin/Jetty with service, DTO, and resource layers instead of the JDK HTTP server. Upgrade the plugin and Python bridge together; the bridge requires an exact API-version match.
+- **Fully-qualified names:** function, symbol, data-label, variable, and xref responses use namespace-qualified names such as `FOM::SharedMemory::ReadUInt`. Function and symbol responses no longer include a separate `namespace` field. Lookups and filters use the full name; bare names resolve only in the global namespace. URL-encode names in REST paths. Renaming to `A::B::name` moves the symbol into that namespace; `::name` or `Global::name` moves it to the global namespace. Local variable names remain bare and reject `::`.
+- **Script API replacement:** the former PyGhidra `/script/execute` and `/script/capabilities` routes and `script_execute` / `script_capabilities` MCP tools are replaced by `/scripts`, `/scripts/run`, and `scripts_list` / `scripts_run`. Use `ghydra scripts list` / `run` instead of the former `script` commands. Script endpoints are disabled by default; enable them with `-Dghydra.dev.allowScripts=true` or `GHYDRA_ALLOW_SCRIPTS=1`. This permits arbitrary code execution; enable it only in a trusted environment.
+- **CLI variable editing:** the duplicate `ghydra functions update-variable` command is removed. Use `ghydra functions set-variable` with `--variable` and `--data-type`. The `functions_update_variable` MCP tool and variable PATCH endpoint remain available.
 
 ### Added
+- **Raw image cleanup:** `POST /raw-image/cleanup`, the `raw_image_cleanup` MCP tool, and `ghydra raw-image cleanup` remove one RawImage by address or all RawImages in a program. Cleanup is atomic, is safe to repeat, and refuses to clear non-RawImage data.
 - **Raw image rendering:** `POST /raw-image/define` (`raw_image_define` MCP tool, `ghydra raw-image define`) creates a `RawImage` data type at an address so captured framebuffers render inline in the Listing. Supports 9 pixel formats (RGB565, RGB888, ARGB8888, RGB332, ARGB4444, 1bpp, 2bpp, 4bpp, 8bpp) plus little/big endian. Backed by a new `RawImage` built-in DataType with width/height/format settings.
-- **Raw image cleanup:** `POST /raw-image/cleanup` (`raw_image_cleanup` MCP tool, `ghydra raw-image cleanup`) removes RawImage data items — one by address, or every one in the program with `all`. Runs collection and clearing in a single transaction, so a whole-program sweep is atomic and rolls back on failure. Idempotent, and refuses to clear data that is not a RawImage.
+- **Program saving:** `POST /program/save`, `programs_save`, and `ghydra project save-program` persist analysis changes. `all=true` / `--all` saves every open program with unsaved changes.
+- **Ghidra script execution:** list and run installed scripts, or run ad-hoc GhidraScript source with arguments and captured output, through the replacement script API.
+- **Development shutdown:** `POST /dev/shutdown` supports automated restart workflows. It requires `-Dghydra.dev.allowShutdown=true` or `GHYDRA_DEV_SHUTDOWN=1` and refuses unsaved changes with HTTP 409 unless `save=true` or `force=true` is supplied.
+- **Database-backed variable listing:** `variables_list` defaults to `source=database` for committed locals and parameters with exact pagination; `source=decompiler` includes inferred locals with approximate pagination.
+- **Release tooling:** `scripts/prepare_release.py` updates all five version locations and dates the changelog section. Shared version and release-note checks reject inconsistent versions and missing or empty release notes.
+- **Release assets:** GitHub and Forgejo release workflows attach `SHA256SUMS` and verify that the release and its assets exist after publication.
 - **CFG and pcode introspection:** `GET /functions/{address}/cfg` and `/pcode` (plus the `by-name` equivalents) expose a function's control-flow graph (`blocks`, `edges`, `blockCount`, `edgeCount`) and its decompiled p-code operations (`operations`, `opCount`). Reachable as `functions_get_cfg` / `functions_get_pcode` MCP tools, `ghydra functions get-cfg` / `get-pcode`, and via new `cfg`/`pcode` HATEOAS links on function responses. `/pcode` accepts `?timeout=` (default 60s).
-- **Variable editing from the CLI:** `ghydra functions set-variable` renames or retypes a function variable.
-- Gitea Actions workflow mirroring the GitHub Actions build and release flow.
-- `skills/ghydra-cli/SKILL.md`, an agent-facing skill for driving the `ghydra` CLI.
+- **Agent skill:** `skills/ghydra-cli/SKILL.md`, an agent-facing skill for driving the `ghydra` CLI.
 
 ### Changed
-- **Write failures now return `409`, not `500`.** `TransactionHelper.TransactionException` — raised when a write cannot be committed, almost always because the program is read-only or locked — is now mapped to `409 TRANSACTION_FAILED` by a server-wide exception handler instead of falling through to `500 INTERNAL_ERROR`. This affects every mutating endpoint. `TransactionException` also became unchecked so it passes through resources' generic `catch (Exception)` guards instead of being rewrapped.
-- **`mvn package` now defaults to `-Dghidra.version=12.0.1`**, matching the Ghidra jars committed in `lib/`. Previously a build with no `GHIDRA_HOME` compiled against 12.0.1 but stamped the extension as 12.1.2. Pass `-Dghidra.version` when building against any other install.
-- Version bumped to `3.0.0` across `ApiConstants.PLUGIN_VERSION`, `BRIDGE_VERSION`, `pyproject.toml`, and `extension.properties`.
-- Ghidra target updated to the 12.x series; CI builds a matrix against the latest Ghidra 11.x and 12.x.
-- Lucas Teske added as a contributor (`pyproject.toml` authors, plugin manifest).
-- CLI help URL now points at `https://github.com/TeskesLab/GhydraMCP`.
-
-### Removed
-- **`ghydra functions update-variable`** — a CLI-only duplicate of `functions set-variable` with different flag spellings (`--variable-name`/`--new-data-type` vs `--variable`/`--data-type`) and no ability to look the function up by name. Use `set-variable`. The `functions_update_variable` MCP tool and the `PATCH /functions/{address}/variables/{variable_name}` endpoint are unchanged.
+- **Ghidra compatibility:** builds target the latest Ghidra 11.x and 12.x releases. GitHub Actions detects the JDK required by the selected Ghidra distribution, including JDK 25 for Ghidra 12.2, instead of always selecting JDK 21.
+- **Packaging:** the plugin is shipped as a shaded `Ghydra.jar`; extension archives use `Ghydra-…zip` and `Ghydra-Complete-…zip` names instead of `GhydraMCP-…zip`.
+- **Default build target:** a build without `GHIDRA_HOME` defaults to Ghidra 12.0.1, matching the committed dependency jars. Set `GHIDRA_HOME` and `-Dghidra.version` when building for another installation.
+- **Python dependencies:** committed `uv.lock` makes bridge dependency resolution reproducible.
+- **Release automation:** separate build and release workflows share version and changelog guards. Release tags must reach each hosting platform to trigger publication there; GitHub also supports reusable builds and manual runs.
+- **Decompilation:** cached results are reused, and decompiler lifecycle and concurrent cache access are corrected.
+- **Instance and program metadata:** instance snapshots include program, project, and tool details; program responses include program, language, and compiler-spec identifiers. `/program` advertises its analysis link.
 
 ### Fixed
-- **`mcp==1.6.0` no longer breaks on modern pydantic.** `mcp` 1.6.0 imports `pydantic._internal._typing_extra.eval_type_backport`, which pydantic 2.14 removed, so a fresh dependency resolve died with `ImportError` before the bridge could start. Dependencies now pin `pydantic<2.14`.
-- **Corrected the MCP client launch command.** The documented `uv run /path/to/bridge_mcp_hydra.py` runs the file in a script-scoped environment that ignores `pyproject.toml`, so it never saw the pins above and failed. The correct invocation is `uv run python /path/to/bridge_mcp_hydra.py`.
+- **Ghidra 12.2 builds and struct deletion:** data-type removal resolves the API overload available in the running Ghidra version, retaining compatibility with 11.x and earlier 12.x releases.
+- **Concurrent database reads:** iterator traversal and DTO construction run on the Swing EDT to prevent `IOException: Locked buffer` failures during concurrent Ghidra activity. Label-resolution stack overflows are contained so requests fail without crashing the EDT.
+- **Write errors:** transaction failures return HTTP `409 TRANSACTION_FAILED` instead of HTTP 500. Malformed addresses, JSON, and other invalid inputs return HTTP 400.
+- **Raw image CLI:** `ghydra raw-image define` calls `/raw-image/define` directly instead of the nonexistent `script/execute` route and no longer requires PyGhidra. The endpoint accepts bare hexadecimal addresses.
+- **Bridge startup:** pinned `pydantic<2.14` avoids the `mcp==1.6.0` import failure; the unsupported FastMCP `version` argument is removed. The documented launch command uses `uv run python /path/to/bridge_mcp_hydra.py` so project dependency pins apply.
+- **HATEOAS and response compatibility:** templated links substitute addresses and names correctly; paginated and error responses carry envelope metadata. Bridge and CLI routes and formatters match the new server response fields, and integral JSON numbers remain integers.
+- **Analysis and pagination:** callee discovery scans full function bodies, xref pagination works past the first page, and variable listing no longer over-reports `hasMore`. Disassembly output reports truncation and the next offset.
+- **CLI output:** color is disabled when stdout is not a terminal and respects `NO_COLOR`, keeping captured output free of ANSI escapes.
+- **Gitea artifacts:** upload and release patterns match the renamed `Ghydra-*.zip` archives.
+
 
 ## [3.0.0-rc.1] - 2026-06-18
 
@@ -186,7 +202,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Initial project setup
 - Basic MCP bridge functionality
 
-[unreleased]: https://github.com/starsong-consulting/GhydraMCP/compare/v3.0.0-rc.1...HEAD
+[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/TeskesLab/GhydraMCP/compare/v2.4.1...v3.0.0
 [3.0.0-rc.1]: https://github.com/starsong-consulting/GhydraMCP/compare/v3.0.0-beta...v3.0.0-rc.1
 [2.0.0]: https://github.com/teal-bauer/GhydraMCP/compare/v1.4.0...v2.0.0
 [1.4.0]: https://github.com/teal-bauer/GhydraMCP/compare/v1.3.0...v1.4.0
