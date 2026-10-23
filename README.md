@@ -193,7 +193,9 @@ ghydra kuna export ./challenge.exe -o ./challenge.kuna   # analyse once
 ghydra kuna export-read ./challenge.kuna main              # then read it
 ```
 
-The MCP bridge exposes the same operations as `kuna_*` tools, including `kuna_export_start` / `kuna_export_status` / `kuna_export_read` for the export flow. See [GHYDRA_CLI.md](GHYDRA_CLI.md#kuna-commands) for the command reference.
+The MCP bridge exposes the same operations as `kuna_*` tools, including `kuna_export_start` / `kuna_export_status` / `kuna_export_read` for the export flow.
+
+**[GHYDRA_KUNA.md](GHYDRA_KUNA.md) is the full reference** — the opt-in, every tool and command, the export layout, the measured performance and the limits. [GHYDRA_CLI.md](GHYDRA_CLI.md#kuna-commands) has the command summary.
 
 # Installation
 
@@ -356,7 +358,7 @@ Tools are grouped into namespaces:
 - `namespaces_list`: List namespaces (params: offset, limit, port [optional])
 - `variables_list`: List variables (params: offset, limit, search [optional], global_only [optional], port [optional])
 
-**Kuna Decompiler** (`kuna_*`): local tools that drive the Kuna CLI; no Ghidra instance and no `port` parameter. Opt-in: `GHYDRA_KUNA=1` or `"kuna": {"enabled": true}` in `~/.ghydra/config.json`.
+**Kuna Decompiler** (`kuna_*`): local tools that drive the Kuna CLI; no Ghidra instance and no `port` parameter. Opt-in: `GHYDRA_KUNA=1` or `"kuna": {"enabled": true}` in `~/.ghydra/config.json`. See [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
 - `kuna_status`: Report whether the integration is enabled, which binary it resolved and which opt-in decided
 - `kuna_summary`: Summarize a binary (params: binary_path, mode [optional])
 - `kuna_functions`: List the functions Kuna recovered (params: binary_path, name_filter [optional], offset, limit)

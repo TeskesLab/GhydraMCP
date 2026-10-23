@@ -10,6 +10,7 @@ Run with:  python test_kuna.py
 
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -373,6 +374,81 @@ class KunaExportTests(unittest.TestCase):
         with self.assertRaises(kuna_helper.KunaError) as caught:
             kuna_helper.read_export(self.dir, artifact="nope")
         self.assertEqual(caught.exception.code, "KUNA_BAD_ARTIFACT")
+
+
+class KunaDocumentationTests(unittest.TestCase):
+    """The reference must describe the code that actually exists."""
+
+    DOC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GHYDRA_KUNA.md")
+
+    def setUp(self):
+        with open(self.DOC, "r", encoding="utf-8") as handle:
+            self.doc = handle.read()
+
+    def _tool_table(self):
+        """The tool table, as {tool: [documented parameters]}."""
+        table = {}
+        for line in self.doc.splitlines():
+            if not line.startswith("| `kuna_"):
+                continue
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            if len(cells) != 3:
+                continue
+            name = cells[0].strip("`")
+            params = {p.strip().strip("`") for p in cells[2].split(",")}
+            params.discard("—")
+            table[name] = params
+        return table
+
+    def test_every_tool_is_documented_with_its_parameters(self):
+        import inspect
+
+        table = self._tool_table()
+        for name in KUNA_TOOL_NAMES:
+            with self.subTest(tool=name):
+                self.assertIn(name, table)
+                real = set(inspect.signature(getattr(bridge, name)).parameters)
+                self.assertEqual(real - table[name], set(),
+                                 f"{name}: parameters missing from the reference")
+                self.assertEqual(table[name] - real, set(),
+                                 f"{name}: the reference lists parameters that do not exist")
+
+    def test_every_command_is_documented_with_its_options(self):
+        import click
+
+        from ghydra.cli.kuna import kuna as kuna_group
+
+        blocks = re.findall(r"```bash\n(.*?)```", self.doc, re.S)
+        block = next((b for b in blocks if "export-read" in b and "--artifact" in b), "")
+        self.assertTrue(block, "the command list is missing from the reference")
+
+        for line in [l for l in block.strip().splitlines() if l.strip()]:
+            parts = line.split()
+            command = parts[2]
+            with self.subTest(command=command):
+                self.assertIn(command, kuna_group.commands)
+                spec = kuna_group.commands[command]
+                for param in spec.params:
+                    if isinstance(param, click.Argument):
+                        form = f"<{param.name}>" if param.required else f"[{param.name}]"
+                        self.assertIn(form, line)
+                    else:
+                        for option in param.opts:
+                            self.assertIn(option, line)
+                for token in parts[3:]:
+                    if token.startswith("--"):
+                        self.assertIn(token, [o for p in spec.params
+                                              for o in p.opts])
+
+    def test_the_status_sample_matches_the_formatter(self):
+        from ghydra.formatters import TableFormatter
+
+        match = re.search(r"```\n(Kuna integration: .*?)\n```", self.doc, re.S)
+        self.assertIsNotNone(match, "the status sample is missing")
+        sample = match.group(1).splitlines()
+        for label in ("Kuna integration:", "Binary:", "Config:", "Work:"):
+            self.assertTrue(any(line.strip().startswith(label) for line in sample),
+                            f"the status sample has no {label} line")
 
 
 if __name__ == "__main__":
