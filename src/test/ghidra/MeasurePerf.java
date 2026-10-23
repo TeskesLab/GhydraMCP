@@ -18,6 +18,7 @@ import ghidra.util.task.TaskMonitor;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class MeasurePerf extends GhidraScript {
 
@@ -55,6 +56,169 @@ public class MeasurePerf extends GhidraScript {
         measureDisassembly(biggest);
         measureHexFormatting();
         measureSymbolListing();
+        measureNativeCounts();
+        measureSerialization();
+        measureBlockModel();
+    }
+
+    /**
+     * Do the native Ghidra counts agree with what the iterators yield?
+     *
+     * <p>The listing endpoints can only skip the full scan when the count the
+     * client sees is the same as the number of items the scan would find.
+     */
+    private void measureNativeCounts() {
+        int symbolCount = 0;
+        for (var it = currentProgram.getSymbolTable().getAllSymbols(true); it.hasNext(); ) {
+            it.next();
+            symbolCount++;
+        }
+        int functionCount = 0;
+        for (var it = currentProgram.getFunctionManager().getFunctions(true); it.hasNext(); ) {
+            it.next();
+            functionCount++;
+        }
+        long dataCount = 0;
+        for (var it = currentProgram.getListing().getDefinedData(true); it.hasNext(); ) {
+            it.next();
+            dataCount++;
+        }
+
+        println("RESULT nativeCounts"
+                + " symbols=" + symbolCount + " vs getNumSymbols=" + currentProgram.getSymbolTable().getNumSymbols()
+                + " match=" + (symbolCount == currentProgram.getSymbolTable().getNumSymbols())
+                + " functions=" + functionCount + " vs getFunctionCount=" + currentProgram.getFunctionManager().getFunctionCount()
+                + " match=" + (functionCount == currentProgram.getFunctionManager().getFunctionCount())
+                + " data=" + dataCount + " vs getNumDefinedData=" + currentProgram.getListing().getNumDefinedData()
+                + " match=" + (dataCount == currentProgram.getListing().getNumDefinedData()));
+    }
+
+    /**
+     * Pretty-printed JSON versus compact, and the per-item Gson round trip
+     * that PaginatedResult does to attach the item links.
+     */
+    private void measureSerialization() {
+        var symbols = currentProgram.getSymbolTable().getAllSymbols(true);
+        List<String> names = new ArrayList<>();
+        for (var it = symbols.iterator(); it.hasNext(); ) {
+            var sym = it.next();
+            names.add(sym.getName(true) + "|" + sym.getAddress() + "|" + sym.getSymbolType()
+                    + "|" + sym.isPrimary() + "|" + sym.isExternal() + "|" + sym.isGlobal());
+            if (names.size() >= 100) {
+                break;
+            }
+        }
+
+        var compact = new com.google.gson.GsonBuilder().serializeNulls().create();
+        var pretty = new com.google.gson.GsonBuilder().serializeNulls().setPrettyPrinting().create();
+
+        // A realistic page item: the DTO fields plus the nested _links the
+        // paginated result attaches.
+        List<Map<String, Object>> page = new ArrayList<>();
+        for (var it = currentProgram.getSymbolTable().getAllSymbols(true); it.hasNext(); ) {
+            var sym = it.next();
+            var item = new java.util.LinkedHashMap<String, Object>();
+            item.put("address", sym.getAddress().toString());
+            item.put("label", sym.getName(true));
+            item.put("symbolType", sym.getSymbolType().toString());
+            item.put("isPrimary", sym.isPrimary());
+            item.put("isExternal", sym.isExternal());
+            item.put("isGlobal", sym.isGlobal());
+            item.put("source", sym.getSource() != null ? sym.getSource().toString() : null);
+            item.put("_links", java.util.Map.of("self",
+                java.util.Map.of("href", "/symbols/" + sym.getAddress(), "method", "GET")));
+            page.add(item);
+            if (page.size() >= 100) {
+                break;
+            }
+        }
+
+        long t0 = System.nanoTime();
+        String compactJson = compact.toJson(page);
+        long compactMs = (System.nanoTime() - t0) / 1_000_000;
+
+        long t1 = System.nanoTime();
+        String prettyJson = pretty.toJson(page);
+        long prettyMs = (System.nanoTime() - t1) / 1_000_000;
+
+        // The per-item round trip PaginatedResult does to flatten a record
+        // into a map before adding "_links".
+        var roundTrip = new com.google.gson.GsonBuilder()
+            .setObjectToNumberStrategy(com.google.gson.ToNumberPolicy.LONG_OR_DOUBLE).create();
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (var it = currentProgram.getSymbolTable().getAllSymbols(true); it.hasNext(); ) {
+            var sym = it.next();
+            items.add(new java.util.LinkedHashMap<>(java.util.Map.of(
+                "name", sym.getName(true),
+                "address", sym.getAddress().toString(),
+                "type", sym.getSymbolType().toString())));
+            if (items.size() >= 100) {
+                break;
+            }
+        }
+        long t2 = System.nanoTime();
+        int sink = 0;
+        for (var item : items) {
+            Map<String, Object> asMap = roundTrip.fromJson(roundTrip.toJson(item), Map.class);
+            sink += asMap.size();
+        }
+        long roundTripMs = (System.nanoTime() - t2) / 1_000_000;
+
+        long t3 = System.nanoTime();
+        int sink2 = 0;
+        for (var item : items) {
+            var tree = roundTrip.toJsonTree(item);
+            sink2 += tree.isJsonObject() ? tree.getAsJsonObject().size() : 0;
+        }
+        long treeMs = (System.nanoTime() - t3) / 1_000_000;
+
+        println("RESULT serialization"
+                + " compactBytes=" + compactJson.length()
+                + " prettyBytes=" + prettyJson.length()
+                + " sizeRatio=" + String.format("%.2fx", (double) prettyJson.length() / (double) compactJson.length())
+                + " compactMs=" + compactMs
+                + " prettyMs=" + prettyMs
+                + " roundTripMs=" + roundTripMs
+                + " toJsonTreeMs=" + treeMs
+                + " roundTripRatio=" + String.format("%.2fx", (double) roundTripMs / (double) Math.max(treeMs, 1))
+                + " sink=" + (sink + sink2));
+    }
+
+    /** How much of the /cfg cost is the block model construction itself? */
+    private void measureBlockModel() throws Exception {
+        Function fn = null;
+        long biggest = 0;
+        for (var it = currentProgram.getFunctionManager().getFunctions(true); it.hasNext(); ) {
+            var f = it.next();
+            if (f.getBody().getNumAddresses() > biggest) {
+                biggest = f.getBody().getNumAddresses();
+                fn = f;
+            }
+        }
+        if (fn == null) {
+            return;
+        }
+
+        long t0 = System.nanoTime();
+        for (int i = 0; i < 20; i++) {
+            var model = new ghidra.program.model.block.SimpleBlockModel(currentProgram, true);
+            model.getFirstCodeBlockContaining(fn.getEntryPoint(), ghidra.util.task.TaskMonitor.DUMMY);
+        }
+        long perCallMs = (System.nanoTime() - t0) / 1_000_000 / 20;
+
+        long t1 = System.nanoTime();
+        var model = new ghidra.program.model.block.SimpleBlockModel(currentProgram, true);
+        for (int i = 0; i < 20; i++) {
+            model.getFirstCodeBlockContaining(fn.getEntryPoint(), ghidra.util.task.TaskMonitor.DUMMY);
+        }
+        long reusedMs = (System.nanoTime() - t1) / 1_000_000 / 20;
+
+        println("RESULT blockModel"
+                + " function=" + fn.getName()
+                + " newPerCallMs=" + perCallMs
+                + " reusedMs=" + reusedMs
+                + " constructionShare=" + String.format("%.1f%%",
+                    100.0 * (perCallMs - reusedMs) / (double) Math.max(perCallMs, 1)));
     }
 
     /**

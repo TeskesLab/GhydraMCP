@@ -199,6 +199,17 @@ public class StructService {
     }
 
     private DataType findStructByName(DataTypeManager dtm, String name) {
+        // Fast path: a struct in the root category resolves through the data
+        // type index, without walking every data type in the program.
+        try {
+            DataType direct = dtm.getDataType(name);
+            if (direct instanceof Structure) {
+                return direct;
+            }
+        } catch (Exception ignored) {
+            // Not resolvable as a path; fall through to the scan.
+        }
+
         return GhidraSwing.runRead(() -> {
             DataType[] result = new DataType[1];
             dtm.getAllDataTypes().forEachRemaining(dt -> {

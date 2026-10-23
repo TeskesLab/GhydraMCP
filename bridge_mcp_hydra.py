@@ -10,6 +10,7 @@
 import base64
 import functools
 import os
+import re
 import signal
 import sys
 import threading
@@ -461,7 +462,10 @@ def format_decompile(response: dict, **kwargs) -> str:
         advisory_text = "\n".join(advisory_lines)
         if not code:
             return advisory_text
-        if advisory_text.lower() not in code.lower():
+        # Case-insensitive containment without copying the decompilation:
+        # code.lower() allocated a lowercased copy of the whole function
+        # just to answer "is the advisory already in there?".
+        if not re.search(re.escape(advisory_text), code, re.IGNORECASE):
             return f"{code.rstrip()}\n\n{advisory_text}"
 
     if not code:

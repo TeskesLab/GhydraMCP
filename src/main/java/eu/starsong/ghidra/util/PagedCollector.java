@@ -60,4 +60,32 @@ public final class PagedCollector {
 
         return new Page<>(items, matched);
     }
+
+    /**
+     * Collect a page when the total is already known.
+     *
+     * <p>The source is not walked to the end: the iteration stops as soon as
+     * the page is full, so a listing whose total comes from a native count
+     * costs only the page.
+     *
+     * @param total the number of elements in the whole source
+     */
+    public static <S, T> Page<T> collectPage(Iterator<S> source, int offset, int limit,
+                                              Function<S, T> mapper, int total) {
+        List<T> items = new ArrayList<>();
+        int start = Math.max(0, offset);
+        long limitEnd = (long) start + Math.max(0, limit);
+        int index = 0;
+        while (source.hasNext()) {
+            S element = source.next();
+            if (index >= start && index < limitEnd) {
+                items.add(mapper.apply(element));
+            }
+            index++;
+            if (index >= limitEnd) {
+                break;
+            }
+        }
+        return new Page<>(items, total);
+    }
 }
