@@ -4,6 +4,7 @@ import eu.starsong.ghidra.dto.StructDto;
 import eu.starsong.ghidra.dto.StructSummaryDto;
 import eu.starsong.ghidra.server.GhydraServer.NotFoundException;
 import eu.starsong.ghidra.util.GhidraSwing;
+import eu.starsong.ghidra.util.PagedCollector;
 import eu.starsong.ghidra.util.GhidraUtil;
 import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.program.model.data.CategoryPath;
@@ -16,24 +17,33 @@ import ghidra.program.model.data.StructureDataType;
 import ghidra.program.model.listing.Program;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
 public class StructService {
 
-    public List<StructSummaryDto> list(Program program, String categoryFilter) {
+    /**
+     * List one page of structs.
+     *
+     * <p>Every data type is still walked to find the structs, but only the
+     * structs on the page are turned into DTOs.
+     */
+    public PagedCollector.Page<StructSummaryDto> list(Program program, String categoryFilter,
+                                                      int offset, int limit) {
         DataTypeManager dtm = program.getDataTypeManager();
         return GhidraSwing.runRead(() -> {
-            List<StructSummaryDto> results = new ArrayList<>();
+            List<Structure> structs = new ArrayList<>();
             dtm.getAllDataTypes().forEachRemaining(dt -> {
                 if (!(dt instanceof Structure s)) return;
                 if (categoryFilter != null && !categoryFilter.isEmpty()
                     && !s.getCategoryPath().getPath().contains(categoryFilter)) return;
-                results.add(StructSummaryDto.from(s));
+                structs.add(s);
             });
-            results.sort((a, b) -> a.name().compareTo(b.name()));
-            return results;
+            structs.sort(Comparator.comparing(Structure::getName));
+            return PagedCollector.collect(structs.iterator(), s -> true, offset, limit,
+                StructSummaryDto::from);
         });
     }
 

@@ -30,6 +30,19 @@ public class DecompilerCache implements DomainObjectListener {
 
     private static final int MAX_ENTRIES = 50;
 
+    /**
+     * Process-wide cache. Decompiling through a fresh {@link DecompInterface}
+     * per call is expensive — re-opening the program dominates the cost — and
+     * several endpoints need decompiler results, so they share one instance
+     * instead of each paying that price again.
+     */
+    private static final DecompilerCache SHARED = new DecompilerCache();
+
+    /** The process-wide cache. */
+    public static DecompilerCache shared() {
+        return SHARED;
+    }
+
     private final Map<Address, DecompileResults> cache;
     private final ReentrantLock decompLock = new ReentrantLock();
 

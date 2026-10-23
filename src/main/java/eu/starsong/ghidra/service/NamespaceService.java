@@ -2,6 +2,7 @@ package eu.starsong.ghidra.service;
 
 import eu.starsong.ghidra.dto.ClassDto;
 import eu.starsong.ghidra.util.GhidraSwing;
+import eu.starsong.ghidra.util.PagedCollector;
 import ghidra.program.model.address.GlobalNamespace;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.Namespace;
@@ -18,7 +19,13 @@ import java.util.Set;
  */
 public class NamespaceService {
 
-    public List<ClassDto> listClasses(Program program) {
+    /**
+     * List one page of classes.
+     *
+     * <p>The symbol table still has to be walked to find the class names, but
+     * only the names on the page become DTOs.
+     */
+    public PagedCollector.Page<ClassDto> listClasses(Program program, int offset, int limit) {
         return GhidraSwing.runRead(() -> {
             Set<String> classNames = new HashSet<>();
             for (Symbol symbol : program.getSymbolTable().getAllSymbols(true)) {
@@ -29,11 +36,15 @@ public class NamespaceService {
             }
             List<String> sorted = new ArrayList<>(classNames);
             Collections.sort(sorted);
-            return sorted.stream().map(ClassDto::fromQualifiedName).toList();
+            return PagedCollector.collect(sorted.iterator(), name -> true, offset, limit,
+                ClassDto::fromQualifiedName);
         });
     }
 
-    public List<String> listNamespaces(Program program) {
+    /**
+     * List one page of namespaces.
+     */
+    public PagedCollector.Page<String> listNamespaces(Program program, int offset, int limit) {
         return GhidraSwing.runRead(() -> {
             Set<String> namespaces = new HashSet<>();
             for (Symbol symbol : program.getSymbolTable().getAllSymbols(true)) {
@@ -44,7 +55,7 @@ public class NamespaceService {
             }
             List<String> sorted = new ArrayList<>(namespaces);
             Collections.sort(sorted);
-            return sorted;
+            return PagedCollector.collect(sorted.iterator(), name -> true, offset, limit, name -> name);
         });
     }
 }

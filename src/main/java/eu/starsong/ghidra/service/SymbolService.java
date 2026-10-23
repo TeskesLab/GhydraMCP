@@ -4,6 +4,7 @@ import eu.starsong.ghidra.dto.SymbolDto;
 import eu.starsong.ghidra.server.GhydraServer.NotFoundException;
 import eu.starsong.ghidra.util.GhidraSwing;
 import eu.starsong.ghidra.util.GhidraUtil;
+import eu.starsong.ghidra.util.PagedCollector;
 import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Program;
@@ -25,57 +26,40 @@ import java.util.stream.StreamSupport;
 public class SymbolService {
 
     /**
-     * List all symbols in the program.
+     * List one page of symbols matching a filter.
+     *
+     * <p>The whole symbol table is still walked to count the matches, but only
+     * the symbols on the page are turned into DTOs.
      */
-    public List<SymbolDto> list(Program program) {
-        return list(program, null);
-    }
-
-    /**
-     * List symbols matching a filter.
-     */
-    public List<SymbolDto> list(Program program, SymbolFilter filter) {
+    public PagedCollector.Page<SymbolDto> list(Program program, SymbolFilter filter, int offset, int limit) {
         SymbolTable symbolTable = program.getSymbolTable();
 
         Predicate<Symbol> predicate = filter != null ? filter.toPredicate() : sym -> true;
 
-        return GhidraSwing.runRead(() -> {
-            SymbolIterator symbols = symbolTable.getAllSymbols(true);
-            return StreamSupport.stream(symbols.spliterator(), false)
-                .filter(predicate)
-                .map(SymbolDto::from)
-                .toList();
-        });
+        return GhidraSwing.runRead(() -> PagedCollector.collect(
+            symbolTable.getAllSymbols(true), predicate, offset, limit, SymbolDto::from));
     }
 
     /**
-     * List external/imported symbols.
+     * List one page of external/imported symbols.
      */
-    public List<SymbolDto> listImports(Program program) {
+    public PagedCollector.Page<SymbolDto> listImports(Program program, int offset, int limit) {
         SymbolTable symbolTable = program.getSymbolTable();
 
-        return GhidraSwing.runRead(() -> {
-            SymbolIterator symbols = symbolTable.getExternalSymbols();
-            return StreamSupport.stream(symbols.spliterator(), false)
-                .map(SymbolDto::from)
-                .toList();
-        });
+        return GhidraSwing.runRead(() -> PagedCollector.collect(
+            symbolTable.getExternalSymbols(), sym -> true, offset, limit, SymbolDto::from));
     }
 
     /**
-     * List exported symbols.
+     * List one page of exported symbols.
      */
-    public List<SymbolDto> listExports(Program program) {
+    public PagedCollector.Page<SymbolDto> listExports(Program program, int offset, int limit) {
         SymbolTable symbolTable = program.getSymbolTable();
 
-        return GhidraSwing.runRead(() -> {
-            SymbolIterator symbols = symbolTable.getAllSymbols(true);
-            return StreamSupport.stream(symbols.spliterator(), false)
-                .filter(Symbol::isGlobal)
-                .filter(sym -> !sym.isExternal())
-                .map(SymbolDto::from)
-                .toList();
-        });
+        return GhidraSwing.runRead(() -> PagedCollector.collect(
+            symbolTable.getAllSymbols(true),
+            sym -> sym.isGlobal() && !sym.isExternal(),
+            offset, limit, SymbolDto::from));
     }
 
     /**
