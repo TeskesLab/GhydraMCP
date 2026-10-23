@@ -87,7 +87,11 @@ def is_enabled(config: Optional[Dict[str, Any]] = None) -> bool:
 
 
 def find_binary(config: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """Resolve the kuna executable, or None when it is not installed."""
+    """Resolve the kuna executable, or None when it is not installed.
+
+    A configured path wins, then whatever is on PATH, and finally the
+    Scoop install locations - those only exist on Windows.
+    """
     section = config_section() if config is None else config
     candidates: List[str] = []
 
@@ -99,9 +103,10 @@ def find_binary(config: Optional[Dict[str, Any]] = None) -> Optional[str]:
     if found:
         candidates.append(found)
 
-    home = os.path.expanduser("~")
-    candidates.append(os.path.join(home, "scoop", "shims", "kuna.exe"))
-    candidates.append(os.path.join(home, "scoop", "apps", "kuna", "current", "kuna.exe"))
+    if os.name == "nt":
+        home = os.path.expanduser("~")
+        candidates.append(os.path.join(home, "scoop", "shims", "kuna.exe"))
+        candidates.append(os.path.join(home, "scoop", "apps", "kuna", "current", "kuna.exe"))
 
     for candidate in candidates:
         if candidate and os.path.isfile(candidate):
@@ -149,6 +154,9 @@ def run(args: Sequence[str], config: Optional[Dict[str, Any]] = None,
             [executable, *args],
             capture_output=True,
             text=True,
+            # Kuna writes UTF-8; decoding with the locale instead would
+            # mangle the output when no UTF-8 locale is set.
+            encoding="utf-8",
             errors="replace",
             timeout=limit,
         )
@@ -355,6 +363,7 @@ def export(binary: str, output: Optional[str] = None,
             [executable, *args],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             errors="replace",
             timeout=DEFAULT_TIMEOUT,
         )

@@ -162,7 +162,12 @@ def _kuna_enabled() -> bool:
 
 
 def _kuna_candidates() -> List[str]:
-    """Where the kuna binary may live, most specific first."""
+    """Where the kuna binary may live, most specific first.
+
+    A configured path wins, then whatever is on PATH, and finally the
+    Scoop install locations - those only exist on Windows, so they are
+    skipped elsewhere.
+    """
     candidates: List[str] = []
     configured = _kuna_config().get("path") or os.environ.get(KUNA_ENV_PATH)
     if configured:
@@ -170,9 +175,10 @@ def _kuna_candidates() -> List[str]:
     found = shutil.which("kuna")
     if found:
         candidates.append(found)
-    home = os.path.expanduser("~")
-    candidates.append(os.path.join(home, "scoop", "shims", "kuna.exe"))
-    candidates.append(os.path.join(home, "scoop", "apps", "kuna", "current", "kuna.exe"))
+    if os.name == "nt":
+        home = os.path.expanduser("~")
+        candidates.append(os.path.join(home, "scoop", "shims", "kuna.exe"))
+        candidates.append(os.path.join(home, "scoop", "apps", "kuna", "current", "kuna.exe"))
     return candidates
 
 
@@ -230,6 +236,10 @@ def _kuna_run(args: List[str], timeout: Optional[int] = None) -> dict:
             [executable, *args],
             capture_output=True,
             text=True,
+            # Kuna writes UTF-8. Decoding with the locale instead would mangle
+            # the output on a system with no UTF-8 locale set (LANG=C, and a
+            # NixOS box with the locale left unset).
+            encoding="utf-8",
             errors="replace",
             timeout=limit,
         )
