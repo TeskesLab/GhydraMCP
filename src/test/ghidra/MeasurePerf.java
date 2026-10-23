@@ -59,6 +59,64 @@ public class MeasurePerf extends GhidraScript {
         measureNativeCounts();
         measureSerialization();
         measureBlockModel();
+        measureCfgWalk();
+    }
+
+    /**
+     * The cost of the whole CFG walk: every basic block of the function and
+     * its destinations, which is what the /cfg endpoint does per request.
+     */
+    private void measureCfgWalk() throws Exception {
+        Function fn = null;
+        long biggest = 0;
+        for (var it = currentProgram.getFunctionManager().getFunctions(true); it.hasNext(); ) {
+            var f = it.next();
+            if (f.getBody().getNumAddresses() > biggest) {
+                biggest = f.getBody().getNumAddresses();
+                fn = f;
+            }
+        }
+        if (fn == null) {
+            return;
+        }
+
+        long t0 = System.nanoTime();
+        int blocks = 0;
+        int edges = 0;
+        for (int round = 0; round < 5; round++) {
+            var model = new ghidra.program.model.block.SimpleBlockModel(currentProgram, true);
+            var funcBlock = model.getFirstCodeBlockContaining(
+                fn.getEntryPoint(), ghidra.util.task.TaskMonitor.DUMMY);
+            if (funcBlock == null) {
+                continue;
+            }
+            var visited = new java.util.LinkedHashSet<ghidra.program.model.block.CodeBlock>();
+            var queue = new java.util.LinkedList<ghidra.program.model.block.CodeBlock>();
+            queue.add(funcBlock);
+            while (!queue.isEmpty()) {
+                var block = queue.poll();
+                if (!visited.add(block)) {
+                    continue;
+                }
+                blocks++;
+                var destIter = block.getDestinations(ghidra.util.task.TaskMonitor.DUMMY);
+                while (destIter.hasNext()) {
+                    var ref = destIter.next();
+                    var dest = ref.getDestinationBlock();
+                    if (dest != null) {
+                        edges++;
+                        queue.add(dest);
+                    }
+                }
+            }
+        }
+        long perCallMs = (System.nanoTime() - t0) / 1_000_000 / 5;
+
+        println("RESULT cfgWalk"
+                + " function=" + fn.getName()
+                + " blocks=" + (blocks / 5)
+                + " edges=" + (edges / 5)
+                + " perCallMs=" + perCallMs);
     }
 
     /**

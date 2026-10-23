@@ -30,10 +30,22 @@ ALLOWED_ORIGINS = os.environ.get(
 
 active_instances: Dict[int, dict] = {}
 instances_lock = Lock()
+_scan_lock = Lock()
+_last_quick_scan = 0.0
 DEFAULT_GHIDRA_PORT = 8192
 DEFAULT_GHIDRA_HOST = "localhost"
 QUICK_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT, DEFAULT_GHIDRA_PORT+10)
 FULL_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT, DEFAULT_GHIDRA_PORT+20)
+
+# A live Ghidra plugin on the local host answers /plugin-version in
+# milliseconds. The timeout only bounds what a closed port costs, and on a host
+# whose firewall drops the packets instead of refusing them that is the whole
+# cost of the scan.
+DISCOVERY_PROBE_TIMEOUT = 0.2
+
+# How long a quick scan stays valid: a burst of instances_list calls shares
+# one scan instead of paying the probe timeout each time.
+QUICK_SCAN_TTL = 1.0
 
 BRIDGE_VERSION = "v3.0.0"
 REQUIRED_API_VERSION = 3000
@@ -1498,6 +1510,22 @@ def _probe_instance(port, scan_host, timeout):
         return None
 
 
+def _quick_scan(force: bool = False) -> None:
+    """Scan the quick range, at most once per QUICK_SCAN_TTL.
+
+    The scan is the only slow part of listing the instances, and a run of
+    calls does not need a fresh scan each time: the background daemon keeps
+    the registry up to date.
+    """
+    global _last_quick_scan
+    with _scan_lock:
+        now = time.monotonic()
+        if not force and (now - _last_quick_scan) < QUICK_SCAN_TTL:
+            return
+        _last_quick_scan = now
+        _discover_instances(QUICK_DISCOVERY_RANGE, host=None, timeout=DISCOVERY_PROBE_TIMEOUT)
+
+
 def _discover_instances(port_range, host=None, timeout=0.5) -> dict:
     """Internal function to discover NEW Ghidra instances by scanning ports
 
@@ -1559,7 +1587,7 @@ def periodic_discovery():
     """Periodically discover new instances"""
     while True:
         try:
-            _discover_instances(FULL_DISCOVERY_RANGE, timeout=0.5)
+            _discover_instances(FULL_DISCOVERY_RANGE, timeout=DISCOVERY_PROBE_TIMEOUT)
 
             # Snapshot the registry under the lock and do the HTTP checks
             # outside it. Holding instances_lock across the network calls made
@@ -1622,7 +1650,7 @@ def periodic_discovery():
         except Exception as e:
             print(f"Error in periodic discovery: {e}")
 
-        time.sleep(30)
+        time.sleep(10)
 
 def handle_sigint(signum, frame):
     os._exit(0)
@@ -2215,7 +2243,7 @@ def instances_list() -> dict:
               each showing port, url, project, and file
     """
     # Auto-discover new instances before listing
-    _discover_instances(QUICK_DISCOVERY_RANGE, host=None, timeout=0.5)
+    _quick_scan()
 
     with instances_lock:
         return {
@@ -2247,7 +2275,10 @@ def instances_discover(host: str | None = None) -> dict:
         dict: Contains 'instances' list with all available instances after discovery
     """
     # Discover instances on the specified host
-    _discover_instances(QUICK_DISCOVERY_RANGE, host=host, timeout=0.5)
+    if host is None or host == ghidra_host:
+        _quick_scan(force=True)
+    else:
+        _discover_instances(QUICK_DISCOVERY_RANGE, host=host, timeout=DISCOVERY_PROBE_TIMEOUT)
 
     # Return all instances (same format as instances_list for consistency)
     with instances_lock:
@@ -4499,7 +4530,7 @@ def main():
                       f"http://{ghidra_host}:{DEFAULT_GHIDRA_PORT}")
 
     # Use quick discovery on startup
-    _discover_instances(QUICK_DISCOVERY_RANGE)
+    _quick_scan(force=True)
 
     # Start background discovery thread
     discovery_thread = threading.Thread(
