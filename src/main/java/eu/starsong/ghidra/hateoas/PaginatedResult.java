@@ -149,21 +149,23 @@ public class PaginatedResult<T> {
             return result;
         }
 
-        // Flatten: convert record/POJO to a Map via Gson, then embed _links
+        // Flatten: convert the record to a JSON object and embed _links
         // directly at the top level so the JSON shape is
         //   {"name": ..., "address": ..., "_links": {...}}
         // rather than {"data": {...}, "_links": {...}}. This matches main's
         // shape and what the bridge/CLI/tests expect.
-        Gson gson = GSON;
+        //
+        // toJsonTree() instead of toJson()+fromJson(): the round trip
+        // serialised and re-parsed every item only to copy the fields into a
+        // Map, which allocated a second copy of the whole page.
         try {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> asMap = gson.fromJson(gson.toJson(item), Map.class);
-            if (asMap == null) {
+            com.google.gson.JsonElement tree = GSON.toJsonTree(item);
+            if (!tree.isJsonObject()) {
                 return item;
             }
-            Map<String, Object> result = new LinkedHashMap<>(asMap);
-            result.put("_links", itemLinks);
-            return result;
+            com.google.gson.JsonObject object = tree.getAsJsonObject();
+            object.add("_links", GSON.toJsonTree(itemLinks));
+            return object;
         } catch (Exception e) {
             // Fallback: if the item doesn't serialize to a JSON object,
             // leave it alone rather than fabricate a wrapper.
@@ -171,9 +173,13 @@ public class PaginatedResult<T> {
         }
     }
 
-    // LONG_OR_DOUBLE: without it, the fromJson(..., Map.class) round trip above
-    // turns every integral field into a Double ("size": 1024.0 in the output).
+    // serializeNulls and disableHtmlEscaping mirror the server's GsonMapper,
+    // so an item rendered here matches one rendered by the response mapper.
+    // LONG_OR_DOUBLE: without it, the fromJson(..., Map.class) round trip
+    // turned every integral field into a Double ("size": 1024.0 in the output).
     private static final Gson GSON = new com.google.gson.GsonBuilder()
+        .serializeNulls()
+        .disableHtmlEscaping()
         .setObjectToNumberStrategy(com.google.gson.ToNumberPolicy.LONG_OR_DOUBLE)
         .create();
 }

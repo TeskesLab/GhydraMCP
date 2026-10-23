@@ -2,6 +2,9 @@
 
 import click
 import sys
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from ..client.exceptions import GhidraError
 from ..utils import should_page, page_output, rich_echo
@@ -294,7 +297,8 @@ def _discover_instances_on_host(host, port_range, config):
             test_client = GhidraHTTPClient(
                 host=host,
                 port=port,
-                timeout=timeout
+                timeout=timeout,
+                session=shared_session
             )
 
             # Try to get plugin version
@@ -337,6 +341,19 @@ def _discover_instances_on_host(host, port_range, config):
         except:
             # Connection failed, skip this port
             return None
+
+    # One session for the whole scan: a client per port used to build a
+    # connection pool (and a retry adapter) per port.
+    shared_session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[502, 503, 504],
+        allowed_methods=["GET", "POST", "PATCH", "PUT", "DELETE"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=20)
+    shared_session.mount("http://", adapter)
+    shared_session.mount("https://", adapter)
 
     # Use ThreadPoolExecutor for concurrent port scanning
     with ThreadPoolExecutor(max_workers=10) as executor:

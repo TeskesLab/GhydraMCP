@@ -29,7 +29,8 @@ class GhidraHTTPClient:
         self,
         host: str = "localhost",
         port: int = 8192,
-        timeout: int = 900
+        timeout: int = 900,
+        session: Optional[requests.Session] = None
     ):
         """Initialize HTTP client.
 
@@ -37,6 +38,9 @@ class GhidraHTTPClient:
             host: Hostname or IP address (default: localhost)
             port: Port number (default: 8192)
             timeout: Request timeout in seconds (default: 900)
+            session: Session to reuse. A port scan creates one client per
+                port; sharing one session keeps the connection pool (and the
+                retry adapter) instead of building a new one per port.
         """
         self.host = host
         self.port = port
@@ -44,16 +48,19 @@ class GhidraHTTPClient:
         self.base_url = f"http://{host}:{port}"
 
         # Configure session with retry logic
-        self.session = requests.Session()
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[502, 503, 504],
-            allowed_methods=["GET", "POST", "PATCH", "PUT", "DELETE"]
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=20)
-        self.session.mount("http://", adapter)
-        self.session.mount("https://", adapter)
+        if session is None:
+            self.session = requests.Session()
+            retry_strategy = Retry(
+                total=3,
+                backoff_factor=0.5,
+                status_forcelist=[502, 503, 504],
+                allowed_methods=["GET", "POST", "PATCH", "PUT", "DELETE"]
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=20)
+            self.session.mount("http://", adapter)
+            self.session.mount("https://", adapter)
+        else:
+            self.session = session
 
     def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Make GET request to API.

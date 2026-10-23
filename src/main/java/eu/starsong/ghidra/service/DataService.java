@@ -35,7 +35,17 @@ public class DataService {
     public PagedCollector.Page<DataDto> list(Program program, DataFilter filter, int offset, int limit) {
         Listing listing = program.getListing();
 
-        Predicate<Data> predicate = filter != null ? filter.toPredicate() : d -> true;
+        if (filter == null) {
+            // Unfiltered: the total comes from the listing itself, so the
+            // walk can stop as soon as the page is full. (Verified against
+            // the iterator count: getNumDefinedData() and getDefinedData()
+            // agree, unlike the symbol and function counters.)
+            int total = (int) listing.getNumDefinedData();
+            return GhidraSwing.runRead(() -> PagedCollector.collectPage(
+                listing.getDefinedData(true), offset, limit, DataDto::from, total));
+        }
+
+        Predicate<Data> predicate = filter.toPredicate();
 
         return GhidraSwing.runRead(() -> PagedCollector.collect(
             listing.getDefinedData(true), predicate, offset, limit, DataDto::from));
