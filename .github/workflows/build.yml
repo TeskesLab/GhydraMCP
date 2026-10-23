@@ -76,7 +76,11 @@ jobs:
       - name: Resolve latest Ghidra ${{ matrix.ghidra-series }}.x
         id: ghidra
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The automatic job token, in the context form the GitHub CLI
+          # documents. `secrets.GITHUB_TOKEN` is the same value, but the
+          # context is the canonical one and it also resolves in a
+          # reusable workflow called with `workflow_call`.
+          GH_TOKEN: ${{ github.token }}
           SERIES: ${{ matrix.ghidra-series }}
         run: |
           set -euo pipefail

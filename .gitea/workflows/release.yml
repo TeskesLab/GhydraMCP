@@ -9,6 +9,9 @@ name: Release
 #
 # Trigger it by pushing the tag to this repository:
 #   git push forgejo main && git push forgejo v3.1.0
+#
+# Or dispatch it by hand for a dry run, which builds everything and checks
+# the credentials without creating a release.
 
 on:
   push:
@@ -19,6 +22,11 @@ on:
       version:
         description: 'Release version without the v prefix (e.g. 3.1.0)'
         required: true
+        type: string
+      dry_run:
+        description: 'Build and check the credentials, but do not publish'
+        required: false
+        default: 'false'
         type: string
 
 jobs:
@@ -35,6 +43,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -47,8 +56,14 @@ jobs:
             echo "::error::'$VERSION' is not a valid version"
             exit 1
           fi
+          # The dry-run flag is resolved here, once, and handed on as a step
+          # output. A workflow_dispatch input arrives as the string "true",
+          # so it has to be compared as a string.
+          PUBLISH=true
+          if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then PUBLISH=false; fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Releasing v$VERSION"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION (publish=$PUBLISH)"
 
       - name: "Guard: version constants must match the release version"
         run: python3 scripts/version.py --check --expect "${{ steps.meta.outputs.version }}"
@@ -64,16 +79,59 @@ jobs:
           apt-get install -y maven jq unzip curl python3
           mvn --version
 
+      - name: Probe the credentials
+        # The two APIs need two different tokens, and this instance decides
+        # which ones exist. The probe reports what it finds - lengths and HTTP
+        # status codes only, never a token - so the build and the publish
+        # steps can act on facts instead of assumptions.
+        id: probe
+        env:
+          PROBE_GITHUB: ${{ secrets.GITHUB_TOKEN }}
+          PROBE_GITEA: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "GITHUB_TOKEN secret: $([ -n "$PROBE_GITHUB" ] && echo present || echo empty)"
+          echo "RELEASE_TOKEN secret: $([ -n "$PROBE_GITEA" ] && echo present || echo empty)"
+
+          # A GitHub token would let the Ghidra release list be read
+          # authenticated, which avoids the unauthenticated rate limit.
+          GITHUB_USABLE=false
+          if [ -n "$PROBE_GITHUB" ]; then
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $PROBE_GITHUB" \
+              "https://api.github.com/repos/NationalSecurityAgency/ghidra/releases?per_page=1")
+            echo "GITHUB_TOKEN against api.github.com: HTTP $code"
+            if [ "$code" = "200" ]; then GITHUB_USABLE=true; fi
+          fi
+          echo "github_token_usable=$GITHUB_USABLE" >> "$GITHUB_OUTPUT"
+
+          # A Gitea token is what creates the release here.
+          GITEA_USABLE=false
+          if [ -n "$PROBE_GITEA" ]; then
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: token $PROBE_GITEA" \
+              "${{ github.server_url }}/api/v1/repos/${{ github.repository }}/releases")
+            echo "RELEASE_TOKEN against the Gitea API: HTTP $code"
+            if [ "$code" = "200" ]; then GITEA_USABLE=true; fi
+          fi
+          echo "gitea_token_usable=$GITEA_USABLE" >> "$GITHUB_OUTPUT"
+
       - name: Build the extension for each supported Ghidra series
         env:
+          # The Ghidra release list lives on GitHub and is public, so the
+          # normal path is an unauthenticated call. A GitHub token would
+          # avoid the rate limit, but this instance cannot hold one: Gitea
+          # reserves the GITHUB_ prefix for secrets it provides itself, and
+          # a Gitea token is rejected by GitHub. The probe decides.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN_USABLE: ${{ steps.probe.outputs.github_token_usable }}
         run: |
           set -euo pipefail
           mkdir -p target
           for SERIES in 11 12; do
             echo "::group::Ghidra ${SERIES}.x"
             AUTH=()
-            if [ -n "${GH_TOKEN:-}" ]; then
+            if [ -n "${GH_TOKEN:-}" ] && [ "${GH_TOKEN_USABLE}" = "true" ]; then
               AUTH=(-H "Authorization: Bearer ${GH_TOKEN}")
             fi
             json=$(curl -fsSL "${AUTH[@]}" \
@@ -123,8 +181,34 @@ jobs:
           curl -sL https://dl.gitea.io/tea/0.13.0/tea-0.13.0-linux-amd64 -o /usr/local/bin/tea
           chmod +x /usr/local/bin/tea
 
-      - name: Create the release
+      - name: Check the release credentials
+        # A dry run proves that the credentials work, without publishing.
+        if: ${{ steps.meta.outputs.publish != 'true' }}
         env:
+          TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GITEA_SERVER: ${{ github.server_url }}
+          GITEA_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPO_OWNER="${GITEA_REPOSITORY%%/*}"
+          REPO_NAME="${GITEA_REPOSITORY#*/}"
+          if [ -z "${TEA_TOKEN:-}" ]; then
+            echo "::error::the RELEASE_TOKEN secret is missing: create a Gitea token with the write:repository scope and store it in the repository settings (Actions -> Secrets). Gitea reserves the GITHUB_ and GITEA_ prefixes, so the secret cannot be called GITHUB_TOKEN."
+            exit 1
+          fi
+          count=$(curl -sf -H "Authorization: token $TEA_TOKEN" \
+            "$GITEA_SERVER/api/v1/repos/$GITEA_REPOSITORY/releases" | jq 'length')
+          echo "the token authenticates: ${count} existing release(s)"
+          # The publish step logs in with the same token, so prove that too.
+          tea login add --name default --url "$GITEA_SERVER" --token "$TEA_TOKEN"
+          tea releases ls --repo "${REPO_OWNER}/${REPO_NAME}" --login default
+
+      - name: Create the release
+        if: ${{ steps.meta.outputs.publish == 'true' }}
+        env:
+          # The Gitea token that creates the release. Gitea reserves the
+          # GITHUB_ and GITEA_ prefixes for the secrets it provides itself,
+          # so a repository secret has to carry another name.
           TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           GITEA_SERVER: ${{ github.server_url }}
           GITEA_REPOSITORY: ${{ github.repository }}
@@ -157,6 +241,7 @@ jobs:
             "${ASSETS[@]}"
 
       - name: Verify the release
+        if: ${{ steps.meta.outputs.publish == 'true' }}
         env:
           TEA_TOKEN: ${{ secrets.RELEASE_TOKEN }}
           GITEA_SERVER: ${{ github.server_url }}
