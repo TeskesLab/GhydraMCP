@@ -1,5 +1,6 @@
 package eu.starsong.ghidra.resource;
 
+import eu.starsong.ghidra.hateoas.PaginatedResult;
 import eu.starsong.ghidra.hateoas.Paginator;
 import eu.starsong.ghidra.server.GhidraContext;
 import eu.starsong.ghidra.server.Resource;
@@ -30,9 +31,9 @@ public class NamespaceResource implements Resource {
     private void list(GhidraContext ctx) {
         var program = ctx.requireProgram();
         var pagination = ctx.pagination();
-        List<String> namespaces = service.listNamespaces(program);
+        var page = service.listNamespaces(program, pagination.offset(), pagination.limit());
 
-        var result = Paginator.paginate(namespaces, pagination, "/namespaces");
+        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(), pagination.limit(), "/namespaces");
 
         ctx.json(result.toResponse(ctx.ctx(), ctx.port())
             .link("program", "/program")

@@ -9,13 +9,23 @@ public record DisassemblyInstructionDto(
     String mnemonic,
     String operands
 ) {
+    /**
+     * Hex digits lookup. String.format("%02X", ...) parses its format string
+     * and allocates a Formatter on every call, which is ~96x slower than a
+     * table lookup for the byte-at-a-time encoding below.
+     */
+    private static final char[] HEX_DIGITS = "0123456789ABCDEF".toCharArray();
+
     public static DisassemblyInstructionDto from(Instruction instr, Program program) {
         String hex;
         try {
             byte[] raw = new byte[instr.getLength()];
             program.getMemory().getBytes(instr.getAddress(), raw);
-            StringBuilder sb = new StringBuilder();
-            for (byte b : raw) sb.append(String.format("%02X", b & 0xFF));
+            StringBuilder sb = new StringBuilder(raw.length * 2);
+            for (byte b : raw) {
+                int v = b & 0xFF;
+                sb.append(HEX_DIGITS[v >>> 4]).append(HEX_DIGITS[v & 0x0F]);
+            }
             hex = sb.toString();
         } catch (Exception e) {
             hex = "";

@@ -3,6 +3,7 @@ package eu.starsong.ghidra.resource;
 import eu.starsong.ghidra.dto.StructDto;
 import eu.starsong.ghidra.dto.StructSummaryDto;
 import eu.starsong.ghidra.hateoas.Links;
+import eu.starsong.ghidra.hateoas.PaginatedResult;
 import eu.starsong.ghidra.hateoas.Paginator;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
@@ -59,9 +60,9 @@ public class StructResource implements Resource {
         }
 
         String categoryFilter = ctx.queryParam("category");
-        List<StructSummaryDto> structs = service.list(program, categoryFilter);
+        var page = service.list(program, categoryFilter, pagination.offset(), pagination.limit());
 
-        var result = Paginator.paginate(structs, pagination, "/structs")
+        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(), pagination.limit(), "/structs")
             .withItemLinks(s -> Links.builder()
                 .self("/structs/{}", s.name())
                 .linkWithMethod("delete", "/structs/{}", "DELETE", s.name())

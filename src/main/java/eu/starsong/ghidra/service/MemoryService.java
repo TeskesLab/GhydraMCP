@@ -19,6 +19,9 @@ import java.util.List;
  */
 public class MemoryService {
 
+    /** Hex digits lookup, used instead of String.format per byte. */
+    private static final char[] HEX_DIGITS = "0123456789abcdef".toCharArray();
+
     /**
      * List all memory blocks/segments.
      */
@@ -93,9 +96,12 @@ public class MemoryService {
      */
     public String readBytesAsHex(Program program, String addressStr, int length) {
         byte[] bytes = readBytes(program, addressStr, length);
-        StringBuilder sb = new StringBuilder();
+        // Table lookup instead of String.format("%02x", ...): the formatter
+        // re-parses its format string and allocates a Formatter per byte.
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
         for (byte b : bytes) {
-            sb.append(String.format("%02x", b & 0xff));
+            int v = b & 0xFF;
+            sb.append(HEX_DIGITS[v >>> 4]).append(HEX_DIGITS[v & 0x0F]);
         }
         return sb.toString();
     }
@@ -130,9 +136,13 @@ public class MemoryService {
 
     /**
      * Disassemble instructions starting at an address.
+     *
+     * <p>The first {@code offset} instructions are walked but not converted
+     * into DTOs, so paging through a long listing stays linear instead of
+     * rebuilding the skipped prefix on every page.
      */
     public List<eu.starsong.ghidra.dto.DisassemblyInstructionDto> disassembleAt(
-            Program program, String addressStr, int limit) {
+            Program program, String addressStr, int offset, int limit) {
         Address address = GhidraUtil.resolveAddress(program, addressStr);
         if (address == null) {
             throw new IllegalArgumentException("Invalid address: " + addressStr);
@@ -141,9 +151,19 @@ public class MemoryService {
         return GhidraSwing.runRead(() -> {
             List<eu.starsong.ghidra.dto.DisassemblyInstructionDto> results = new java.util.ArrayList<>();
             var instrIter = program.getListing().getInstructions(finalAddress, true);
+            int skip = Math.max(0, offset);
+            int take = Math.max(0, limit);
+            int skipped = 0;
             int collected = 0;
-            while (instrIter.hasNext() && (limit <= 0 || collected < limit)) {
+            while (instrIter.hasNext()) {
                 var instr = instrIter.next();
+                if (skipped < skip) {
+                    skipped++;
+                    continue;
+                }
+                if (collected >= take) {
+                    break;
+                }
                 results.add(eu.starsong.ghidra.dto.DisassemblyInstructionDto.from(instr, program));
                 collected++;
             }

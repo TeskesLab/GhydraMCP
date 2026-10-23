@@ -3,6 +3,7 @@ package eu.starsong.ghidra.service;
 import eu.starsong.ghidra.dto.DataDto;
 import eu.starsong.ghidra.server.GhydraServer.NotFoundException;
 import eu.starsong.ghidra.util.GhidraSwing;
+import eu.starsong.ghidra.util.PagedCollector;
 import eu.starsong.ghidra.util.GhidraUtil;
 import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.program.model.address.Address;
@@ -26,39 +27,45 @@ import java.util.regex.Pattern;
 public class DataService {
 
     /**
-     * List defined data in the program.
+     * List one page of defined data in the program.
+     *
+     * <p>Every defined item is still walked to count the matches, but only the
+     * items on the page are turned into DTOs.
      */
-    public List<DataDto> list(Program program, DataFilter filter) {
+    public PagedCollector.Page<DataDto> list(Program program, DataFilter filter, int offset, int limit) {
         Listing listing = program.getListing();
-        List<DataDto> results = new ArrayList<>();
 
         Predicate<Data> predicate = filter != null ? filter.toPredicate() : d -> true;
 
-        return GhidraSwing.runRead(() -> {
-            for (Data data : listing.getDefinedData(true)) {
-                if (predicate.test(data)) {
-                    results.add(DataDto.from(data));
-                }
-            }
-            return results;
-        });
+        return GhidraSwing.runRead(() -> PagedCollector.collect(
+            listing.getDefinedData(true), predicate, offset, limit, DataDto::from));
     }
 
     /**
-     * List strings in the program.
+     * List one page of strings in the program.
+     *
+     * @param valueFilter optional substring the string value has to contain
      */
-    public List<DataDto> listStrings(Program program) {
+    public PagedCollector.Page<DataDto> listStrings(Program program, String valueFilter,
+                                                     int offset, int limit) {
         Listing listing = program.getListing();
-        List<DataDto> results = new ArrayList<>();
+        String lower = valueFilter != null && !valueFilter.isEmpty() ? valueFilter.toLowerCase() : null;
 
-        return GhidraSwing.runRead(() -> {
-            for (Data data : listing.getDefinedData(true)) {
-                if (data.getDataType().getName().toLowerCase().contains("string")) {
-                    results.add(DataDto.from(data));
-                }
-            }
-            return results;
-        });
+        return GhidraSwing.runRead(() -> PagedCollector.collect(
+            listing.getDefinedData(true),
+            d -> d.getDataType().getName().toLowerCase().contains("string")
+                && (lower == null || valueOf(d).toLowerCase().contains(lower)),
+            offset, limit, DataDto::from));
+    }
+
+    /** The value of a data item as text, empty when it has none. */
+    private static String valueOf(Data data) {
+        try {
+            Object value = data.getValue();
+            return value != null ? value.toString() : "";
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     /**

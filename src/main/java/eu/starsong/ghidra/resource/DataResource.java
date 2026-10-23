@@ -2,6 +2,7 @@ package eu.starsong.ghidra.resource;
 
 import eu.starsong.ghidra.dto.DataDto;
 import eu.starsong.ghidra.hateoas.Links;
+import eu.starsong.ghidra.hateoas.PaginatedResult;
 import eu.starsong.ghidra.hateoas.Paginator;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
@@ -55,9 +56,9 @@ public class DataResource implements Resource {
             ctx.queryParam("type")
         );
 
-        List<DataDto> data = dataService.list(program, filter);
+        var page = dataService.list(program, filter, pagination.offset(), pagination.limit());
 
-        var result = Paginator.paginate(data, pagination, "/data")
+        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(), pagination.limit(), "/data")
             .withItemLinks(d -> Links.builder()
                 .self("/data/{}", d.address())
                 .link("memory", "/memory/{}", d.address())
@@ -74,15 +75,9 @@ public class DataResource implements Resource {
         var pagination = ctx.pagination();
         String filter = ctx.queryParam("filter");
 
-        List<DataDto> strings = dataService.listStrings(program);
-        if (filter != null && !filter.isEmpty()) {
-            String lower = filter.toLowerCase();
-            strings = strings.stream()
-                .filter(d -> d.value() != null && d.value().toLowerCase().contains(lower))
-                .toList();
-        }
+        var page = dataService.listStrings(program, filter, pagination.offset(), pagination.limit());
 
-        var result = Paginator.paginate(strings, pagination, "/strings")
+        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(), pagination.limit(), "/strings")
             .withItemLinks(d -> Links.builder()
                 .self("/data/{}", d.address())
                 .build());

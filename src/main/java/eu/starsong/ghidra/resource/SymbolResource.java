@@ -2,6 +2,7 @@ package eu.starsong.ghidra.resource;
 
 import eu.starsong.ghidra.dto.SymbolDto;
 import eu.starsong.ghidra.hateoas.Links;
+import eu.starsong.ghidra.hateoas.PaginatedResult;
 import eu.starsong.ghidra.hateoas.Paginator;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
@@ -56,9 +57,9 @@ public class SymbolResource implements Resource {
             ctx.queryParam("is_global")
         );
 
-        List<SymbolDto> symbols = symbolService.list(program, filter);
+        var page = symbolService.list(program, filter, pagination.offset(), pagination.limit());
 
-        var result = Paginator.paginate(symbols, pagination, "/symbols")
+        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(), pagination.limit(), "/symbols")
             .withItemLinks(sym -> Links.builder()
                 .self("/symbols/{}", sym.address())
                 .build());
@@ -78,9 +79,9 @@ public class SymbolResource implements Resource {
         var program = ctx.requireProgram();
         var pagination = ctx.pagination();
 
-        List<SymbolDto> symbols = symbolService.listImports(program);
+        var page = symbolService.listImports(program, pagination.offset(), pagination.limit());
 
-        var result = Paginator.paginate(symbols, pagination, "/symbols/imports")
+        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(), pagination.limit(), "/symbols/imports")
             .withItemLinks(sym -> Links.builder()
                 .self("/symbols/{}", sym.address())
                 .build());
@@ -98,9 +99,9 @@ public class SymbolResource implements Resource {
         var program = ctx.requireProgram();
         var pagination = ctx.pagination();
 
-        List<SymbolDto> symbols = symbolService.listExports(program);
+        var page = symbolService.listExports(program, pagination.offset(), pagination.limit());
 
-        var result = Paginator.paginate(symbols, pagination, "/symbols/exports")
+        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(), pagination.limit(), "/symbols/exports")
             .withItemLinks(sym -> Links.builder()
                 .self("/symbols/{}", sym.address())
                 .build());

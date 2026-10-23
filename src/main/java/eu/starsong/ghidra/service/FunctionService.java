@@ -6,6 +6,8 @@ import eu.starsong.ghidra.dto.FunctionSummaryDto;
 import eu.starsong.ghidra.server.GhydraServer.NotFoundException;
 import eu.starsong.ghidra.util.GhidraSwing;
 import eu.starsong.ghidra.util.GhidraUtil;
+import eu.starsong.ghidra.util.DecompilerCache;
+import eu.starsong.ghidra.util.PagedCollector;
 import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
@@ -49,24 +51,19 @@ public class FunctionService {
     /**
      * List all functions in the program.
      */
-    public List<FunctionSummaryDto> list(Program program) {
-        return list(program, null);
-    }
-
-    /**
-     * List functions matching a filter.
+/**
+     * List one page of functions matching a filter.
+     *
+     * <p>Every function is still walked to count the matches, but only the
+     * functions on the page are turned into DTOs.
      */
-    public List<FunctionSummaryDto> list(Program program, FunctionFilter filter) {
+    public PagedCollector.Page<FunctionSummaryDto> list(Program program, FunctionFilter filter,
+                                                          int offset, int limit) {
         Predicate<Function> predicate = filter != null ? filter.toPredicate() : fn -> true;
 
-        return GhidraSwing.runRead(() -> {
-            FunctionIterator functions = program.getFunctionManager().getFunctions(true);
-            List<FunctionSummaryDto> out = StreamSupport.stream(functions.spliterator(), false)
-                .filter(predicate)
-                .map(FunctionSummaryDto::from)
-                .toList();
-            return out;
-        });
+        return GhidraSwing.runRead(() -> PagedCollector.collect(
+            program.getFunctionManager().getFunctions(true), predicate, offset, limit,
+            FunctionSummaryDto::from));
     }
 
     /**
@@ -303,6 +300,36 @@ public class FunctionService {
     }
 
     /**
+     * Disassemble one page of a function body.
+     *
+     * <p>Only the instructions that land on the page are turned into DTOs. The
+     * rest of the function is walked to count it, which is what the pagination
+     * metadata reports, but building a DTO for every instruction of a large
+     * function and discarding all but the page was the expensive part.
+     */
+    public PagedCollector.Page<DisassemblyInstructionDto> disassemblePage(
+            Program program, Function function, int offset, int limit) {
+        return GhidraSwing.runRead(() -> {
+            List<DisassemblyInstructionDto> results = new ArrayList<>();
+            Listing listing = program.getListing();
+            Address start = function.getEntryPoint();
+            Address end = function.getBody().getMaxAddress();
+
+            int startIndex = Math.max(0, offset);
+            long limitEnd = (long) startIndex + Math.max(0, limit);
+            int index = 0;
+            for (Instruction i : listing.getInstructions(start, true)) {
+                if (i.getAddress().compareTo(end) > 0) break;
+                if (index >= startIndex && index < limitEnd) {
+                    results.add(DisassemblyInstructionDto.from(i, program));
+                }
+                index++;
+            }
+            return new PagedCollector.Page<>(results, index);
+        });
+    }
+
+    /**
      * Update a local variable (rename and/or retype) in a function.
      */
     public boolean updateLocalVariable(Program program, Function function, String variableName,
@@ -311,14 +338,8 @@ public class FunctionService {
             throw new IllegalArgumentException(
                 "Local variable names cannot contain '::' (local variables are not namespaced)");
         }
-        DecompileResults decompResults;
-        DecompInterface decomp = new DecompInterface();
-        try {
-            decomp.openProgram(program);
-            decompResults = decomp.decompileFunction(function, 60, new ConsoleTaskMonitor());
-        } finally {
-            decomp.dispose();
-        }
+        DecompileResults decompResults =
+            DecompilerCache.shared().getDecompileResults(program, function, 60);
         if (decompResults == null || !decompResults.decompileCompleted()) {
             throw new IllegalStateException("Decompilation failed for " + function.getName());
         }
@@ -414,14 +435,10 @@ public class FunctionService {
      * Get pcode operations for a function via decompiler.
      */
     public Map<String, Object> getPcode(Program program, Function function, int timeout) {
-        DecompInterface decomp = new DecompInterface();
-        DecompileResults results;
-        try {
-            decomp.openProgram(program);
-            results = decomp.decompileFunction(function, timeout, new ConsoleTaskMonitor());
-        } finally {
-            decomp.dispose();
-        }
+        // Reuse the shared decompiler: opening the program in a fresh
+        // DecompInterface costs more than the decompile itself, and the cache
+        // also serves a repeat request for the same function without work.
+        DecompileResults results = DecompilerCache.shared().getDecompileResults(program, function, timeout);
 
         if (results == null || !results.decompileCompleted()) {
             throw new IllegalStateException("Decompilation failed for pcode extraction");
