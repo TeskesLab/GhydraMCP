@@ -221,6 +221,35 @@ ghydra --json functions list | jq '.result[].name'
 
 All commands accept `--host`, `--port`, `--json`, and `--no-color`, but these are defined on the root command and must come **before** the subcommand: `ghydra --json functions list`. See [GHYDRA_CLI.md](GHYDRA_CLI.md) for the full reference.
 
+### Installing on Linux and NixOS
+
+`pip install -e .` needs a Python environment you own. On a distribution that manages
+Python centrally (Debian, Fedora, and **NixOS**) the system interpreter refuses the
+install with `error: externally-managed-environment`, so use one of:
+
+```bash
+# uv, with its own environment (recommended)
+uv tool install --editable .
+uv venv && uv pip install --editable .
+
+# a plain virtualenv
+python3 -m venv .venv && .venv/bin/pip install -e .
+
+# NixOS, inside a nix-shell with the interpreter and the tools
+nix-shell -p python3 python311Packages.pip --run 'python3 -m pip install -e .'
+```
+
+The MCP bridge is a single script with inline dependencies, so it needs no install at
+all — `uv run` resolves them:
+
+```bash
+uv run bridge_mcp_hydra.py
+```
+
+The bridge resolves the Kuna binary from `PATH` or from the `kuna.path` key in
+`~/.ghydra/config.json`, which is the way to point at a binary installed outside the
+default profile. See [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
+
 Timeout defaults are intentionally high for large binaries:
 - CLI/bridge HTTP timeout default: `900s` (`GHYDRA_TIMEOUT`)
 - Decompilation timeout default: `1200s` (`GHYDRA_DECOMP_TIMEOUT`)

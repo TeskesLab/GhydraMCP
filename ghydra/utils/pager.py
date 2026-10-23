@@ -1,6 +1,7 @@
 """Output paging utilities."""
 
 import os
+import shlex
 import subprocess
 import sys
 import shutil
@@ -48,12 +49,18 @@ def page_output(text: str, use_pager: bool = True):
             if 'LESS' not in env:
                 env['LESS'] = '-RFX'
 
-        # Pipe output to pager
+        # The pager is run without a shell: NixOS has no /bin/sh, and a
+        # $PAGER holding shell metacharacters would otherwise be executed
+        # by one. Splitting the value keeps "less -R" working.
+        argv = shlex.split(pager)
+        if not argv:
+            print(text)
+            return
+
         proc = subprocess.Popen(
-            pager,
+            argv,
             stdin=subprocess.PIPE,
             env=env,
-            shell=True
         )
         proc.communicate(input=text.encode('utf-8'))
     except (IOError, OSError, KeyboardInterrupt):

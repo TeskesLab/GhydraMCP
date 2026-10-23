@@ -38,7 +38,7 @@ class ConfigManager:
             return GhidraConfig()
 
         try:
-            with open(cls.CONFIG_FILE, 'r') as f:
+            with open(cls.CONFIG_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
             if verbose:
@@ -81,7 +81,7 @@ class ConfigManager:
             cls.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
             # Write config file
-            with open(cls.CONFIG_FILE, 'w') as f:
+            with open(cls.CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config.to_dict(), f, indent=2)
 
             if verbose:

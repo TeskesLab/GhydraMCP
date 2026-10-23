@@ -1,0 +1,16 @@
+# Keep the bytes in the repository the same no matter which platform
+# commits them. Without this, a file committed from Windows lands in the
+# repository with CRLF, and a CRLF inside a workflow `run:` block breaks
+# bash on the runner: "set -euo pipefail\r" is not a command.
+* text=auto eol=lf
+
+# The artwork and the built artifacts are binary: git must not touch them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.jar binary
+*.zip binary
+*.class binary
+*.pdf binary
