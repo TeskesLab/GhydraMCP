@@ -361,43 +361,39 @@ public class GhidraUtil {
             return dbVars;
         });
 
-        DecompInterface decompiler = new DecompInterface();
-        try {
-            decompiler.openProgram(function.getProgram());
-            DecompileResults results = decompiler.decompileFunction(function, 30, TaskMonitor.DUMMY);
-            if (results.decompileCompleted()) {
-                HighFunction highFunc = results.getHighFunction();
-                if (highFunc != null) {
-                    for (var iter = highFunc.getLocalSymbolMap().getSymbols(); iter.hasNext(); ) {
-                        ghidra.program.model.pcode.HighSymbol sym = iter.next();
-                        boolean alreadyAdded = false;
-                        for (Map<String, Object> v : variables) {
-                            if (v.get("name").equals(sym.getName())) {
-                                alreadyAdded = true;
-                                break;
-                            }
-                        }
-                        if (!alreadyAdded) {
-                            Map<String, Object> varInfo = new HashMap<>();
-                            varInfo.put("name", sym.getName());
-                            varInfo.put("type", sym.getDataType() != null
-                                ? sym.getDataType().getName() : "unknown");
-                            varInfo.put("isParameter", sym.isParameter());
-                            varInfo.put("storage", sym.getStorage() != null
-                                ? sym.getStorage().toString() : "unknown");
-                            varInfo.put("source", "decompiler");
-                            if (sym.getPCAddress() != null) {
-                                varInfo.put("pcAddress", sym.getPCAddress().toString());
-                            }
-                            variables.add(varInfo);
-                        }
+        // Reuse the shared decompiler: opening the program in a fresh
+        // DecompInterface costs more than the decompile itself, and the cache
+        // also serves a repeat request for the same function without work.
+        DecompileResults results =
+            DecompilerCache.shared().getDecompileResults(function.getProgram(), function, 30);
+        if (results != null && results.decompileCompleted()) {
+            HighFunction highFunc = results.getHighFunction();
+            if (highFunc != null) {
+                // Names already seen, so the de-duplication below is a set
+                // lookup instead of a scan of the whole list per symbol.
+                java.util.Set<String> known = new java.util.HashSet<>();
+                for (Map<String, Object> v : variables) {
+                    known.add(String.valueOf(v.get("name")));
+                }
+                for (var iter = highFunc.getLocalSymbolMap().getSymbols(); iter.hasNext(); ) {
+                    ghidra.program.model.pcode.HighSymbol sym = iter.next();
+                    if (!known.add(sym.getName())) {
+                        continue;
                     }
+                    Map<String, Object> varInfo = new HashMap<>();
+                    varInfo.put("name", sym.getName());
+                    varInfo.put("type", sym.getDataType() != null
+                        ? sym.getDataType().getName() : "unknown");
+                    varInfo.put("isParameter", sym.isParameter());
+                    varInfo.put("storage", sym.getStorage() != null
+                        ? sym.getStorage().toString() : "unknown");
+                    varInfo.put("source", "decompiler");
+                    if (sym.getPCAddress() != null) {
+                        varInfo.put("pcAddress", sym.getPCAddress().toString());
+                    }
+                    variables.add(varInfo);
                 }
             }
-        } catch (Exception e) {
-            Msg.error(GhidraUtil.class, "Error analyzing decompiler variables", e);
-        } finally {
-            decompiler.dispose();
         }
         return variables;
     }
@@ -442,6 +438,32 @@ public class GhidraUtil {
         } catch (Exception e) {
             Msg.error(GhidraUtil.class, "Error setting function signature: " + e.getMessage(), e);
             return false;
+        }
+    }
+
+    /**
+     * Remove a data type, across Ghidra versions.
+     *
+     * <p>The overload moved: 11.x and 12.0-12.1 have
+     * {@code remove(DataType, TaskMonitor)}, while 12.2 dropped it for
+     * {@code remove(DataType)} and {@code remove(List<DataType>, TaskMonitor)}.
+     * No single overload exists in all three, so the call is resolved by name.
+     */
+    public static void removeDataType(DataTypeManager dtm, DataType type) {
+        String name = type != null ? type.getName() : "null";
+        try {
+            dtm.getClass().getMethod("remove", DataType.class, TaskMonitor.class)
+               .invoke(dtm, type, TaskMonitor.DUMMY);
+            return;
+        } catch (NoSuchMethodException e) {
+            // 12.2 and later: the two-argument overload is gone.
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to remove data type " + name, e);
+        }
+        try {
+            dtm.getClass().getMethod("remove", DataType.class).invoke(dtm, type);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to remove data type " + name, e);
         }
     }
 }

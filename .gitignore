@@ -7,6 +7,8 @@
 *.class
 hs_err_pid*
 replay_pid*
+# Classes of the plugin, packaged for the headless A/B harness.
+/src/test/ghidra/*.jar
 
 # NOTE: lib/*.jar are committed on purpose — they are the Ghidra module jars the
 # system-scoped Maven dependencies resolve from when GHIDRA_HOME isn't set.

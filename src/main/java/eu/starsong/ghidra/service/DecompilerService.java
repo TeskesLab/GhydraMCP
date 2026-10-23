@@ -16,7 +16,7 @@ public class DecompilerService {
     private static final int DEFAULT_TIMEOUT = 60;
 
     private final FunctionService functionService;
-    private final DecompilerCache cache = new DecompilerCache();
+    private final DecompilerCache cache = DecompilerCache.shared();
 
     public DecompilerService(FunctionService functionService) {
         this.functionService = functionService;

@@ -4,6 +4,7 @@ import eu.starsong.ghidra.dto.StructDto;
 import eu.starsong.ghidra.dto.StructSummaryDto;
 import eu.starsong.ghidra.server.GhydraServer.NotFoundException;
 import eu.starsong.ghidra.util.GhidraSwing;
+import eu.starsong.ghidra.util.PagedCollector;
 import eu.starsong.ghidra.util.GhidraUtil;
 import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.program.model.data.CategoryPath;
@@ -16,24 +17,33 @@ import ghidra.program.model.data.StructureDataType;
 import ghidra.program.model.listing.Program;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
 public class StructService {
 
-    public List<StructSummaryDto> list(Program program, String categoryFilter) {
+    /**
+     * List one page of structs.
+     *
+     * <p>Every data type is still walked to find the structs, but only the
+     * structs on the page are turned into DTOs.
+     */
+    public PagedCollector.Page<StructSummaryDto> list(Program program, String categoryFilter,
+                                                      int offset, int limit) {
         DataTypeManager dtm = program.getDataTypeManager();
         return GhidraSwing.runRead(() -> {
-            List<StructSummaryDto> results = new ArrayList<>();
+            List<Structure> structs = new ArrayList<>();
             dtm.getAllDataTypes().forEachRemaining(dt -> {
                 if (!(dt instanceof Structure s)) return;
                 if (categoryFilter != null && !categoryFilter.isEmpty()
                     && !s.getCategoryPath().getPath().contains(categoryFilter)) return;
-                results.add(StructSummaryDto.from(s));
+                structs.add(s);
             });
-            results.sort((a, b) -> a.name().compareTo(b.name()));
-            return results;
+            structs.sort(Comparator.comparing(Structure::getName));
+            return PagedCollector.collect(structs.iterator(), s -> true, offset, limit,
+                StructSummaryDto::from);
         });
     }
 
@@ -169,9 +179,10 @@ public class StructService {
             if (struct == null) {
                 throw new NotFoundException("Struct not found: " + name, "STRUCT_NOT_FOUND");
             }
-            // 2-arg remove exists in both 11.x and 12.x (12.x deprecates it but keeps it);
-            // the 1-arg form is 12.x-only. Use the 2-arg form for cross-version compile.
-            program.getDataTypeManager().remove(struct, ghidra.util.task.TaskMonitor.DUMMY);
+            // 11.x and 12.0-12.1 take remove(DataType, TaskMonitor); 12.2 dropped it
+            // for remove(DataType) and remove(List<DataType>, TaskMonitor). The helper
+            // resolves the overload that this Ghidra actually has.
+            GhidraUtil.removeDataType(program.getDataTypeManager(), struct);
             return null;
         });
     }
@@ -188,6 +199,17 @@ public class StructService {
     }
 
     private DataType findStructByName(DataTypeManager dtm, String name) {
+        // Fast path: a struct in the root category resolves through the data
+        // type index, without walking every data type in the program.
+        try {
+            DataType direct = dtm.getDataType(name);
+            if (direct instanceof Structure) {
+                return direct;
+            }
+        } catch (Exception ignored) {
+            // Not resolvable as a path; fall through to the scan.
+        }
+
         return GhidraSwing.runRead(() -> {
             DataType[] result = new DataType[1];
             dtm.getAllDataTypes().forEachRemaining(dt -> {

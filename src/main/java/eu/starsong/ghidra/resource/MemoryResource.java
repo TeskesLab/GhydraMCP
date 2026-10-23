@@ -2,6 +2,7 @@ package eu.starsong.ghidra.resource;
 
 import eu.starsong.ghidra.dto.MemoryBlockDto;
 import eu.starsong.ghidra.hateoas.Links;
+import eu.starsong.ghidra.hateoas.PaginatedResult;
 import eu.starsong.ghidra.hateoas.Paginator;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
@@ -44,10 +45,13 @@ public class MemoryResource implements Resource {
         var pagination = ctx.pagination();
         // long sum then clamp: offset has no upper bound, so int addition could overflow
         // negative and turn into an unbounded instruction dump downstream.
-        int count = (int) Math.min((long) pagination.offset() + pagination.limit(), 100_000L);
+        int total = (int) Math.min((long) pagination.offset() + pagination.limit(), 100_000L);
+        // The page is built server-side: the skipped prefix is walked but no
+        // DTO is created for it.
         List<eu.starsong.ghidra.dto.DisassemblyInstructionDto> instructions =
-            memoryService.disassembleAt(program, address, count);
-        var result = Paginator.paginate(instructions, pagination, "/memory/" + address + "/disassembly");
+            memoryService.disassembleAt(program, address, pagination.offset(), pagination.limit());
+        var result = new PaginatedResult<>(instructions, total,
+                pagination.offset(), pagination.limit(), "/memory/" + address + "/disassembly");
         ctx.json(result.toResponse(ctx.ctx(), ctx.port())
             .link("memory", "/memory/{}", address)
             .build());

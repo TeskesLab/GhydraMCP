@@ -6,6 +6,9 @@ import eu.starsong.ghidra.dto.FunctionSummaryDto;
 import eu.starsong.ghidra.server.GhydraServer.NotFoundException;
 import eu.starsong.ghidra.util.GhidraSwing;
 import eu.starsong.ghidra.util.GhidraUtil;
+import eu.starsong.ghidra.util.DecompilerCache;
+import eu.starsong.ghidra.util.PagedCollector;
+import eu.starsong.ghidra.util.ProgramCache;
 import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
@@ -49,24 +52,41 @@ public class FunctionService {
     /**
      * List all functions in the program.
      */
-    public List<FunctionSummaryDto> list(Program program) {
-        return list(program, null);
+/**
+     * List one page of functions matching a filter.
+     *
+     * <p>Every function is still walked to count the matches, but only the
+     * functions on the page are turned into DTOs.
+     */
+    public PagedCollector.Page<FunctionSummaryDto> list(Program program, FunctionFilter filter,
+                                                          int offset, int limit) {
+        if (filter == null) {
+            // The total has to be walked: Ghidra's own function counter does
+            // not agree with what the iterator yields, and using it would
+            // change the meta.total the client sees. The walk is cached per
+            // program state, so only the first request pays for it.
+            int total = ProgramCache.shared().count(program, "functions",
+                () -> GhidraSwing.runRead(() -> countFunctions(program)));
+            return GhidraSwing.runRead(() -> PagedCollector.collectPage(
+                program.getFunctionManager().getFunctions(true), offset, limit,
+                FunctionSummaryDto::from, total));
+        }
+
+        Predicate<Function> predicate = filter.toPredicate();
+
+        return GhidraSwing.runRead(() -> PagedCollector.collect(
+            program.getFunctionManager().getFunctions(true), predicate, offset, limit,
+            FunctionSummaryDto::from));
     }
 
-    /**
-     * List functions matching a filter.
-     */
-    public List<FunctionSummaryDto> list(Program program, FunctionFilter filter) {
-        Predicate<Function> predicate = filter != null ? filter.toPredicate() : fn -> true;
-
-        return GhidraSwing.runRead(() -> {
-            FunctionIterator functions = program.getFunctionManager().getFunctions(true);
-            List<FunctionSummaryDto> out = StreamSupport.stream(functions.spliterator(), false)
-                .filter(predicate)
-                .map(FunctionSummaryDto::from)
-                .toList();
-            return out;
-        });
+    /** Counts the functions the listing walks over. */
+    private static int countFunctions(Program program) {
+        int count = 0;
+        for (var it = program.getFunctionManager().getFunctions(true); it.hasNext(); ) {
+            it.next();
+            count++;
+        }
+        return count;
     }
 
     /**
@@ -303,6 +323,36 @@ public class FunctionService {
     }
 
     /**
+     * Disassemble one page of a function body.
+     *
+     * <p>Only the instructions that land on the page are turned into DTOs. The
+     * rest of the function is walked to count it, which is what the pagination
+     * metadata reports, but building a DTO for every instruction of a large
+     * function and discarding all but the page was the expensive part.
+     */
+    public PagedCollector.Page<DisassemblyInstructionDto> disassemblePage(
+            Program program, Function function, int offset, int limit) {
+        return GhidraSwing.runRead(() -> {
+            List<DisassemblyInstructionDto> results = new ArrayList<>();
+            Listing listing = program.getListing();
+            Address start = function.getEntryPoint();
+            Address end = function.getBody().getMaxAddress();
+
+            int startIndex = Math.max(0, offset);
+            long limitEnd = (long) startIndex + Math.max(0, limit);
+            int index = 0;
+            for (Instruction i : listing.getInstructions(start, true)) {
+                if (i.getAddress().compareTo(end) > 0) break;
+                if (index >= startIndex && index < limitEnd) {
+                    results.add(DisassemblyInstructionDto.from(i, program));
+                }
+                index++;
+            }
+            return new PagedCollector.Page<>(results, index);
+        });
+    }
+
+    /**
      * Update a local variable (rename and/or retype) in a function.
      */
     public boolean updateLocalVariable(Program program, Function function, String variableName,
@@ -311,14 +361,8 @@ public class FunctionService {
             throw new IllegalArgumentException(
                 "Local variable names cannot contain '::' (local variables are not namespaced)");
         }
-        DecompileResults decompResults;
-        DecompInterface decomp = new DecompInterface();
-        try {
-            decomp.openProgram(program);
-            decompResults = decomp.decompileFunction(function, 60, new ConsoleTaskMonitor());
-        } finally {
-            decomp.dispose();
-        }
+        DecompileResults decompResults =
+            DecompilerCache.shared().getDecompileResults(program, function, 60);
         if (decompResults == null || !decompResults.decompileCompleted()) {
             throw new IllegalStateException("Decompilation failed for " + function.getName());
         }
@@ -357,71 +401,82 @@ public class FunctionService {
      * Get the control flow graph (basic blocks and edges) for a function.
      */
     public Map<String, Object> getCfg(Program program, Function function) {
+        Address entry = function.getEntryPoint();
+        // The graph only changes when the program does, so it is cached: walking
+        // the blocks of a function and their edges is the whole cost here
+        // (24 ms for a function with 1079 blocks).
+        ProgramCache.Cfg cfg = ProgramCache.shared().getCfg(program, entry);
+        if (cfg == null) {
+            cfg = GhidraSwing.runRead(() -> buildCfg(program, function));
+            ProgramCache.shared().putCfg(program, entry, cfg);
+        }
+
+        final ProgramCache.Cfg cached = cfg;
         return GhidraSwing.runRead(() -> {
             Map<String, Object> result = new java.util.HashMap<>();
             result.put("function", function.getName(true));
-            result.put("address", function.getEntryPoint().toString());
+            result.put("address", entry.toString());
+            result.put("blocks", cached.blocks());
+            result.put("edges", cached.edges());
+            result.put("blockCount", cached.blocks().size());
+            result.put("edgeCount", cached.edges().size());
+            return result;
+        });
+    }
 
-            List<Map<String, Object>> blocks = new ArrayList<>();
-            List<Map<String, Object>> edges = new ArrayList<>();
+    /** Walks the basic blocks of a function and the flow between them. */
+    private ProgramCache.Cfg buildCfg(Program program, Function function) throws Exception {
+        List<Map<String, Object>> blocks = new ArrayList<>();
+        List<Map<String, Object>> edges = new ArrayList<>();
 
-            SimpleBlockModel blockModel = new SimpleBlockModel(program, true);
-            CodeBlock funcBlock = blockModel.getFirstCodeBlockContaining(
-                function.getEntryPoint(), new ConsoleTaskMonitor());
+        SimpleBlockModel blockModel = new SimpleBlockModel(program, true);
+        CodeBlock funcBlock = blockModel.getFirstCodeBlockContaining(
+            function.getEntryPoint(), new ConsoleTaskMonitor());
 
-            if (funcBlock != null) {
-                // Collect all blocks belonging to this function
-                java.util.Set<CodeBlock> visited = new java.util.LinkedHashSet<>();
-                java.util.Queue<CodeBlock> queue = new java.util.LinkedList<>();
-                queue.add(funcBlock);
+        if (funcBlock != null) {
+            // Collect all blocks belonging to this function
+            java.util.Set<CodeBlock> visited = new java.util.LinkedHashSet<>();
+            java.util.Queue<CodeBlock> queue = new java.util.LinkedList<>();
+            queue.add(funcBlock);
 
-                while (!queue.isEmpty()) {
-                    CodeBlock block = queue.poll();
-                    if (!visited.add(block)) continue;
+            while (!queue.isEmpty()) {
+                CodeBlock block = queue.poll();
+                if (!visited.add(block)) continue;
 
-                    Map<String, Object> blockInfo = new java.util.HashMap<>();
-                    blockInfo.put("start", block.getFirstStartAddress().toString());
-                    blockInfo.put("end", block.getMaxAddress().toString());
-                    blockInfo.put("size", block.getMaxAddress().subtract(block.getFirstStartAddress()) + 1);
-                    blocks.add(blockInfo);
+                Map<String, Object> blockInfo = new java.util.HashMap<>();
+                blockInfo.put("start", block.getFirstStartAddress().toString());
+                blockInfo.put("end", block.getMaxAddress().toString());
+                blockInfo.put("size", block.getMaxAddress().subtract(block.getFirstStartAddress()) + 1);
+                blocks.add(blockInfo);
 
-                    // Follow destinations
-                    CodeBlockReferenceIterator destIter = block.getDestinations(new ConsoleTaskMonitor());
-                    while (destIter.hasNext()) {
-                        CodeBlockReference ref = destIter.next();
-                        CodeBlock destBlock = ref.getDestinationBlock();
-                        if (destBlock != null) {
-                            Map<String, Object> edge = new java.util.HashMap<>();
-                            edge.put("from", block.getFirstStartAddress().toString());
-                            edge.put("to", destBlock.getFirstStartAddress().toString());
-                            edge.put("type", ref.getFlowType().toString());
-                            edges.add(edge);
-                            queue.add(destBlock);
-                        }
+                // Follow destinations
+                CodeBlockReferenceIterator destIter = block.getDestinations(new ConsoleTaskMonitor());
+                while (destIter.hasNext()) {
+                    CodeBlockReference ref = destIter.next();
+                    CodeBlock destBlock = ref.getDestinationBlock();
+                    if (destBlock != null) {
+                        Map<String, Object> edge = new java.util.HashMap<>();
+                        edge.put("from", block.getFirstStartAddress().toString());
+                        edge.put("to", destBlock.getFirstStartAddress().toString());
+                        edge.put("type", ref.getFlowType().toString());
+                        edges.add(edge);
+                        queue.add(destBlock);
                     }
                 }
             }
+        }
 
-            result.put("blocks", blocks);
-            result.put("edges", edges);
-            result.put("blockCount", blocks.size());
-            result.put("edgeCount", edges.size());
-            return result;
-        });
+        return new ProgramCache.Cfg(blocks, edges);
     }
 
     /**
      * Get pcode operations for a function via decompiler.
      */
     public Map<String, Object> getPcode(Program program, Function function, int timeout) {
-        DecompInterface decomp = new DecompInterface();
-        DecompileResults results;
-        try {
-            decomp.openProgram(program);
-            results = decomp.decompileFunction(function, timeout, new ConsoleTaskMonitor());
-        } finally {
-            decomp.dispose();
-        }
+        // Reuse the shared decompiler: opening the program in a fresh
+        // DecompInterface costs more than the decompile itself, and the cache
+        // also serves a repeat request for the same function without work.
+        DecompileResults results = DecompilerCache.shared().getDecompileResults(program, function, timeout);
 
         if (results == null || !results.decompileCompleted()) {
             throw new IllegalStateException("Decompilation failed for pcode extraction");

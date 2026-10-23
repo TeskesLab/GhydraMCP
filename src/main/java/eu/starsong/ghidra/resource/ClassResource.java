@@ -2,6 +2,7 @@ package eu.starsong.ghidra.resource;
 
 import eu.starsong.ghidra.dto.ClassDto;
 import eu.starsong.ghidra.hateoas.Links;
+import eu.starsong.ghidra.hateoas.PaginatedResult;
 import eu.starsong.ghidra.hateoas.Paginator;
 import eu.starsong.ghidra.server.GhidraContext;
 import eu.starsong.ghidra.server.Resource;
@@ -32,9 +33,9 @@ public class ClassResource implements Resource {
     private void list(GhidraContext ctx) {
         var program = ctx.requireProgram();
         var pagination = ctx.pagination();
-        List<ClassDto> classes = service.listClasses(program);
+        var page = service.listClasses(program, pagination.offset(), pagination.limit());
 
-        var result = Paginator.paginate(classes, pagination, "/classes")
+        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(), pagination.limit(), "/classes")
             .withItemLinks(c -> Links.builder()
                 .self("/classes/{}", c.name())
                 .build());

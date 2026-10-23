@@ -42,6 +42,42 @@ public class VariableService {
 
     public record Page(List<VariableDto> results, boolean hasMore, int totalEstimate) {}
 
+    /**
+     * A function-scoped variable that only becomes a DTO when it lands on the
+     * page.
+     *
+     * <p>Building the DTO renders the variable storage and the data type
+     * name, which is the expensive part of the enumeration; doing that for
+     * every variable of every function and then discarding all but the page
+     * was the cost of a page.
+     */
+    private record LocalVar(String name, String function, Variable variable) {
+        VariableDto toDto() {
+            DataType dt = variable.getDataType();
+            return VariableDto.local(
+                name,
+                variable.getVariableStorage().toString(),
+                dt != null ? dt.getName() : "unknown",
+                function,
+                variable instanceof Parameter);
+        }
+    }
+
+    /** A variable in the merged list: either already a DTO or still lazy. */
+    private record VarEntry(String name, VariableDto dto, LocalVar local) {
+        static VarEntry of(VariableDto dto) {
+            return new VarEntry(dto.name(), dto, null);
+        }
+
+        static VarEntry of(LocalVar local) {
+            return new VarEntry(local.name(), null, local);
+        }
+
+        VariableDto toDto() {
+            return dto != null ? dto : local.toDto();
+        }
+    }
+
     /** Backward-compatible entry point; defaults to the cheap "database" source. */
     public Page list(Program program, String search, boolean globalOnly, int offset, int limit) {
         return list(program, search, globalOnly, "database", offset, limit);
@@ -73,10 +109,27 @@ public class VariableService {
         }
 
         // Default: database source — exact, cheap, complete over committed variables.
-        List<VariableDto> all = new ArrayList<>(globals);
-        all.addAll(collectLocalsFromDatabase(program, lowerSearch));
-        all.sort(Comparator.comparing(VariableDto::name));
-        return paginate(all, offset, limit);
+        List<VarEntry> all = new ArrayList<>(globals.size());
+        for (VariableDto global : globals) {
+            all.add(VarEntry.of(global));
+        }
+        for (LocalVar local : collectLocalEntries(program, lowerSearch)) {
+            all.add(VarEntry.of(local));
+        }
+        all.sort(Comparator.comparing(VarEntry::name));
+        return paginateEntries(all, offset, limit);
+    }
+
+    /** Exact pagination over a merged list whose entries may still be lazy. */
+    private Page paginateEntries(List<VarEntry> all, int offset, int limit) {
+        int total = all.size();
+        int from = Math.min(Math.max(0, offset), total);
+        int to = Math.min(from + limit, total);
+        List<VariableDto> page = new ArrayList<>(to - from);
+        for (int i = from; i < to; i++) {
+            page.add(all.get(i).toDto());
+        }
+        return new Page(page, to < total, total);
     }
 
     /** Exact pagination over a fully-materialized list. */
@@ -90,23 +143,18 @@ public class VariableService {
 
     /**
      * Cheap DB-backed enumeration of every function's committed variables (params + locals).
-     * One marshalled DB scan, no decompilation.
+     * One marshalled DB scan, no decompilation. The entries stay lazy: the DTO is
+     * built only for the variables that land on the page.
      */
-    private List<VariableDto> collectLocalsFromDatabase(Program program, String lowerSearch) {
+    private List<LocalVar> collectLocalEntries(Program program, String lowerSearch) {
         return GhidraSwing.runRead(() -> {
-            List<VariableDto> result = new ArrayList<>();
+            List<LocalVar> result = new ArrayList<>();
             for (Function fn : program.getFunctionManager().getFunctions(true)) {
                 String fnName = fn.getName(true);
                 for (Variable v : fn.getAllVariables()) {
                     String name = v.getName();
                     if (lowerSearch != null && !name.toLowerCase().contains(lowerSearch)) continue;
-                    DataType dt = v.getDataType();
-                    result.add(VariableDto.local(
-                        name,
-                        v.getVariableStorage().toString(),
-                        dt != null ? dt.getName() : "unknown",
-                        fnName,
-                        v instanceof Parameter));
+                    result.add(new LocalVar(name, fnName, v));
                 }
             }
             return result;
