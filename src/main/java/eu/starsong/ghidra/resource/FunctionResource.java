@@ -5,6 +5,7 @@ import eu.starsong.ghidra.dto.DisassemblyInstructionDto;
 import eu.starsong.ghidra.dto.FunctionDto;
 import eu.starsong.ghidra.dto.FunctionSummaryDto;
 import eu.starsong.ghidra.hateoas.Links;
+import eu.starsong.ghidra.hateoas.PaginatedResult;
 import eu.starsong.ghidra.hateoas.Paginator;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
@@ -105,8 +106,8 @@ public class FunctionResource implements Resource {
             ctx.queryParam("addr_max")
         );
 
-        List<FunctionSummaryDto> functions = functionService.list(program, filter);
-        var result = Paginator.paginate(functions, pagination, "/functions")
+        var page = functionService.list(program, filter, pagination.offset(), pagination.limit());
+        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(), pagination.limit(), "/functions")
             .withItemLinks(fn -> Links.builder()
                 .self("/functions/{}", fn.address())
                 .link("decompile", "/functions/{}/decompile", fn.address())
@@ -177,7 +178,9 @@ public class FunctionResource implements Resource {
     private void respondDisassembly(GhidraContext ctx, ghidra.program.model.listing.Program program,
                                     Function fn, String basePath) {
         var pagination = ctx.pagination();
-        List<DisassemblyInstructionDto> instructions = functionService.disassemble(program, fn);
+        // The page is built server-side: only the instructions on this page
+        // become DTOs. The total still counts the whole function body.
+        var page = functionService.disassemblePage(program, fn, pagination.offset(), pagination.limit());
         Map<String, Object> fnMeta = GhidraSwing.runRead(() -> {
             return Map.<String, Object>of(
                 "name", fn.getName(),
@@ -185,7 +188,8 @@ public class FunctionResource implements Resource {
                 "signature", fn.getSignature().toString());
         });
         String entryPoint = (String) fnMeta.get("address");
-        var result = Paginator.paginate(instructions, pagination, basePath);
+        var result = new PaginatedResult<>(page.items(), page.total(),
+                pagination.offset(), pagination.limit(), basePath);
         ctx.json(result.toResponse(ctx.ctx(), ctx.port())
             .meta("function", fnMeta)
             .link("function", "/functions/{}", entryPoint)

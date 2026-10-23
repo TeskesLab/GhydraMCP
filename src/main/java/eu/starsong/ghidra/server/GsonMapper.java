@@ -19,8 +19,11 @@ public class GsonMapper implements JsonMapper {
     private final Gson gson;
 
     public GsonMapper() {
+        // No pretty printing: indentation made a 100-item page 38% bigger
+        // (33954 bytes against 24553 for the same content), and the client
+        // parses the body either way. The envelope is the same shape; only the
+        // whitespace differs.
         this.gson = new GsonBuilder()
-            .setPrettyPrinting()
             .disableHtmlEscaping()
             .serializeNulls()
             .create();
