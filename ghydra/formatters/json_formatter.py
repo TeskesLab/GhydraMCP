@@ -122,6 +122,10 @@ class JSONFormatter(BaseFormatter):
         """Format dataflow as JSON."""
         return self._format_json(data)
 
+    def format_kuna(self, data: Dict[str, Any]) -> str:
+        """Format a Kuna result as JSON."""
+        return self._format_json(data)
+
     def format_error(self, error: Exception) -> str:
         """Format error as JSON."""
         error_dict = {

@@ -10,7 +10,8 @@
 
 GhydraMCP connects [Ghidra](https://ghidra-sre.org/) to AI assistants for reverse engineering, over the [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol/mcp) or a command-line tool.
 
-![GhydraMCP logo](https://github.com/user-attachments/assets/86b9b2de-767c-4ed5-b082-510b8109f00f)
+![GhydraMCP logo](images/logo/ghydramcp-logo.png)
+
 
 ## Overview
 
@@ -163,6 +164,40 @@ from function and symbol responses.
 - Pagination for handling large result sets
 - Filtering capabilities across all resources
 
+## Kuna decompiler (optional)
+
+[Kuna](https://github.com/Noelo-Lab/kuna) is a standalone decompiler CLI. GhydraMCP can drive it directly — no Ghidra instance involved — which is useful for a file that is not open in Ghidra, a packed sample, or a second opinion on a function.
+
+The integration is **opt-in**, because it lets the bridge run a program on the host. Enable it with the environment variable:
+
+```bash
+export GHYDRA_KUNA=1
+```
+
+or in the CLI config file, which also accepts the path to the executable:
+
+```json
+{
+  "kuna": {
+    "enabled": true,
+    "path": "/usr/local/bin/kuna"
+  }
+}
+```
+
+The config file wins when both are set: `"enabled": false` keeps the integration off even with `GHYDRA_KUNA=1`. `ghydra kuna status` reports which one decided.
+
+Kuna loads and analyses the whole image on every invocation, so a large binary costs seconds per call. For a file of any size, export it once and read the result from disk:
+
+```bash
+ghydra kuna export ./challenge.exe -o ./challenge.kuna   # analyse once
+ghydra kuna export-read ./challenge.kuna main              # then read it
+```
+
+The MCP bridge exposes the same operations as `kuna_*` tools, including `kuna_export_start` / `kuna_export_status` / `kuna_export_read` for the export flow.
+
+**[GHYDRA_KUNA.md](GHYDRA_KUNA.md) is the full reference** — the opt-in, every tool and command, the export layout, the measured performance and the limits. [GHYDRA_CLI.md](GHYDRA_CLI.md#kuna-commands) has the command summary.
+
 # Installation
 
 ## Prerequisites
@@ -218,6 +253,45 @@ ghydra --json functions list | jq '.result[].name'
 ```
 
 All commands accept `--host`, `--port`, `--json`, and `--no-color`, but these are defined on the root command and must come **before** the subcommand: `ghydra --json functions list`. See [GHYDRA_CLI.md](GHYDRA_CLI.md) for the full reference.
+
+### Installing on Linux and NixOS
+
+`pip install -e .` needs a Python environment you own. On a distribution that manages
+Python centrally (Debian, Fedora, and **NixOS**) the system interpreter refuses the
+install with `error: externally-managed-environment`, so use one of:
+
+```bash
+# uv, with its own environment (recommended)
+uv tool install --editable .
+uv venv && uv pip install --editable .
+
+# a plain virtualenv
+python3 -m venv .venv && .venv/bin/pip install -e .
+
+# NixOS, inside a nix-shell with the interpreter and the tools
+nix-shell -p python3 python311Packages.pip --run 'python3 -m pip install -e .'
+```
+
+The MCP bridge is a single script with inline dependencies, so it needs no install at
+all — `uv run` resolves them:
+
+```bash
+uv run bridge_mcp_hydra.py
+```
+
+On NixOS, point `uv` at the interpreter that nix provides. Inside a `nix-shell`, `uv`
+cannot install its own managed Python and fails with `Python interpreter not found`:
+
+```bash
+nix-shell -p uv python3 --run 'uv run --script --python python3 bridge_mcp_hydra.py'
+```
+
+`--python python3` tells `uv` to use the nix-provided interpreter instead of
+downloading one.
+
+The bridge resolves the Kuna binary from `PATH` or from the `kuna.path` key in
+`~/.ghydra/config.json`, which is the way to point at a binary installed outside the
+default profile. See [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
 
 Timeout defaults are intentionally high for large binaries:
 - CLI/bridge HTTP timeout default: `900s` (`GHYDRA_TIMEOUT`)
@@ -323,6 +397,21 @@ Tools are grouped into namespaces:
 - `segments_list`: List memory blocks (params: offset, limit, name [optional], port [optional])
 - `namespaces_list`: List namespaces (params: offset, limit, port [optional])
 - `variables_list`: List variables (params: offset, limit, search [optional], global_only [optional], port [optional])
+
+**Kuna Decompiler** (`kuna_*`): local tools that drive the Kuna CLI; no Ghidra instance and no `port` parameter. Opt-in: `GHYDRA_KUNA=1` or `"kuna": {"enabled": true}` in `~/.ghydra/config.json`. See [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
+- `kuna_status`: Report whether the integration is enabled, which binary it resolved and which opt-in decided
+- `kuna_summary`: Summarize a binary (params: binary_path, mode [optional])
+- `kuna_functions`: List the functions Kuna recovered (params: binary_path, name_filter [optional], offset, limit)
+- `kuna_decompile`: Decompile one function (params: binary_path, function, addr [optional], mode [optional], max_lines [optional])
+- `kuna_disassemble`: Disassemble a function or range (params: binary_path, target, count [optional], bytes [optional], addr [optional])
+- `kuna_read`: Read raw bytes as a hex dump (params: binary_path, target, bytes, addr [optional])
+- `kuna_strings`: Search strings; the pattern is required (params: binary_path, pattern, limit, min_length, encoding, section [optional])
+- `kuna_crypto`: Find crypto constants and the functions using them (params: binary_path, algorithm [optional], section [optional])
+- `kuna_xrefs`: Cross-references of a symbol (params: binary_path, target, direction, kind [optional])
+- `kuna_unpack`: Unpack a UPX image (params: binary_path, output [optional])
+- `kuna_export_start`: Export a binary to disk in the background (params: binary_path, functions [optional], jobs, job_id [optional])
+- `kuna_export_status`: Progress of an export job (params: job_id)
+- `kuna_export_read`: Read a function out of an export (params: job_id, function [optional], artifact, max_bytes)
 
 **Example Usage**:
 ```python

@@ -38,16 +38,18 @@ class ConfigManager:
             return GhidraConfig()
 
         try:
-            with open(cls.CONFIG_FILE, 'r') as f:
+            with open(cls.CONFIG_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
             if verbose:
                 print(f"Loaded config from {cls.CONFIG_FILE}", file=sys.stderr)
 
-            # Validate and filter known keys only
+            # Validate and filter known keys only. The "kuna" section is
+            # nested and is read by GhidraConfig.from_dict.
             valid_keys = {
                 'default_host', 'default_port', 'timeout',
-                'use_colors', 'page_output', 'max_pagination'
+                'use_colors', 'page_output', 'max_pagination',
+                'kuna', 'kuna_enabled', 'kuna_path'
             }
             filtered_data = {k: v for k, v in data.items() if k in valid_keys}
 
@@ -81,7 +83,7 @@ class ConfigManager:
             cls.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
             # Write config file
-            with open(cls.CONFIG_FILE, 'w') as f:
+            with open(cls.CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config.to_dict(), f, indent=2)
 
             if verbose:

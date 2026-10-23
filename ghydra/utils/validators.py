@@ -3,6 +3,27 @@
 import re
 
 
+def truthy(value) -> bool:
+    """Interpret a boolean-ish value from an environment variable or config.
+
+    Accepts real booleans, numbers and the usual truthy strings. Anything
+    else is false, so a typo never silently enables a feature.
+
+    Args:
+        value: The value to interpret
+
+    Returns:
+        True when the value means "on"
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on", "enabled")
+    return False
+
+
 def validate_address(addr: str) -> str:
     """Validate and normalize hex address.
 

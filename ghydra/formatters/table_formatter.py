@@ -5,7 +5,9 @@ import os
 import sys
 from typing import Any, Dict
 
+from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
@@ -680,6 +682,277 @@ class TableFormatter(BaseFormatter):
         header_text = self._capture("\n".join(header)) if header else ""
         body = self._capture(table)
         return f"{header_text}\n{body}".strip()
+
+    def format_kuna(self, data: Dict[str, Any]) -> str:
+        """Format a Kuna decompiler result.
+
+        Args:
+            data: Result with 'kind' (what was requested) and 'data' (the
+                  payload returned by Kuna)
+
+        Returns:
+            Formatted string output
+        """
+        kind = data.get("kind", "")
+        payload = data.get("data", {})
+        if not isinstance(payload, dict):
+            payload = {}
+
+        if kind == "status":
+            state = "enabled" if payload.get("enabled") else "disabled"
+            lines = [
+                f"[cyan]Kuna integration:[/cyan] {state} "
+                f"(opt-in via {payload.get('source', 'unknown')})",
+                f"[cyan]Binary:[/cyan] {payload.get('binary') or 'not found'}"
+                + (f"  [{payload.get('version')}]" if payload.get("version") else ""),
+                f"[cyan]Config:[/cyan] {payload.get('config_file', '')}",
+                f"[cyan]Work:[/cyan] {payload.get('work_dir', '')}",
+            ]
+            return self._capture("\n".join(lines))
+
+        if kind == "summary":
+            summary = payload.get("summary", {}) or {}
+            entry = summary.get("entry") or {}
+            main = summary.get("main") or {}
+            lines = [
+                f"[cyan]Binary:[/cyan] {payload.get('binary', '?')}",
+                f"[cyan]Functions:[/cyan] {payload.get('count', '?')} "
+                f"(total {payload.get('total', '?')})",
+            ]
+            if entry:
+                lines.append(
+                    f"[cyan]Entry:[/cyan] {entry.get('name')} @ {entry.get('address_hex')}"
+                )
+            if main:
+                lines.append(
+                    f"[cyan]Main:[/cyan] {main.get('name')} @ {main.get('address_hex')}"
+                )
+            lines.append(
+                f"[cyan]Reachable:[/cyan] {summary.get('reachable_from_entry', '?')} from entry"
+            )
+            lines.append(f"[cyan]No callers:[/cyan] {summary.get('no_callers', '?')}")
+            lines.append(f"[cyan]Code bytes:[/cyan] {summary.get('code_bytes', '?')}")
+
+            buckets = summary.get("size_buckets") or []
+            if buckets:
+                lines.append("")
+                lines.append("[cyan]Size buckets:[/cyan]")
+                for bucket in buckets:
+                    lines.append(
+                        f"  {str(bucket.get('bucket', '?')):>10}  {bucket.get('count', 0)}"
+                    )
+
+            largest = summary.get("largest") or []
+            if largest:
+                lines.append("")
+                lines.append("[cyan]Largest functions:[/cyan]")
+                for fn in largest[:10]:
+                    lines.append(
+                        f"  {fn.get('name', '?'):<28} {fn.get('size', 0):>7} bytes"
+                        f"  @ {fn.get('address_hex', '?')}"
+                    )
+
+            return self._capture("\n".join(lines))
+
+        if kind == "functions":
+            functions = payload.get("functions", []) or []
+            total = payload.get("total", len(functions))
+            offset = payload.get("offset", 0)
+            if not functions:
+                return self._capture("[yellow]No functions found[/yellow]")
+
+            table = Table(title=f"Functions ({total} total)", show_lines=False, box=box.ASCII)
+            table.add_column("Address", style="cyan", no_wrap=True)
+            table.add_column("Name", style="green")
+            table.add_column("Size", style="yellow", justify="right")
+
+            for fn in functions:
+                table.add_row(
+                    str(fn.get("address_hex", "?")),
+                    escape(str(fn.get("name", "?"))),
+                    str(fn.get("size", 0)),
+                )
+
+            if total > len(functions):
+                table.caption = f"Showing {offset + 1}-{offset + len(functions)} of {total}"
+
+            return self._capture(table)
+
+        if kind == "decompile":
+            functions = payload.get("functions") or []
+            if not functions:
+                return self._capture("[yellow]No decompiled function available[/yellow]")
+            fn = functions[0]
+            code = (fn.get("code") or "").strip()
+            header = (
+                f"{fn.get('name', '?')} @ {fn.get('address_hex', '?')} "
+                f"({fn.get('size', 0)} bytes)"
+            )
+            if not code:
+                return self._capture(f"{header}\n\n[yellow]No code returned[/yellow]")
+            syntax = Syntax(code, "c", theme="monokai", line_numbers=True, word_wrap=False)
+            return f"{self._capture(header)}\n{self._capture(syntax)}"
+
+        if kind == "disassemble":
+            target = payload.get("target") or {}
+            instructions = payload.get("instructions", []) or []
+            if not instructions:
+                return self._capture("[yellow]No instructions returned[/yellow]")
+
+            table = Table(
+                title=(
+                    f"Disassembly of {target.get('name', '?')} "
+                    f"({payload.get('start_hex', '?')}-{payload.get('end_hex', '?')})"
+                ),
+                show_lines=False,
+                box=box.ASCII,
+            )
+            table.add_column("Address", style="cyan", no_wrap=True)
+            table.add_column("Bytes", style="dim", no_wrap=True)
+            table.add_column("Instruction", style="white")
+
+            for instruction in instructions:
+                table.add_row(
+                    str(instruction.get("address_hex", "?")),
+                    str(instruction.get("bytes", "")),
+                    escape(str(instruction.get("text", ""))),
+                )
+
+            return self._capture(table)
+
+        if kind == "read":
+            rows = payload.get("rows", []) or []
+            if not rows:
+                return self._capture("[yellow]No bytes returned[/yellow]")
+            lines = [
+                f"[cyan]Bytes at[/cyan] {payload.get('start_hex', '?')} "
+                f"({payload.get('bytes', 0)} bytes)",
+                "",
+            ]
+            for row in rows:
+                lines.append(
+                    f"  {str(row.get('address_hex', '?')):<18} "
+                    f"{str(row.get('bytes', '')):<34} {row.get('ascii', '')}"
+                )
+            return self._capture("\n".join(lines))
+
+        if kind == "strings":
+            strings = payload.get("strings", []) or []
+            total = payload.get("count", len(strings))
+            if not strings:
+                return self._capture("[yellow]No strings matched[/yellow]")
+
+            table = Table(title=f"Strings matching /{payload.get('filter', '')}/",
+                          show_lines=False, box=box.ASCII)
+            table.add_column("Address", style="cyan", no_wrap=True)
+            table.add_column("Text", style="white", overflow="fold")
+            table.add_column("Section", style="dim")
+            table.add_column("Xrefs", style="yellow", justify="right")
+
+            for entry in strings:
+                table.add_row(
+                    str(entry.get("address_hex", "?")),
+                    escape(str(entry.get("text", "")).replace("\n", "\\n")),
+                    str(entry.get("section", "?")),
+                    str(entry.get("xrefs_count", 0)),
+                )
+
+            if total > len(strings):
+                table.caption = f"Showing {len(strings)} of {total}"
+
+            return self._capture(table)
+
+        if kind == "crypto":
+            constants = payload.get("constants", []) or []
+            if not constants:
+                return self._capture("[yellow]No crypto constants found[/yellow]")
+
+            table = Table(title=f"Crypto constants ({len(constants)})",
+                          show_lines=False, box=box.ASCII)
+            table.add_column("Algorithm", style="cyan", no_wrap=True)
+            table.add_column("Name", style="white", overflow="fold")
+            table.add_column("Address", style="green", no_wrap=True)
+            table.add_column("Section", style="dim")
+
+            for entry in constants:
+                table.add_row(
+                    str(entry.get("algorithm", "?")),
+                    escape(str(entry.get("name", ""))),
+                    str(entry.get("address_hex", "?")),
+                    str(entry.get("section", "?")),
+                )
+
+            return self._capture(table)
+
+        if kind == "xrefs":
+            target = payload.get("target") or {}
+            xrefs = payload.get("xrefs", []) or []
+            if not xrefs:
+                return self._capture("[yellow]No cross-references found[/yellow]")
+
+            table = Table(
+                title=(
+                    f"Cross-references {payload.get('direction', '?')} "
+                    f"{target.get('name', '?')} ({len(xrefs)})"
+                ),
+                show_lines=False,
+                box=box.ASCII,
+            )
+            table.add_column("Address", style="cyan", no_wrap=True)
+            table.add_column("Kind", style="yellow", no_wrap=True)
+            table.add_column("Instruction", style="white")
+
+            for xref in xrefs:
+                table.add_row(
+                    str(xref.get("address_hex", "?")),
+                    str(xref.get("kind", "?")),
+                    escape(str(xref.get("instruction", ""))),
+                )
+
+            return self._capture(table)
+
+        if kind == "unpack":
+            output = payload.get("output", payload.get("unpacked", payload.get("path", "?")))
+            return self._capture(
+                f"[cyan]Unpacked[/cyan] {payload.get('binary', '?')}\n"
+                f"[cyan]Output:[/cyan] {output}"
+            )
+
+        if kind == "export":
+            lines = [
+                f"[cyan]Exported[/cyan] {payload.get('binary', '?')}",
+                f"[cyan]Dir:[/cyan] {payload.get('dir', '?')}",
+                f"[cyan]Functions:[/cyan] {payload.get('functions', 0)} "
+                f"({payload.get('failed', 0)} failed)",
+            ]
+            for failure in payload.get("failures", []) or []:
+                lines.append(
+                    f"  [red]ERROR[/red] {failure.get('name', '?')}: {failure.get('error')}"
+                )
+            return self._capture("\n".join(lines))
+
+        if kind == "export-read":
+            functions = payload.get("functions")
+            if functions is not None:
+                table = Table(title=f"Exported functions ({payload.get('total', len(functions))})",
+                              show_lines=False, box=box.ASCII)
+                table.add_column("Address", style="cyan", no_wrap=True)
+                table.add_column("Name", style="green")
+                table.add_column("Size", style="yellow", justify="right")
+
+                for record in functions:
+                    table.add_row(
+                        str(record.get("addr", "?")),
+                        escape(str(record.get("name", "?"))),
+                        str(record.get("size", 0)),
+                    )
+
+                return self._capture(table)
+
+            header = f"{payload.get('artifact', '?')} for {payload.get('function') or 'export'}"
+            return self._capture(f"{header}\n\n{payload.get('text', '')}")
+
+        return self._capture(str(payload))
 
     def format_error(self, error: Exception) -> str:
         """Format error message."""

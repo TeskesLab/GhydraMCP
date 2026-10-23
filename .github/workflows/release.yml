@@ -160,7 +160,10 @@ jobs:
       - name: Publish to GitHub
         if: ${{ needs.guard.outputs.publish == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The automatic job token, in the context form the GitHub CLI
+          # documents. It carries the `contents: write` permission this
+          # workflow declares, which is what gh release needs.
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.guard.outputs.tag }}
           SHA: ${{ needs.guard.outputs.sha }}
           PRERELEASE: ${{ needs.guard.outputs.prerelease }}
@@ -187,7 +190,7 @@ jobs:
       - name: Verify the release
         if: ${{ needs.guard.outputs.publish == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.guard.outputs.tag }}
         run: |
           set -euo pipefail
