@@ -168,9 +168,21 @@ jobs:
             # class file". Read the requirement out of the distribution instead
             # of guessing it - the class file major version is 44 plus the JDK
             # number (65 = 21, 69 = 25).
-            jar=$(echo "${WORK}/ghidra-install/ghidra_*/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar")
+            # The jar is found with find, not with a glob: a glob inside
+            # quotes is not expanded, and the path has to be right for the
+            # series that was just downloaded.
+            jar=$(find "${WORK}/ghidra-install" \
+              -path '*/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar' | head -1)
+            if [ -z "$jar" ]; then
+              echo "Could not find the Ghidra SoftwareModeling jar under ${WORK}/ghidra-install"
+              exit 1
+            fi
             major=$(unzip -p "$jar" ghidra/program/model/listing/Program.class \
               | od -An -tu1 -j6 -N2 | awk '{print $1 * 256 + $2}')
+            if [ -z "$major" ]; then
+              echo "Could not read the class file version from $jar"
+              exit 1
+            fi
             jdk=$((major - 44))
             # The extension is compiled for Java 21, so never go below it.
             if [ "$jdk" -lt 21 ]; then jdk=21; fi
@@ -185,7 +197,9 @@ jobs:
 
             (
               cd "$WORK"
-              export JAVA_HOME="$WORK/jdk"
+              # JAVA_HOME has to be absolute: the build runs from inside the
+              # worktree, where a relative path would point somewhere else.
+              export JAVA_HOME="$(pwd)/jdk"
               export PATH="${JAVA_HOME}/bin:${PATH}"
               java -version
               export GHIDRA_HOME="$(echo "$PWD"/ghidra-install/ghidra_*_PUBLIC)"
