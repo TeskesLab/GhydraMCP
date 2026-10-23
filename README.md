@@ -12,7 +12,6 @@ GhydraMCP connects [Ghidra](https://ghidra-sre.org/) to AI assistants for revers
 
 ![GhydraMCP logo](images/logo/ghydramcp-logo.png)
 
-<sub>[2K master](images/logo/ghydramcp-logo-2k.png) — the QR in the red seal is scannable at this size · [scannable seal, 1024](images/logo/ghydramcp-qr-seal.png) — scans down to 200px</sub>
 
 ## Overview
 
