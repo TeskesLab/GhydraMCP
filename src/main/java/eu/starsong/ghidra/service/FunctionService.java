@@ -8,6 +8,7 @@ import eu.starsong.ghidra.util.GhidraSwing;
 import eu.starsong.ghidra.util.GhidraUtil;
 import eu.starsong.ghidra.util.DecompilerCache;
 import eu.starsong.ghidra.util.PagedCollector;
+import eu.starsong.ghidra.util.ProgramCache;
 import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
@@ -59,11 +60,33 @@ public class FunctionService {
      */
     public PagedCollector.Page<FunctionSummaryDto> list(Program program, FunctionFilter filter,
                                                           int offset, int limit) {
-        Predicate<Function> predicate = filter != null ? filter.toPredicate() : fn -> true;
+        if (filter == null) {
+            // The total has to be walked: Ghidra's own function counter does
+            // not agree with what the iterator yields, and using it would
+            // change the meta.total the client sees. The walk is cached per
+            // program state, so only the first request pays for it.
+            int total = ProgramCache.shared().count(program, "functions",
+                () -> GhidraSwing.runRead(() -> countFunctions(program)));
+            return GhidraSwing.runRead(() -> PagedCollector.collectPage(
+                program.getFunctionManager().getFunctions(true), offset, limit,
+                FunctionSummaryDto::from, total));
+        }
+
+        Predicate<Function> predicate = filter.toPredicate();
 
         return GhidraSwing.runRead(() -> PagedCollector.collect(
             program.getFunctionManager().getFunctions(true), predicate, offset, limit,
             FunctionSummaryDto::from));
+    }
+
+    /** Counts the functions the listing walks over. */
+    private static int countFunctions(Program program) {
+        int count = 0;
+        for (var it = program.getFunctionManager().getFunctions(true); it.hasNext(); ) {
+            it.next();
+            count++;
+        }
+        return count;
     }
 
     /**
@@ -378,57 +401,72 @@ public class FunctionService {
      * Get the control flow graph (basic blocks and edges) for a function.
      */
     public Map<String, Object> getCfg(Program program, Function function) {
+        Address entry = function.getEntryPoint();
+        // The graph only changes when the program does, so it is cached: walking
+        // the blocks of a function and their edges is the whole cost here
+        // (24 ms for a function with 1079 blocks).
+        ProgramCache.Cfg cfg = ProgramCache.shared().getCfg(program, entry);
+        if (cfg == null) {
+            cfg = GhidraSwing.runRead(() -> buildCfg(program, function));
+            ProgramCache.shared().putCfg(program, entry, cfg);
+        }
+
+        final ProgramCache.Cfg cached = cfg;
         return GhidraSwing.runRead(() -> {
             Map<String, Object> result = new java.util.HashMap<>();
             result.put("function", function.getName(true));
-            result.put("address", function.getEntryPoint().toString());
+            result.put("address", entry.toString());
+            result.put("blocks", cached.blocks());
+            result.put("edges", cached.edges());
+            result.put("blockCount", cached.blocks().size());
+            result.put("edgeCount", cached.edges().size());
+            return result;
+        });
+    }
 
-            List<Map<String, Object>> blocks = new ArrayList<>();
-            List<Map<String, Object>> edges = new ArrayList<>();
+    /** Walks the basic blocks of a function and the flow between them. */
+    private ProgramCache.Cfg buildCfg(Program program, Function function) throws Exception {
+        List<Map<String, Object>> blocks = new ArrayList<>();
+        List<Map<String, Object>> edges = new ArrayList<>();
 
-            SimpleBlockModel blockModel = new SimpleBlockModel(program, true);
-            CodeBlock funcBlock = blockModel.getFirstCodeBlockContaining(
-                function.getEntryPoint(), new ConsoleTaskMonitor());
+        SimpleBlockModel blockModel = new SimpleBlockModel(program, true);
+        CodeBlock funcBlock = blockModel.getFirstCodeBlockContaining(
+            function.getEntryPoint(), new ConsoleTaskMonitor());
 
-            if (funcBlock != null) {
-                // Collect all blocks belonging to this function
-                java.util.Set<CodeBlock> visited = new java.util.LinkedHashSet<>();
-                java.util.Queue<CodeBlock> queue = new java.util.LinkedList<>();
-                queue.add(funcBlock);
+        if (funcBlock != null) {
+            // Collect all blocks belonging to this function
+            java.util.Set<CodeBlock> visited = new java.util.LinkedHashSet<>();
+            java.util.Queue<CodeBlock> queue = new java.util.LinkedList<>();
+            queue.add(funcBlock);
 
-                while (!queue.isEmpty()) {
-                    CodeBlock block = queue.poll();
-                    if (!visited.add(block)) continue;
+            while (!queue.isEmpty()) {
+                CodeBlock block = queue.poll();
+                if (!visited.add(block)) continue;
 
-                    Map<String, Object> blockInfo = new java.util.HashMap<>();
-                    blockInfo.put("start", block.getFirstStartAddress().toString());
-                    blockInfo.put("end", block.getMaxAddress().toString());
-                    blockInfo.put("size", block.getMaxAddress().subtract(block.getFirstStartAddress()) + 1);
-                    blocks.add(blockInfo);
+                Map<String, Object> blockInfo = new java.util.HashMap<>();
+                blockInfo.put("start", block.getFirstStartAddress().toString());
+                blockInfo.put("end", block.getMaxAddress().toString());
+                blockInfo.put("size", block.getMaxAddress().subtract(block.getFirstStartAddress()) + 1);
+                blocks.add(blockInfo);
 
-                    // Follow destinations
-                    CodeBlockReferenceIterator destIter = block.getDestinations(new ConsoleTaskMonitor());
-                    while (destIter.hasNext()) {
-                        CodeBlockReference ref = destIter.next();
-                        CodeBlock destBlock = ref.getDestinationBlock();
-                        if (destBlock != null) {
-                            Map<String, Object> edge = new java.util.HashMap<>();
-                            edge.put("from", block.getFirstStartAddress().toString());
-                            edge.put("to", destBlock.getFirstStartAddress().toString());
-                            edge.put("type", ref.getFlowType().toString());
-                            edges.add(edge);
-                            queue.add(destBlock);
-                        }
+                // Follow destinations
+                CodeBlockReferenceIterator destIter = block.getDestinations(new ConsoleTaskMonitor());
+                while (destIter.hasNext()) {
+                    CodeBlockReference ref = destIter.next();
+                    CodeBlock destBlock = ref.getDestinationBlock();
+                    if (destBlock != null) {
+                        Map<String, Object> edge = new java.util.HashMap<>();
+                        edge.put("from", block.getFirstStartAddress().toString());
+                        edge.put("to", destBlock.getFirstStartAddress().toString());
+                        edge.put("type", ref.getFlowType().toString());
+                        edges.add(edge);
+                        queue.add(destBlock);
                     }
                 }
             }
+        }
 
-            result.put("blocks", blocks);
-            result.put("edges", edges);
-            result.put("blockCount", blocks.size());
-            result.put("edgeCount", edges.size());
-            return result;
-        });
+        return new ProgramCache.Cfg(blocks, edges);
     }
 
     /**

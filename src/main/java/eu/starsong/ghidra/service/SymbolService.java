@@ -5,6 +5,7 @@ import eu.starsong.ghidra.server.GhydraServer.NotFoundException;
 import eu.starsong.ghidra.util.GhidraSwing;
 import eu.starsong.ghidra.util.GhidraUtil;
 import eu.starsong.ghidra.util.PagedCollector;
+import eu.starsong.ghidra.util.ProgramCache;
 import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Program;
@@ -34,10 +35,31 @@ public class SymbolService {
     public PagedCollector.Page<SymbolDto> list(Program program, SymbolFilter filter, int offset, int limit) {
         SymbolTable symbolTable = program.getSymbolTable();
 
-        Predicate<Symbol> predicate = filter != null ? filter.toPredicate() : sym -> true;
+        if (filter == null) {
+            // The total has to be walked: Ghidra's own symbol counter does not
+            // agree with what the iterator yields, and using it would change
+            // the meta.total the client sees. The walk is cached per program
+            // state, so only the first request pays for it.
+            int total = ProgramCache.shared().count(program, "symbols",
+                () -> GhidraSwing.runRead(() -> countSymbols(symbolTable)));
+            return GhidraSwing.runRead(() -> PagedCollector.collectPage(
+                symbolTable.getAllSymbols(true), offset, limit, SymbolDto::from, total));
+        }
+
+        Predicate<Symbol> predicate = filter.toPredicate();
 
         return GhidraSwing.runRead(() -> PagedCollector.collect(
             symbolTable.getAllSymbols(true), predicate, offset, limit, SymbolDto::from));
+    }
+
+    /** Counts the symbols the listing walks over. */
+    private static int countSymbols(SymbolTable symbolTable) {
+        int count = 0;
+        for (var it = symbolTable.getAllSymbols(true); it.hasNext(); ) {
+            it.next();
+            count++;
+        }
+        return count;
     }
 
     /**
