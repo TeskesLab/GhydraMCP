@@ -38,14 +38,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 21
-        # The extension targets Java 21. The runner image ships an older JDK,
-        # and Maven fails with "invalid target release: 21" without this.
-        uses: actions/setup-java@v3
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-
       - name: Resolve the release version
         id: meta
         env:
@@ -169,8 +161,33 @@ jobs:
             curl -fsSL -o "${WORK}/ghidra.zip" "$url"
             mkdir -p "${WORK}/ghidra-install"
             unzip -q "${WORK}/ghidra.zip" -d "${WORK}/ghidra-install"
+
+            # The Ghidra jars are compiled with the JDK the release requires, and
+            # javac cannot read a class file newer than itself: building against
+            # Ghidra 12.2 (which needs JDK 25) with JDK 21 fails with "bad
+            # class file". Read the requirement out of the distribution instead
+            # of guessing it - the class file major version is 44 plus the JDK
+            # number (65 = 21, 69 = 25).
+            jar=$(echo "${WORK}/ghidra-install/ghidra_*/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar")
+            major=$(unzip -p "$jar" ghidra/program/model/listing/Program.class \
+              | od -An -tu1 -j6 -N2 | awk '{print $1 * 256 + $2}')
+            jdk=$((major - 44))
+            # The extension is compiled for Java 21, so never go below it.
+            if [ "$jdk" -lt 21 ]; then jdk=21; fi
+            echo "Ghidra ${ver} needs JDK ${jdk} (class file major ${major})"
+
+            # The JDK is installed per series, because a single job builds them
+            # all and the toolchain has to match each distribution.
+            mkdir -p "${WORK}/jdk"
+            curl -fsSL -o "${WORK}/jdk.tar.gz" \
+              "https://api.adoptium.net/v3/binary/latest/${jdk}/ga/linux/x64/jdk/hotspot/normal/eclipse"
+            tar -xzf "${WORK}/jdk.tar.gz" -C "${WORK}/jdk" --strip-components=1
+
             (
               cd "$WORK"
+              export JAVA_HOME="$WORK/jdk"
+              export PATH="${JAVA_HOME}/bin:${PATH}"
+              java -version
               export GHIDRA_HOME="$(echo "$PWD"/ghidra-install/ghidra_*_PUBLIC)"
               mvn -B package -Dghidra.version="$ver"
               for f in target/Ghydra-*.zip; do
