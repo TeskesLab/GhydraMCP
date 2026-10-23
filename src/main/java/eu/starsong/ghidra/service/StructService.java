@@ -169,9 +169,10 @@ public class StructService {
             if (struct == null) {
                 throw new NotFoundException("Struct not found: " + name, "STRUCT_NOT_FOUND");
             }
-            // 2-arg remove exists in both 11.x and 12.x (12.x deprecates it but keeps it);
-            // the 1-arg form is 12.x-only. Use the 2-arg form for cross-version compile.
-            program.getDataTypeManager().remove(struct, ghidra.util.task.TaskMonitor.DUMMY);
+            // 11.x and 12.0-12.1 take remove(DataType, TaskMonitor); 12.2 dropped it
+            // for remove(DataType) and remove(List<DataType>, TaskMonitor). The helper
+            // resolves the overload that this Ghidra actually has.
+            GhidraUtil.removeDataType(program.getDataTypeManager(), struct);
             return null;
         });
     }
