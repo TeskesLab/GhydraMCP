@@ -67,13 +67,6 @@ jobs:
           # name embeds git describe, which falls back to a bare sha without it.
           fetch-depth: 0
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v5
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: maven
-
       - name: Resolve latest Ghidra ${{ matrix.ghidra-series }}.x
         id: ghidra
         env:
@@ -111,6 +104,32 @@ jobs:
           curl -fsSL -o ghidra.zip "${{ steps.ghidra.outputs.url }}"
           mkdir -p ghidra-install
           unzip -q ghidra.zip -d ghidra-install
+
+      - name: Detect the JDK this Ghidra release needs
+        id: jdk
+        run: |
+          set -euo pipefail
+          # The Ghidra jars are compiled with the JDK the release requires, and
+          # javac cannot read a class file newer than itself: building against
+          # Ghidra 12.2 (which needs JDK 25) with JDK 21 fails with
+          # "bad class file". Read the requirement out of the distribution
+          # instead of guessing it — the class file major version is 44 plus
+          # the JDK number (65 = 21, 69 = 25).
+          jar=$(echo ghidra-install/ghidra_*/Ghidra/Framework/SoftwareModeling/lib/SoftwareModeling.jar)
+          major=$(unzip -p "$jar" ghidra/program/model/listing/Program.class \
+            | od -An -tu1 -j6 -N2 | awk '{print $1 * 256 + $2}')
+          jdk=$((major - 44))
+          # The extension is compiled for Java 21, so never go below it.
+          if [ "$jdk" -lt 21 ]; then jdk=21; fi
+          echo "version=$jdk" >> "$GITHUB_OUTPUT"
+          echo "Ghidra $(echo ghidra-install/ghidra_*/) needs JDK $jdk (class file major $major)"
+
+      - name: Set up JDK ${{ steps.jdk.outputs.version }}
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ steps.jdk.outputs.version }}
+          distribution: 'temurin'
+          cache: maven
 
       - name: Set GHIDRA_HOME
         run: echo "GHIDRA_HOME=$(echo "$PWD"/ghidra-install/ghidra_*_PUBLIC)" >> "$GITHUB_ENV"
