@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **New logo:** a hand-inked three-headed dragon — two vermilion serpents and one black one — whose bodies twist into a Ghidra-style infinity loop, with a red seal in the corner carrying a real QR code to the project GitHub and the project kamon at its centre. The 1024 and 2K artwork plus a standalone scannable seal live in `images/logo/`.
 - **Release automation:** a release is now a single tag (`vX.Y.Z`) pushed to both remotes. `.github/workflows/release.yml` and `.gitea/workflows/release.yml` guard, build, publish and verify it, so a release can no longer exist on one platform only.
 - **`scripts/prepare_release.py`:** prepares a release locally — moves the `Unreleased` notes into a dated section and writes the version into every location that carries it.
 - **`scripts/version.py`:** single source of truth for the release version. `--check` fails when the plugin, the bridge, the Python package and the extension descriptor disagree, or when the plugin's `API_VERSION` and the bridge's `REQUIRED_API_VERSION` disagree.
