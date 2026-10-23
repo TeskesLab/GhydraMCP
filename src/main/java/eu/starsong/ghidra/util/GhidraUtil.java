@@ -440,4 +440,30 @@ public class GhidraUtil {
             return false;
         }
     }
+
+    /**
+     * Remove a data type, across Ghidra versions.
+     *
+     * <p>The overload moved: 11.x and 12.0-12.1 have
+     * {@code remove(DataType, TaskMonitor)}, while 12.2 dropped it for
+     * {@code remove(DataType)} and {@code remove(List<DataType>, TaskMonitor)}.
+     * No single overload exists in all three, so the call is resolved by name.
+     */
+    public static void removeDataType(DataTypeManager dtm, DataType type) {
+        String name = type != null ? type.getName() : "null";
+        try {
+            dtm.getClass().getMethod("remove", DataType.class, TaskMonitor.class)
+               .invoke(dtm, type, TaskMonitor.DUMMY);
+            return;
+        } catch (NoSuchMethodException e) {
+            // 12.2 and later: the two-argument overload is gone.
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to remove data type " + name, e);
+        }
+        try {
+            dtm.getClass().getMethod("remove", DataType.class).invoke(dtm, type);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to remove data type " + name, e);
+        }
+    }
 }
