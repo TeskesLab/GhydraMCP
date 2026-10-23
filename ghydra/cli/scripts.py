@@ -61,7 +61,7 @@ def run_script(ctx, name, source_file, args):
     if name:
         payload['name'] = name
     if source_file:
-        with open(source_file, 'r') as f:
+        with open(source_file, 'r', encoding='utf-8') as f:
             payload['source'] = f.read()
     if args:
         payload['args'] = list(args)

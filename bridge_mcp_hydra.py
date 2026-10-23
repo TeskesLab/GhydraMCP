@@ -3,6 +3,12 @@
 # dependencies = [
 #     "mcp==1.6.0",
 #     "requests==2.32.3",
+#     # Same ceiling as pyproject.toml: mcp 1.6.0 imports
+#     # pydantic._internal._typing_extra.eval_type_backport, which pydantic
+#     # 2.14 removed. Without it a fresh resolve picks pydantic >= 2.14 and
+#     # `import mcp.server.fastmcp` dies with an ImportError - measured with
+#     # uv 0.10.10, which resolved 2.14.1 and failed to import.
+#     "pydantic<2.14",
 # ]
 # ///
 # GhydraMCP Bridge for Ghidra HATEOAS API - Optimized for MCP integration
