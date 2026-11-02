@@ -365,17 +365,21 @@ tools work with any Ghidra version.
   `enabled: false` keeps it off even with the env var set. A config file *without* an `enabled`
   value (or with a null one) leaves the decision to the env var — otherwise `ghydra config init`,
   which writes `"enabled": null`, would silently pin the integration off.
-- **Kuna loads and analyses the whole image on every invocation** — measured: 19 s for a 22 MB
-  binary, 0.7 s for a 332 KB one. The cost is the analysis, not the command, so the export flow is
-  the main path: analyse once into `~/.ghydra/kuna/<digest of path+mtime>/`, then read the C, the
-  disassembly and `index.jsonl` from disk. `kuna strings` requires a filter for the same reason
-  (an unfiltered scan of `cmd.exe` returns 480 KB).
+- **Kuna loads and analyses the whole image on every invocation** — measured with Kuna 1.988:
+  20 s for a 44 MB binary, 0.5 s for a 332 KB one. The cost is the analysis, not the command, so
+  the export flow is the main path: analyse once into `~/.ghydra/kuna/<digest of path+mtime>/`,
+  then read the C, the disassembly and `index.jsonl` from disk. `kuna strings` requires a filter
+  for the same reason (an unfiltered scan of `cmd.exe` returns 480 KB).
 - **A complete export is reused, not re-analysed.** `kuna_export_start` and `ghydra kuna export`
   look under the digest first and only run Kuna when there is no complete export, or when the one
   on disk does not hold the functions that were asked for. The report says which happened
-  (`"reused": true`). Measured: re-reading the export of a 332 KB binary takes 26 ms against the
-  691 ms of a fresh analysis; for a 22 MB binary it is 19 s against 26 ms. The digest keys on the
-  path *and* the mtime, so a rebuilt binary gets a fresh directory.
+  (`"reused": true`). Measured: re-reading the export of a 332 KB binary takes 21 ms against the
+  2 750 ms of the export itself; for a 44 MB binary it is 152 ms against the 154 s of the export.
+  The re-read is not quite free either — it reads the index, which holds one record per function.
+  The digest keys on the path *and* the mtime, so a rebuilt binary gets a fresh directory.
+- **The performance numbers are measured, not remembered.** `scripts/bench_kuna.py` produces the
+  table in `GHYDRA_KUNA.md` and is committed with it. A Kuna upgrade changes the numbers, so they
+  are re-measured rather than quoted.
 - **The export is addressed by its digest, not by the job.** The digest is 12 hex characters,
   survives a restart of the bridge, and is what `kuna_export_read(directory=...)`, the
   `kuna://export/<digest>/` resources and `ghydra kuna status` all use. The job registry lives in

@@ -260,8 +260,9 @@ for a complete export under the digest first, and only run the analysis when the
 when the one on disk does not hold the functions that were asked for. The report says which
 happened with `"reused": true` or `false`.
 
-This is the single most valuable thing in the integration. A 22 MB binary costs about twenty
-seconds to analyse; reading an export that already exists costs milliseconds.
+This is the single most valuable thing in the integration. A 44 MB binary costs about twenty
+seconds to analyse, and about two and a half minutes to export; reading an export that already
+exists costs milliseconds.
 
 An export is complete when it has an index and is not still being streamed: a streamed export
 appends a record only after that function's C block is done, so an index without the `.streaming`
@@ -284,19 +285,34 @@ CLI is readable by the bridge, and the other way round.
 
 ## Performance
 
-Measured with Kuna 1.785. The numbers are that version's; a newer Kuna may differ, so re-measure
-before quoting them:
+Measured with Kuna **1.988**, as the median of three runs, on the commands the integration
+actually runs. The numbers are that version's; a newer Kuna may differ, so re-measure before
+quoting them. `scripts/bench_kuna.py` is what produced them, and it is in the repository so the
+numbers can be re-measured instead of quoted:
+
+```bash
+python scripts/bench_kuna.py --repeat 3 --with-export
+```
 
 | Binary | Size | `summary` | `crypto` | `decompile` |
 | --- | --- | --- | --- | --- |
-| `cmd.exe` | 332 KB | 691 ms | 43 ms | 492 ms |
-| `kuna.exe` | 22 MB, 50 122 functions | 19 475 ms | 19 035 ms | 10 529 ms |
+| `cmd.exe` | 332 KB, 1 118 functions | 501 ms | 21 ms | 369 ms |
+| `kuna.exe` | 44 MB, 67 686 functions | 20 410 ms | 20 489 ms | 9 352 ms |
 
 The cost is the analysis of the whole image, and it is paid on **every** invocation — Kuna keeps
-no state between calls. A 22 MB binary costs about twenty seconds per question asked one-shot.
-Exporting it once and reading the files afterwards turns every later question into a file read.
+no state between calls. A 44 MB binary costs about twenty seconds per question asked one-shot.
 
-Re-reading an export that already exists costs about 26 ms, whatever the size of the binary.
+Exporting it once and reading the files afterwards turns every later question into a file read:
+
+| Binary | Export (the analysis) | Re-read of that export |
+| --- | --- | --- |
+| `cmd.exe` | 2 750 ms | 21 ms |
+| `kuna.exe` | 154 018 ms | 152 ms |
+
+The export is the expensive half: it recovers the C of **every** function, and 67 686 of them take
+about two and a half minutes. The re-read is the cheap half, and it is what the digest is for. It
+costs about 21 ms for a small binary and about 152 ms for a 44 MB one — the index has 67 686
+records to read, so it is not free either.
 
 ## Limits and gotchas
 
@@ -370,3 +386,6 @@ python run_tests.py --kuna
 
 The suite needs neither Ghidra nor the Kuna binary, so it always runs and always gives a signal.
 It covers the opt-in precedence, the bridge/CLI contract and the export readers.
+
+The performance table above is not part of the suite — it needs the Kuna binary and minutes of
+analysis. `scripts/bench_kuna.py` measures it on demand.

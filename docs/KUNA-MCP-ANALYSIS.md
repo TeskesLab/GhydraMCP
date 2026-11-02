@@ -73,8 +73,9 @@ demonstrates the failure mode: its `initialize` response ships a **12-rule instr
 self-describe.
 
 **Version skew.** Kuna's flags are Kuna's ABI. This machine has Kuna **1.988** installed via
-Scoop; `GHYDRA_KUNA.md` still documents and benchmarks **1.785**. The bridge is the right place to
-absorb that skew — but it absorbs it by *curating*, not by mirroring.
+Scoop, and `GHYDRA_KUNA.md` now documents and benchmarks that version — the benchmark was
+re-measured with `scripts/bench_kuna.py`. The bridge is the right place to absorb that skew — but
+it absorbs it by *curating*, not by mirroring.
 
 **Most flags are not per-call decisions.** `--json` and `--stream` are output-shape choices the
 bridge already makes. `--jobs` and `--output` are export-shape choices, made once. Exposing them
@@ -129,7 +130,7 @@ does not exist" — it gets a prose string and has to guess.
 
 The intuition behind RAG is exactly right for this problem: **do not push the whole binary into
 the agent's context; give it a way to pull only the slice it needs.** Kuna's own numbers make the
-case — one-shot calls on a 22 MB binary cost 10–19 s each and return hundreds of KB.
+case — one-shot calls on a 44 MB binary cost 9–20 s each and return hundreds of KB.
 
 But **vector/embedding RAG is the wrong tool here**:
 
@@ -244,10 +245,11 @@ project, already accepted for the request logic.
 
 ### 5.5 Fix the documentation drift
 
-**Done**, except the benchmark itself, which was not re-measured: the perf table stays labelled
-as measured against Kuna 1.785, and the doc says so.
+**Done**, and the benchmark was re-measured too: `scripts/bench_kuna.py` is in the repository and
+the perf table in `GHYDRA_KUNA.md` now carries the numbers of Kuna 1.988, the version this
+machine has.
 
-- The status sample no longer implies that 1.785 is the installed version, and it shows the
+- The status sample no longer implies a specific Kuna version, and it shows the
   exports listing.
 - `ghydra kuna status` now says `"nothing (the integration is off)"` when neither the config file
   nor the env var decided — the third branch the bridge already had.
@@ -272,7 +274,7 @@ the text after the function has been fetched, so it saves context but no time.
 | Should the raw flag surface go in too? | No. It doubles the schema, couples the agent to Kuna's ABI, and exposes knobs with no per-call meaning. |
 | Is RAG the right pattern? | The *shape*, yes. Embeddings, no. |
 | What to build instead | MCP resources over the export directory, addressed by the existing `sha256(path|mtime)` digest. **Built.** |
-| What to fix first | The missing export cache check. **Built**: measured 691 ms to 26 ms on a 332 KB binary. |
+| What to fix first | The missing export cache check. **Built**: measured 2 750 ms to 21 ms on a 332 KB binary. |
 | What not to do | Embeddings, a sidecar service, a raw flag mirror, or a second copy of the opt-in logic. |
 
 ### What is in the code now
