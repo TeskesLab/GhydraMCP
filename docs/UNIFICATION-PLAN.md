@@ -104,7 +104,44 @@ A `TargetDescriptor` is introduced:
   "module_base": "0x7FF7A1230000", "session_id": "..." }
 ```
 
-### 3.3 One error envelope
+### 3.3 Relationship to the Central Plugin Refactor
+
+`docs/plans/2026-04-23-central-plugin-refactor.md` (April 2026, **not implemented**) proposes
+moving GhydraMCP to one HTTP server on port 8192 inside the FrontEndTool, with programs addressed
+by path (`/files/{urlencoded_path}/...`) and tool-scoped endpoints for cursor state — replacing the
+per-CodeBrowser ports, `/instances` and `/registerInstance`.
+
+Verified state of that proposal today:
+
+| Expected | Actual |
+| --- | --- |
+| `util/ProgramResolver.java` | does not exist |
+| `resource/ToolResource.java`, `resource/FileResource.java` | do not exist |
+| `util/ProgramCache.java` — a `Program` cache with idle TTL | exists, but is a **symbol-count / CFG cache** (`ProgramCache.java:21-25`), unrelated |
+| `resource/InstanceResource.java` — deleted | still present |
+| Single port 8192 | `ApiConstants.java:6-7` still has `DEFAULT_PORT` 8192 **and** `MAX_PORT_ATTEMPTS` 256 |
+
+**The two proposals converge on the same idea**, and that is not a coincidence: address a program
+by *which file it is*, not by *which port happens to be serving it*. The unification needs exactly
+that, because the gateway has to correlate a Ghidra program with an x64dbg module, and the only
+stable identity both sides have is the file path.
+
+**Recommendation: treat path-based addressing as a prerequisite of Phase 3, and land central-plugin
+separately.** Concretely:
+
+- If central-plugin lands first, `TargetDescriptor.binary` comes straight from the URL path, and
+  the gateway needs no port discovery at all.
+- If it does not, the gateway must still key on the path, but has to ask the Ghidra side which
+  program a given port is serving (`GET /program`) and cache that mapping.
+- If central-plugin lands, the bridge's instance registry must be **replaced** by path resolution —
+  `/instances` and `/registerInstance` are exactly the cross-instance coordination it uses today.
+  The `kuna_*` tools are unaffected: they take no `port` and touch no instance.
+
+Do not entangle the two. Central-plugin is a substantial change to the Java side (17 resources, the
+bridge, the CLI and every test URL); the unification's Phase 1 is independent of it, and coupling
+them would make both harder to review.
+
+### 3.4 One error envelope
 
 GhidraMCP's REST layer returns `{success, id, instance, result, _links}`; the bridge flattens it
 for the agent. x64dbg returns MCP-standard `content[].text` with `isError: true`, and the error
@@ -116,7 +153,7 @@ result string for the prefix `{"error":`*.
 (`NO_ACTIVE_SESSION`, `TARGET_RUNNING`, `NOT_FOUND`, `INVALID_ADDRESS`, …) alongside the human
 text. This is what lets an agent branch instead of guessing from prose.
 
-### 3.4 One conformance suite
+### 3.5 One conformance suite
 
 A JSON Schema per tool plus a shared fixture set, run against both plugins in both CIs. It
 catches the drift that is already present (the 84/72/80 count) before it reaches an agent.
