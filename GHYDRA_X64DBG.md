@@ -120,18 +120,26 @@ sixty tools picks badly, so the catalogue and a generic pass-through are exposed
 
 ```python
 client.use_tool("ghydra", "x64dbg_call",
-                {"tool": "WaitForEvent", "tool_arguments": {"timeoutMs": 60000}, "timeout": 90})
+                {"tool": "WaitForEvent", "tool_arguments": '{"timeoutMs": 60000}', "timeout": 90})
 ```
 
-The arguments may also be given as their JSON text, and the parameter is not called `arguments`
-because that is the name of the container the MCP protocol itself uses for a tool's parameters. A
-client that re-encodes the container turns a nested object into a string — or loses it — and the
-tool then does something else instead of failing:
+The arguments go as **one piece of JSON text**, and that is what the schema asks for. A client that
+re-encodes the container the MCP protocol uses for a tool's parameters flattens what is nested in it:
+every value of a nested object arrives as a string. Measured on this desktop, where an integer
+`count` arrived as `"3"` — and the plugin, which ignores a parameter it cannot read, answered with
+its default count instead of the one that was asked for. The text is the form nothing gets in the
+way of, and it is parsed here.
+
+An object is still accepted, for the clients that deliver one, and its types are put back from the
+plugin's own schema before the call:
 
 ```python
 client.use_tool("ghydra", "x64dbg_call",
-                {"tool": "WaitForEvent", "tool_arguments": '{"timeoutMs": 60000}', "timeout": 90})
+                {"tool": "WaitForEvent", "tool_arguments": {"timeoutMs": 60000}, "timeout": 90})
 ```
+
+The parameter is not called `arguments` because that is the name of the container the MCP protocol
+itself uses for a tool's parameters, and the two get confused easily.
 
 The debugger is local, so these tools take no `port` for it. The workflow tools take one, and it
 is the **Ghidra** instance, as everywhere else in the bridge.

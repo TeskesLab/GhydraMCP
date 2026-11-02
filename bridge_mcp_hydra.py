@@ -27,13 +27,13 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-from typing import Dict, List, Optional, Union, Any
+from typing import Annotated, Dict, List, Optional, Union, Any
 from urllib.parse import quote, unquote, urlencode, urlparse
 
 import requests
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.resources import FunctionResource
-from pydantic import AnyUrl
+from pydantic import AnyUrl, BeforeValidator
 
 # ================= Core Infrastructure =================
 
@@ -2174,7 +2174,9 @@ def format_x64dbg_tools(response: dict, **kwargs) -> str:
         if description:
             lines.append(f"    {description}")
     lines.append("")
-    lines.append("Call one with x64dbg_call(tool='<name>', tool_arguments={...}).")
+    lines.append("Call one with x64dbg_call(tool='<name>', tool_arguments='{\"param\": \"value\"}').")
+    lines.append("The arguments go as one piece of JSON text: a client that flattens a nested")
+    lines.append("object turns every value into a string.")
     return "\n".join(lines)
 
 
@@ -5733,6 +5735,11 @@ X64DBG_PROBE_READ_TIMEOUT = 2.0
 # marks every tool as read-only or not, and the hint is in its catalogue.
 _X64DBG_READ_ONLY: Dict[str, bool] = {}
 
+# The input schema of each plugin tool, from the same catalogue. It says what
+# type every parameter is, which is what puts back the types a client
+# flattened into text.
+_X64DBG_SCHEMAS: Dict[str, dict] = {}
+
 # The machine-readable reasons a call can fail. The CLI carries the same list,
 # so an agent sees one taxonomy whichever side it drives.
 X64DBG_ERROR_CODES = (
@@ -6121,7 +6128,61 @@ def _x64dbg_is_read_only(instance: dict, name: str) -> bool:
             annotations = tool.get("annotations") or {}
             tool_key = f"{instance['host']}:{instance['port']}:{tool.get('name')}"
             _X64DBG_READ_ONLY[tool_key] = bool(annotations.get("readOnlyHint"))
+            schema = tool.get("inputSchema")
+            _X64DBG_SCHEMAS[tool_key] = schema if isinstance(schema, dict) else {}
     return _X64DBG_READ_ONLY.get(key, False)
+
+
+def _x64dbg_restore_types(instance: dict, name: str, arguments: dict) -> dict:
+    """Put back the types a client flattened into text.
+
+    A client that re-encodes the container the protocol uses for a tool's
+    parameters turns what is nested in it into text: measured on this
+    desktop, where an integer count arrived as the string "3". The plugin
+    ignores a parameter it cannot read and does something else instead of
+    failing - the call came back with the default count rather than the
+    one that was asked for.
+
+    The plugin's own schema says what every parameter is, so the type is
+    restored here, from the schema, rather than left to the plugin. A value
+    the schema does not describe is left alone.
+    """
+    key = f"{instance['host']}:{instance['port']}:{name}"
+    schema = _X64DBG_SCHEMAS.get(key)
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(properties, dict) or not arguments:
+        return arguments
+    restored = dict(arguments)
+    for field, value in arguments.items():
+        if not isinstance(value, str):
+            continue
+        declared = properties.get(field)
+        if not isinstance(declared, dict):
+            continue
+        kind = declared.get("type")
+        if kind == "integer":
+            try:
+                restored[field] = int(value, 0)
+            except ValueError:
+                pass
+        elif kind == "number":
+            try:
+                restored[field] = float(value)
+            except ValueError:
+                pass
+        elif kind == "boolean":
+            if value.lower() in ("true", "false"):
+                restored[field] = value.lower() == "true"
+        elif kind in ("array", "object"):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                continue
+            if kind == "array" and isinstance(parsed, list):
+                restored[field] = parsed
+            elif kind == "object" and isinstance(parsed, dict):
+                restored[field] = parsed
+    return restored
 
 
 def _x64dbg_call_tool(instance: dict, name: str, arguments: Optional[dict] = None,
@@ -6132,10 +6193,16 @@ def _x64dbg_call_tool(instance: dict, name: str, arguments: Optional[dict] = Non
     that changes the debuggee may not, because the first attempt may already
     have reached it.
     """
+    # The catalogue is read first: it carries the read-only hint and the
+    # input schema, and the schema is what says what type a parameter is.
+    read_only = _x64dbg_is_read_only(instance, name)
+    payload = {
+        "name": name,
+        "arguments": _x64dbg_restore_types(instance, name, arguments or {}),
+    }
     result = _x64dbg_post(
         instance["host"], instance["port"], instance["token"], "tools/call",
-        {"name": name, "arguments": arguments or {}}, timeout=timeout,
-        idempotent=_x64dbg_is_read_only(instance, name),
+        payload, timeout=timeout, idempotent=read_only,
     )
     if isinstance(result, dict):
         content = result.get("content")
@@ -6394,14 +6461,36 @@ def x64dbg_tools() -> dict:
     }
 
 
-def _x64dbg_parse_arguments(value: Any) -> dict:
-    """The plugin's arguments, from an object or from their JSON text.
+def _x64dbg_arguments_text(value: Any) -> Any:
+    """Take the plugin's arguments as one piece of text.
 
-    Some MCP clients deliver a nested object as text. "arguments" is the
-    name of the container the protocol itself uses for a tool's parameters,
-    and a client that re-encodes the container turns the value into a
-    string. The text is parsed here, so the caller may pass either, and a
-    client that delivers the object plainly is not forced to quote it.
+    A client that re-encodes the container the protocol uses for a tool's
+    parameters flattens what is nested in it, and every value of a nested
+    object arrives as a string - measured on this desktop, where an integer
+    count arrived as "3" and the plugin, ignoring what it could not read,
+    did something else instead of failing.
+
+    The text is the form nothing gets in the way of, so it is the form the
+    schema asks for. An object is still accepted, for the clients that
+    deliver one, and its types are restored from the plugin's own schema.
+    """
+    if isinstance(value, dict):
+        return json.dumps(value)
+    return value
+
+
+# The arguments of a plugin tool, as JSON text. The schema says string on
+# purpose: a client that hands over a nested object flattens it.
+X64dbgArguments = Annotated[str, BeforeValidator(_x64dbg_arguments_text)]
+
+
+def _x64dbg_parse_arguments(value: Any) -> dict:
+    """The plugin's arguments, from their JSON text or from an object.
+
+    Some MCP clients re-encode the container the protocol uses for a tool's
+    parameters, and a nested object does not always survive that. The text
+    is parsed here, so the caller may pass either and the bridge does not
+    rely on the client to get it right.
     """
     if value is None:
         return {}
@@ -6423,7 +6512,7 @@ def _x64dbg_parse_arguments(value: Any) -> dict:
 
 @mcp.tool()
 @text_output
-def x64dbg_call(tool: str, tool_arguments: dict | str | None = None,
+def x64dbg_call(tool: str, tool_arguments: X64dbgArguments | None = None,
                 timeout: int | None = None) -> dict:
     """Call one of the x64dbg plugin's tools by name.
 
@@ -6435,16 +6524,22 @@ def x64dbg_call(tool: str, tool_arguments: dict | str | None = None,
     transport fails; one that changes the debuggee is never repeated, because
     the first attempt may already have reached it.
 
-    The arguments may be given as an object or as their JSON text, and the
-    parameter is not called "arguments" on purpose: that is the name of the
-    container the MCP protocol itself uses for a tool's parameters, and a
-    client that flattens the two loses the value on the floor. Some clients
-    deliver a nested object as text whatever the name is, which is why both
-    forms are accepted.
+    Send the arguments as one piece of JSON text - '{"target": "0x140001234"}' -
+    rather than as a nested object. A client that re-encodes the container
+    the protocol uses for a tool's parameters flattens what is nested in it:
+    every value of the object arrives as a string, and the plugin ignores a
+    parameter it cannot read and does something else instead of failing.
+    Measured here - an integer count arrived as "3" and the call came back
+    with the default count. The text is parsed here. An object is still
+    accepted, and its types are restored from the plugin's own schema.
+
+    The parameter is not called "arguments" for a reason of its own: that is
+    the name of the container the protocol itself uses for a tool's
+    parameters, and the two get confused easily.
 
     Args:
         tool: The plugin tool to call, for example "SetBreakpoint"
-        tool_arguments: The arguments for that tool, as an object or as JSON
+        tool_arguments: The arguments for that tool, as JSON text
         timeout: How long to wait, in seconds (30 by default). The tools that
             block - run, WaitForEvent, WaitForPause - need more than that.
 

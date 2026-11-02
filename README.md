@@ -451,7 +451,7 @@ Tools are grouped into namespaces:
 **x64dbg debugger** (`x64dbg_*`): local tools that drive the x64dbg MCP server plugin; the debugger is local, so no `port` for it. The `port` on the workflow tools is the Ghidra instance. See [GHYDRA_X64DBG.md](GHYDRA_X64DBG.md).
 - `x64dbg_status`: Whether the server answered, where it is, how many tools it has and which modules are loaded
 - `x64dbg_tools`: The plugin's catalogue: name, description, input schema and whether the tool is read-only
-- `x64dbg_call`: Call any plugin tool by name (params: tool, tool_arguments [optional, an object or its JSON text], timeout [optional])
+- `x64dbg_call`: Call any plugin tool by name (params: tool, tool_arguments [optional, the arguments as one piece of JSON text], timeout [optional])
 - `x64dbg_target`: How the Ghidra program and the x64dbg session line up: both bases and the distance between them (params: port [optional])
 - `x64dbg_breakpoint_at`: Set a breakpoint on a Ghidra address, translated into the runtime address (params: address, port [optional])
 - `x64dbg_go_to`: Move the instruction pointer to a Ghidra address, translated the same way (params: address, port [optional])

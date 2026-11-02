@@ -52,6 +52,15 @@ CATALOGUE = [
         "inputSchema": {"type": "object", "properties": {}},
         "annotations": {"readOnlyHint": True, "openWorldHint": False},
     },
+    {
+        "name": "Disassemble",
+        "description": "Disassembles the instructions at an address.",
+        "inputSchema": {"type": "object", "properties": {
+            "address": {"type": "string"},
+            "count": {"type": "integer"},
+        }},
+        "annotations": {"readOnlyHint": True, "openWorldHint": False},
+    },
 ]
 
 
@@ -539,34 +548,79 @@ class X64dbgBridgeTests(unittest.TestCase):
         """The arguments have to survive the protocol, not just the call.
 
         Calling the function directly is not the same thing: the MCP layer
-        binds the parameters, and a parameter called "arguments" collides
-        with the name of the container the protocol uses for them. A client
-        that flattens the two loses the value - and the tool silently does
-        the wrong thing instead of failing.
+        binds the parameters, and the schema says what shape they arrive in.
+        The arguments are therefore JSON text, which every client delivers
+        as it is.
         """
         import asyncio
 
         async def call(arguments):
             return await bridge.mcp.call_tool("x64dbg_call", arguments)
 
-        for form, expected in (
-            ({"tool": "SetBreakpoint",
-              "tool_arguments": {"target": "0x7FF7A1234000"}},
-             ("SetBreakpoint", {"target": "0x7FF7A1234000"})),
-            ({"tool": "SetBreakpoint",
-              "tool_arguments": '{"target": "0x7FF7A1234000"}'},
-             ("SetBreakpoint", {"target": "0x7FF7A1234000"})),
-        ):
-            with self.subTest(form=type(expected)):
-                content = asyncio.run(call(form))
-                text = "\n".join(
-                    item.get("text", "") if isinstance(item, dict)
-                    else getattr(item, "text", "")
-                    for item in content
-                )
-                self.assertIn(expected, self.fake.calls,
-                              "the arguments did not reach the plugin")
-                self.assertIn("Breakpoint set", text)
+        content = asyncio.run(call({
+            "tool": "SetBreakpoint",
+            "tool_arguments": '{"target": "0x7FF7A1234000"}',
+        }))
+        text = "\n".join(
+            item.get("text", "") if isinstance(item, dict)
+            else getattr(item, "text", "")
+            for item in content
+        )
+        self.assertIn(("SetBreakpoint", {"target": "0x7FF7A1234000"}), self.fake.calls,
+                      "the arguments did not reach the plugin")
+        self.assertIn("Breakpoint set", text)
+
+    def test_an_object_reaches_the_plugin_through_the_mcp_binding(self):
+        """An object is accepted too, for the clients that deliver one."""
+        import asyncio
+
+        asyncio.run(bridge.mcp.call_tool("x64dbg_call", {
+            "tool": "SetBreakpoint",
+            "tool_arguments": {"target": "0x7FF7A1234000"},
+        }))
+        self.assertIn(("SetBreakpoint", {"target": "0x7FF7A1234000"}), self.fake.calls,
+                      "the object did not reach the plugin")
+
+    def test_the_types_a_client_flattened_are_restored(self):
+        """The bug this desktop showed: a client that re-encodes the
+        container the protocol uses for the parameters turns every value of a
+        nested object into a string.
+
+        The plugin ignores a parameter it cannot read and does something
+        else - the call came back with the default count instead of the one
+        that was asked for. The plugin's own schema says what each parameter
+        is, so the type is put back here.
+        """
+        import asyncio
+
+        asyncio.run(bridge.mcp.call_tool("x64dbg_call", {
+            "tool": "Disassemble",
+            "tool_arguments": {"address": "0x7FF7A1234000", "count": "3"},
+        }))
+        self.assertIn(
+            ("Disassemble", {"address": "0x7FF7A1234000", "count": 3}),
+            self.fake.calls,
+            "the count reached the plugin as text instead of a number",
+        )
+
+    def test_the_schema_asks_for_the_text_and_not_for_an_object(self):
+        """The schema is what the agent reads, so it has to ask for the form
+        that survives the client."""
+        import asyncio
+
+        tools = asyncio.run(bridge.mcp.list_tools())
+        schema = next(t.inputSchema for t in tools if t.name == "x64dbg_call")
+        declared = schema["properties"]["tool_arguments"]
+        kinds = [part.get("type") for part in declared.get("anyOf", [])]
+        self.assertIn("string", kinds)
+        self.assertNotIn("object", kinds,
+                         "the schema asks for an object, and a client flattens it")
+
+    def test_an_object_is_accepted_when_the_call_is_made_directly(self):
+        result = bridge.x64dbg_call.__wrapped__(
+            tool="SetBreakpoint", tool_arguments={"target": "0x7FF7A1234000"})
+        self.assertTrue(result["success"], result)
+        self.assertIn(("SetBreakpoint", {"target": "0x7FF7A1234000"}), self.fake.calls)
 
     def test_arguments_that_are_not_json_are_refused(self):
         result = bridge.x64dbg_call.__wrapped__(

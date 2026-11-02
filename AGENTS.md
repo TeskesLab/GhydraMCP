@@ -191,11 +191,21 @@ happened to `x64dbg_call`, and the unit tests did not catch it because they call
 instead of the protocol: `test_x64dbg.py` now drives a tool through `mcp.call_tool(...)`, and a
 guard asserts that no bridge tool declares a parameter the protocol reserves.
 
-**A tool parameter that takes a nested object should also accept its JSON text.** A client that
-delivers a tool's parameters over stdio may turn the nested object into a string or drop it —
-measured on this desktop with the official GitHub MCP server, whose `labels` array arrived as
-something that was not an array. `x64dbg_call` takes `tool_arguments` as an object *or* as its
-JSON text, and parses the text itself rather than relying on the client to get it right.
+**A tool parameter that takes a nested object should take it as one piece of text.** A client that
+delivers a tool's parameters over stdio flattens what is nested in them: every value of a nested
+object arrives as a string. Measured on this desktop with the official GitHub MCP server, whose
+`labels` array arrived as something that was not an array, and with `x64dbg_call`, whose integer
+`count` arrived as `"3"` — the plugin ignores a parameter it cannot read and answers with its
+default instead of the one that was asked for.
+
+So `x64dbg_call` declares `tool_arguments` as a **string** (the JSON text) and parses it itself;
+an object is accepted as well, and its types are put back from the plugin's own input schema.
+Two things make it work, and both are worth keeping: the schema asks for the form that survives
+the client, and the types are restored from the schema the plugin publishes — not guessed.
+
+The trap on the way: FastMCP's `pre_parse_json` (`func_metadata.py`) turns a JSON string into the
+object it describes *before* the validation, so a parameter declared as `str` rejects the object it
+just built. `Annotated[str, BeforeValidator(...)]` is what takes the object back as text.
 
 Note `safe_put`/`safe_post`/`safe_patch` **mutate the payload you pass in** (`data.pop("headers", None)`).
 The popped `headers` dict is the only way to satisfy the server's Origin check on state-changing
