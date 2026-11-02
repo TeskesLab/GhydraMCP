@@ -15,10 +15,10 @@ decompilation, annotation, and data manipulation.
   subsequent instances walk up to `MAX_PORT_ATTEMPTS` = 256 ports (8192–8447).
 - The bridge auto-discovers instances on startup and on a daemon timer, but `QUICK_DISCOVERY_RANGE`
   only scans **8192–8201**. Instances above 8202 need `instances_register` / the CLI.
-- 85 MCP tools in 22 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
+- 91 MCP tools in 23 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
   `functions_*`, `instances_*`, `kuna_*`, `memory_*`, `namespaces_*`, `programs_*`, `project_*`,
   `projects_*`, `raw_image_*`, `scalars_*`, `scripts_*`, `segments_*`, `structs_*`, `symbols_*`,
-  `ui_*`, `variables_*`, `xrefs_*`.
+  `ui_*`, `variables_*`, `x64dbg_*`, `xrefs_*`.
 - v3.0.0 migrated `HttpServer` → **Javalin** with service/DTO/resource layering. `API_VERSION` is
   **3000** (breaking: fully-qualified names everywhere).
 - The `kuna_*` namespace is **local**: it drives the Kuna decompiler CLI as a subprocess, so it
@@ -216,7 +216,7 @@ SemVer: patch for fixes, minor for features, major for breaking.
 
 ```bash
 python run_tests.py                      # all suites
-python run_tests.py --http --mcp --data --comments --port --kuna   # or any subset
+python run_tests.py --http --mcp --data --comments --port --kuna --x64dbg   # or any subset
 ```
 
 **Every suite skips itself when Ghidra isn't running** (`setUp` → `skipTest("Ghidra not running")`).
@@ -227,6 +227,17 @@ Tests need Ghidra with a binary open, and a loaded binary with functions (`skipT
 runs and always gives a signal. It covers the Kuna opt-in precedence, the bridge/CLI contract
 (every `kuna_*` tool has a `FORMATTERS` entry and is registered in MCP; none takes a `port`) and
 the export readers.
+
+**`--x64dbg` is the other one that always runs**: `test_x64dbg.py` needs neither Ghidra nor
+x64dbg, because it starts a fake plugin that answers like the real one (JSON-RPC over HTTP, a
+bearer token, the tool catalogue with `annotations.readOnlyHint`). It covers the client, the
+config precedence, the address model, the bridge tools and the error taxonomy.
+
+**The x64dbg suite is not immune to the network stack.** A local TCP connection is reset every
+now and then on this machine (measured: 7%), so a suite that opens dozens of connections will
+see a failure every now and then unless the client retries — which it does. When a test fails
+there, look at the transport before the logic: `X64DBG_MISSING` with a `ConnectionResetError`
+underneath is the machine, not the code.
 
 Target selection is inconsistent and worth knowing:
 - `test_javalin_port.py` honors `GHYDRAMCP_TEST_HOST` **and** `GHYDRAMCP_TEST_PORT`.
@@ -383,6 +394,52 @@ tools work with any Ghidra version.
 - **The `kuna_*` tools take no `port`.** They are not part of the plugin API, so they take no
   instance either.
 
+## x64dbg integration (local, like the Kuna one)
+
+The [x64dbg MCP server](https://github.com/duty1g/x64dbg-mcp-server) is a Zig plugin that lives
+inside the debugger and answers JSON-RPC 2.0 POSTed to `/`. It is **not** part of the Ghidra
+plugin API, so it changes neither `API_VERSION` nor the Java side.
+
+- **The contract**: `POST /` with a JSON-RPC 2.0 body, `Authorization: Bearer <token>`, and the
+  answer is `application/json` — no SSE framing. The server keeps no state, so every request
+  stands alone and there is no handshake to maintain. `tools/call` answers
+  `{"content": [{"type": "text", "text": ...}]}`; an error is `{"error": {...}}`.
+- **The token cannot be guessed.** The plugin writes it to its own `mcp_config.json` next to
+  `x64dbg.exe` (it asks the OS for the *process* path, not the DLL's), so
+  `"x64dbg": {"path": "<installation>"}` is enough to find it; `"x64dbg": {"token": ...}`
+  sets it outright. The plugin's `IpAddress`, `Port` and `AuthToken` keys are the ones in that file.
+- **The port**: 9094 for a 64-bit debuggee and 9095 for a 32-bit one. The released plugin binds
+  exactly those two and stops serving if the port is taken; the fixed build (PR #13 upstream)
+  walks up to 32 ports instead. The bridge and the CLI look for the port rather than assume it,
+  and the scan reaches as far as the fixed plugin can go.
+- **The address model**: `runtime = static − image_base + module_base`. The `image_base` comes
+  from the Ghidra `/program` endpoint, the `module_base` from the plugin's `ListModules`. The two
+  binaries are matched by full path first and by file name second, because the two sides can
+  disagree about the directory.
+- **The 80 plugin tools are not exposed one by one.** That would drown the agent's tool list
+  (165 tools in one agent), so the catalogue (`x64dbg_tools`) and a generic pass-through
+  (`x64dbg_call`) are exposed instead, plus four workflow tools that carry the address model.
+- **The `x64dbg_*` tools take no `port` for the debugger.** They are local, like the Kuna ones;
+  the `port` on the workflow tools is the **Ghidra** instance, as everywhere else in the bridge.
+- **No session pooling.** The plugin closes the connection after every response, so a pooled
+  connection is reused after the server has already hung up on it — that is a
+  `ConnectionResetError`, not a missing server. Use a plain `requests.post` per call.
+- **A local connection is reset every now and then on this machine**: measured at 7% of the
+  connections, with curl and with plain sockets alike, so it is the Windows network stack and not
+  the client. The client retries a connection error (up to three attempts, on a fresh connection).
+- **A timeout is only retried when the request is safe to repeat**, and so is a connection that
+  died while the answer was coming: the plugin marks every tool with `annotations.readOnlyHint`,
+  so a read-only tool may be called again; a tool that changes the debuggee may not, because the
+  first attempt may already have reached it. A connection that never came up is the one
+  exception: the request was never sent, so that one is always safe to try again.
+- **The connect timeout and the read timeout are separate.** A closed local port does not refuse
+  straight away on Windows — the SYN hangs and is only refused about two seconds later — so the
+  probe uses a short connect timeout (0.35 s) and the ports are probed concurrently. A tool that
+  blocks (`run`, `WaitForEvent`) needs a read timeout of its own: `x64dbg_call` takes a `timeout`.
+- **The logic is duplicated**, like the Kuna helpers: the bridge is a standalone script and must
+  not import the `ghydra` package, so `ghydra/x64dbg.py` and the bridge's x64dbg section carry
+  the same client, the same error taxonomy and the same retry rules.
+
 ## Ghidra API gotchas
 
 Signatures that do not match the obvious guess:
@@ -472,5 +529,6 @@ Verified rough edges — check before trusting anything downstream:
 
 `README.md` (install, MCP client setup), `GHIDRA_HTTP_API.md` (REST reference, API_VERSION 3000),
 `GHYDRA_CLI.md` (CLI reference), `GHYDRA_KUNA.md` (the Kuna integration: opt-in, tools, export
-layout), `CONTRIBUTING.md` (PR/release process),
+layout), `GHYDRA_X64DBG.md` (the x64dbg integration: the contract, the address model, the tools),
+`CONTRIBUTING.md` (PR/release process),
 `TESTING.md` (stale on flags), `CHANGELOG.md` (release history — also the release-notes source).
