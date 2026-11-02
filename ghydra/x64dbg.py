@@ -107,6 +107,10 @@ def read_plugin_config(install: str) -> Dict[str, Any]:
     root = os.path.abspath(os.path.expanduser(str(install or "")))
     candidates = [
         os.path.join(root, PLUGIN_CONFIG_NAME),
+        os.path.join(root, "x64", PLUGIN_CONFIG_NAME),
+        os.path.join(root, "x32", PLUGIN_CONFIG_NAME),
+        os.path.join(root, "release", "x64", PLUGIN_CONFIG_NAME),
+        os.path.join(root, "release", "x32", PLUGIN_CONFIG_NAME),
         os.path.join(root, "x64", "plugins", PLUGIN_CONFIG_NAME),
         os.path.join(root, "x32", "plugins", PLUGIN_CONFIG_NAME),
         os.path.join(root, "release", "x64", "plugins", PLUGIN_CONFIG_NAME),

@@ -416,6 +416,19 @@ class X64dbgConfigTests(unittest.TestCase):
         settings = x64dbg_helper.resolve_config({"path": self.tmp.name})
         self.assertEqual(settings["token"], "")
 
+    def test_the_token_is_found_in_the_release_folder(self):
+        """The layout x64dbg ships: release/x64/x64dbg.exe, and the file beside it."""
+        root = os.path.join(self.tmp.name, "x64dbg")
+        folder = os.path.join(root, "release", "x64")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "mcp_config.json"), "w", encoding="utf-8") as handle:
+            json.dump({"IpAddress": "127.0.0.1", "Port": 9094,
+                       "AuthToken": "plugin-token"}, handle)
+
+        settings = x64dbg_helper.resolve_config({"path": root})
+        self.assertEqual(settings["token"], "plugin-token")
+        self.assertEqual(settings["port"], 9094)
+
 
 class X64dbgBridgeTests(unittest.TestCase):
     """The bridge tools against the fake server."""

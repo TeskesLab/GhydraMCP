@@ -5767,14 +5767,18 @@ def _x64dbg_config() -> dict:
 
 
 def _x64dbg_plugin_config(install: str) -> dict:
-    """The plugin's own settings, from the mcp_config.json next to its DLL.
+    """The plugin's own settings, from the mcp_config.json next to x64dbg.exe.
 
-    The file sits in the x64dbg root or in one of its plugin folders; which
-    one depends on how x64dbg was unpacked.
+    The file sits next to the executable, or in one of the plugin folders;
+    which one depends on how x64dbg was unpacked.
     """
     root = os.path.abspath(os.path.expanduser(str(install or "")))
     candidates = [
         os.path.join(root, X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "x64", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "x32", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "release", "x64", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "release", "x32", X64DBG_PLUGIN_CONFIG_NAME),
         os.path.join(root, "x64", "plugins", X64DBG_PLUGIN_CONFIG_NAME),
         os.path.join(root, "x32", "plugins", X64DBG_PLUGIN_CONFIG_NAME),
         os.path.join(root, "release", "x64", "plugins", X64DBG_PLUGIN_CONFIG_NAME),
