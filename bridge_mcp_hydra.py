@@ -6434,7 +6434,8 @@ def x64dbg_go_to(address: str, port: int | None = None) -> dict:
     """Move the instruction pointer to a Ghidra address.
 
     The address is translated from the static one into the runtime one, the
-    same way x64dbg_breakpoint_at does it.
+    same way x64dbg_breakpoint_at does it. The debuggee has to be paused: a
+    running target has no instruction pointer to move.
 
     Args:
         address: The static address, as Ghidra shows it ("0x140001234")
@@ -6458,7 +6459,13 @@ def x64dbg_go_to(address: str, port: int | None = None) -> dict:
     runtime = static_address - descriptor["image_base"] + descriptor["module_base"]
     try:
         instance = _x64dbg_instance()
-        text = _x64dbg_call_tool(instance, "Disassemble", {"address": hex(runtime)})
+        # "cip" is the x64dbg name for the instruction pointer, in a 64-bit
+        # debuggee and in a 32-bit one alike; the plugin turns it into
+        # "mov cip, <address>".
+        text = _x64dbg_call_tool(
+            instance, "SetRegister",
+            {"register": "cip", "value": hex(runtime)},
+        )
     except _X64dbgFailure as exc:
         return _x64dbg_error(str(exc), code=exc.code)
 

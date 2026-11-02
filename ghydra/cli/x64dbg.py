@@ -349,7 +349,8 @@ def go_to(ctx, address):
     """Move the instruction pointer to a Ghidra address.
 
     The address is translated from the static one into the runtime one, the
-    same way "breakpoint" does it.
+    same way "breakpoint" does it. The debuggee has to be paused: a running
+    target has no instruction pointer to move.
 
     \b
     Examples:
@@ -369,7 +370,11 @@ def go_to(ctx, address):
     runtime = x64dbg_helper.to_runtime(
         static_address, program["image_base"], module["base"])
     try:
-        text = client.call_tool("Disassemble", {"address": hex(runtime)})
+        # "cip" is the x64dbg name for the instruction pointer, in a 64-bit
+        # debuggee and in a 32-bit one alike; the plugin turns it into
+        # "mov cip, <address>".
+        text = client.call_tool(
+            "SetRegister", {"register": "cip", "value": hex(runtime)})
     except x64dbg_helper.X64dbgError as exc:
         _fail(ctx, exc)
         return

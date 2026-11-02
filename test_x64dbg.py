@@ -363,6 +363,24 @@ class X64dbgBridgeTests(unittest.TestCase):
         self.assertEqual(result["result"]["runtime_address"], "0x7ff7a1231234")
         self.assertIn(("SetBreakpoint", {"target": "0x7ff7a1231234"}), self.fake.calls)
 
+    def test_the_address_moves_the_instruction_pointer(self):
+        """"Go to" moves the IP: it is not a read."""
+        program = {
+            "success": True,
+            "result": {"path": "C:\\Windows\\System32\\cmd.exe",
+                       "imageBase": "0x140000000"},
+        }
+        with mock.patch.object(bridge, "safe_get", return_value=program):
+            with mock.patch.object(bridge, "_get_instance_port", return_value=8192):
+                result = bridge.x64dbg_go_to.__wrapped__(address="0x140001234")
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["result"]["runtime_address"], "0x7ff7a1231234")
+        self.assertIn(
+            ("SetRegister", {"register": "cip", "value": "0x7ff7a1231234"}),
+            self.fake.calls,
+        )
+
     def test_the_target_reports_both_bases(self):
         program = {
             "success": True,
