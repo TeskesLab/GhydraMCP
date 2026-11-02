@@ -1,7 +1,8 @@
 # Should the Kuna parameters go straight into MCP — and as RAG?
 
-Status: **analysis with a recommendation** — written 2026-11-02, against GhydraMCP `main`
-(3.0.0). Companion to `UNIFICATION-PLAN.md`.
+Status: **implemented** — written 2026-11-02 against GhydraMCP `main` (3.0.0), companion to
+`UNIFICATION-PLAN.md`. Every item in §5 is now in the code; the "Work items" section records what
+was built and how to verify it.
 
 ## Verdict
 
@@ -217,15 +218,25 @@ Estimate: ~15 lines plus three tests in `test_kuna.py`.
 
 ### 5.2 Expose the export tree as MCP resources
 
-~60 lines in `bridge_mcp_hydra.py` (the resource functions can reuse `_kuna_index_records`,
-`_kuna_extract_c`, `_kuna_extract_asm` as they stand), plus tests for
-`resources/list` and `resources/read`.
+**Done.** The bridge registers five resources: the concrete `kuna://exports` manifest, and the
+templates `kuna://export/{digest}/index.jsonl`, `kuna://export/{digest}/README.md`,
+`kuna://export/{digest}/{function}.c` and `kuna://export/{digest}/{function}.asm`. The templates
+serve any export by digest, and `_kuna_sync_resources()` also registers the index and the report
+of every export on disk as concrete resources, so a client that only reads `resources/list` sees
+them. A function name is percent-decoded, because a name may hold a slash.
 
 ### 5.3 Let `kuna_export_read` accept a directory
 
-~10 lines. Closes §3.2.
+**Done.** `kuna_export_read` takes `job_id` (optional) and `directory` (optional); the directory
+may be a path or the 12-character digest. One of the two is required, and the answer names the
+other. The CLI's `export-read` takes a digest too.
 
 ### 5.4 Align the error taxonomy
+
+**Done.** The bridge carries the same 14 codes as the CLI, and `test_kuna.py` asserts the two
+lists are identical — so adding a code on one side without the other fails the suite. The bridge
+also distinguishes a missing binary, a timeout and a launch failure, which it used to flatten
+into one generic code.
 
 Bring the bridge from 2 codes to the CLI's 13, reusing `ghydra/kuna.py`'s table. ~40 lines, and
 it needs the two duplicated implementations to stay in step — the known duplication cost of this
@@ -233,26 +244,23 @@ project, already accepted for the request logic.
 
 ### 5.5 Fix the documentation drift
 
-- `GHYDRA_KUNA.md:210` and the perf table (`:62`) benchmark **Kuna 1.785**; this machine has
-  **1.988** installed via Scoop. The timings are stale and should be re-measured, or explicitly
-  labelled as measured against a named version.
-- `GHYDRA_KUNA.md:240` says `ghydra kuna status` "shows which of the two decided", but the CLI
-  has only two outputs and prints *"disabled (opt-in via $GHYDRA_KUNA)"* when neither is set —
-  which is false. The bridge has the correct third branch (`"nothing (the integration is off)"`).
-- `GHYDRA_KUNA.md:199` describes the export destination but does not say that the MCP side has no
-  `-o` and cannot read an arbitrary directory.
-- `GHYDRA_KUNA.md:52` says `GHYDRA_KUNA_TIMEOUT` defaults to 900; on the bridge the default
-  actually inherits `GHYDRA_TIMEOUT` (`:63,117`), while the CLI's 900 is fixed and ignores
-  `ghydra config set timeout`.
-- `GHYDRA_KUNA.md:250` quotes the CLI's `"the export has no index yet"`; the bridge's wording
-  differs.
+**Done**, except the benchmark itself, which was not re-measured: the perf table stays labelled
+as measured against Kuna 1.785, and the doc says so.
+
+- The status sample no longer implies that 1.785 is the installed version, and it shows the
+  exports listing.
+- `ghydra kuna status` now says `"nothing (the integration is off)"` when neither the config file
+  nor the env var decided — the third branch the bridge already had.
+- The reference now says that the MCP side has no `-o` and that `directory` is how an arbitrary
+  export is read.
+- The timeout difference between the two sides is now stated: the bridge inherits
+  `GHYDRA_TIMEOUT`, the CLI's 900 is fixed and `ghydra config set timeout` does not change it.
+- The two wordings of "the export has no index yet" are both described.
 
 ### 5.6 Note `max_lines` semantics
 
-`max_lines` is a **formatter cap**, not an API parameter — it is applied to the text after the
-whole function has been fetched (`bridge_mcp_hydra.py:1684-1686`). It saves *context*, not *time*.
-That is the right trade (context is the scarce resource), but the docstring should say so
-explicitly, because a reader will reasonably assume it limits the work Kuna does.
+**Done.** The reference states that `max_lines` caps the answer and not the work: it is applied to
+the text after the function has been fetched, so it saves context but no time.
 
 ---
 
@@ -263,6 +271,19 @@ explicitly, because a reader will reasonably assume it limits the work Kuna does
 | Are Kuna's parameters already in MCP? | Yes — 13 curated tools, 46 parameters. |
 | Should the raw flag surface go in too? | No. It doubles the schema, couples the agent to Kuna's ABI, and exposes knobs with no per-call meaning. |
 | Is RAG the right pattern? | The *shape*, yes. Embeddings, no. |
-| What to build instead | MCP resources over the export directory, addressed by the existing `sha256(path|mtime)` digest. |
-| What to fix first | The missing export cache check — 19 s → instant, ~15 lines. |
+| What to build instead | MCP resources over the export directory, addressed by the existing `sha256(path|mtime)` digest. **Built.** |
+| What to fix first | The missing export cache check. **Built**: measured 691 ms to 26 ms on a 332 KB binary. |
 | What not to do | Embeddings, a sidecar service, a raw flag mirror, or a second copy of the opt-in logic. |
+
+### What is in the code now
+
+| Change | Where |
+| --- | --- |
+| Export reuse, and the `reused` flag in the report | `bridge_mcp_hydra.py` (`kuna_export_start`), `ghydra/kuna.py` (`export`) |
+| The digest as an address | `kuna_export_read(directory=...)`, `ghydra kuna export-read <digest>`, `kuna_status` |
+| The resources | `bridge_mcp_hydra.py`, the "Kuna resources" section |
+| The 14 error codes | `bridge_mcp_hydra.py` (`KUNA_ERROR_CODES`), `ghydra/kuna.py` (`KunaError`) |
+| The sidecar and the listing | `.ghydra.json` next to an export; `kuna_status` and `ghydra kuna status` |
+| The tests | `test_kuna.py` - `KunaExportAddressingTests` and `KunaErrorTaxonomyTests` |
+
+`python run_tests.py --kuna` covers all of it and needs neither Ghidra nor the Kuna binary.

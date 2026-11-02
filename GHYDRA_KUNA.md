@@ -59,10 +59,17 @@ ghydra kuna status
 
 ```
 Kuna integration: enabled (opt-in via $GHYDRA_KUNA)
-Binary: /usr/local/bin/kuna  [kuna 1.785]
+Binary: /usr/local/bin/kuna  [kuna 1.988]
 Config: /home/you/.ghydra/config.json
 Work:   /home/you/.ghydra/kuna
+
+Exports on disk (1):
+  9f2c1a4b7e03  818 functions  /home/you/challenge.exe
+    kuna://export/9f2c1a4b7e03/index.jsonl
 ```
+
+The version is whatever is installed - the numbers above are illustrative. The exports listing is
+read from disk, so it is there after a restart and it is the same list the MCP resources expose.
 
 The binary is resolved in this order: the configured path, `GHYDRA_KUNA_PATH`, `kuna` on `PATH`,
 and finally the common Scoop install locations. If none of them has a `kuna` binary, the tools
@@ -87,8 +94,13 @@ ghydra kuna export ./challenge.exe -o ./challenge.kuna
 ghydra kuna export-read ./challenge.kuna main
 ```
 
+Exporting the same binary again **reuses** the export that is already on disk instead of
+analysing it again. The export is named after a digest of the path and the modification time, so
+`ghydra kuna export-read 9f2c1a4b7e03 main` works without knowing where the directory is.
+
 This is the main path for anything but a small binary. The MCP bridge exposes the same flow as
-`kuna_export_start`, `kuna_export_status` and `kuna_export_read`.
+`kuna_export_start`, `kuna_export_status` and `kuna_export_read`, and the exports themselves as
+the `kuna://export/` resources.
 
 ## The MCP tools
 
@@ -97,7 +109,7 @@ parameter, and none of them needs a Ghidra instance.
 
 | Tool | What it does | Parameters |
 | --- | --- | --- |
-| `kuna_status` | Whether the integration is on, which binary it resolved, which opt-in decided | — |
+| `kuna_status` | Whether the integration is on, which binary it resolved, which opt-in decided, the export jobs and the exports on disk | — |
 | `kuna_summary` | Function count, entry point, reachability, code size | `binary_path`, `mode` |
 | `kuna_functions` | The functions Kuna recovered | `binary_path`, `name_filter`, `offset`, `limit` |
 | `kuna_decompile` | One function, as C | `binary_path`, `function`, `addr`, `mode`, `max_lines` |
@@ -107,9 +119,9 @@ parameter, and none of them needs a Ghidra instance.
 | `kuna_crypto` | Crypto constants and the functions that use them | `binary_path`, `algorithm`, `section` |
 | `kuna_xrefs` | Cross-references of a symbol or address | `binary_path`, `target`, `direction`, `kind` |
 | `kuna_unpack` | Unpack a UPX image | `binary_path`, `output` |
-| `kuna_export_start` | Export a binary in the background | `binary_path`, `functions`, `jobs`, `job_id` |
+| `kuna_export_start` | Export a binary in the background, or reuse the export that is already there | `binary_path`, `functions`, `jobs`, `job_id` |
 | `kuna_export_status` | Progress of an export job | `job_id` |
-| `kuna_export_read` | Read a function out of an export | `job_id`, `function`, `artifact`, `max_bytes` |
+| `kuna_export_read` | Read a function out of an export | `job_id`, `function`, `artifact`, `max_bytes`, `directory` |
 
 Notes on the arguments:
 
@@ -120,9 +132,42 @@ Notes on the arguments:
   (the export report). Without a `function`, the tool lists what the export holds.
 - `mode` is one of Kuna's own presets: `auto`, `reliable`, `aggressive`, `fast`.
 - `encoding` is `ascii`, `utf16` or `all`.
+- `job_id` addresses an export by the job that made it. `directory` addresses it by its path or by
+  the 12-character digest it is named after, and **outlives the bridge process**: a job id does
+  not, so an export written by the CLI is reachable only through `directory`. Give one of the two.
 
 `kuna_strings` **requires** a pattern. An unfiltered scan of a large binary returns hundreds of
 kilobytes of text, which is noise rather than an answer.
+
+## The MCP resources
+
+The export is the durable artifact: the analysis is expensive and the files on disk are the cheap
+way to read it. The job registry is not durable - it lives in the bridge process - so the export
+is also exposed as **MCP resources**, addressed by the digest it is named after.
+
+| Resource | What it holds |
+| --- | --- |
+| `kuna://exports` | Every export on this machine, as a JSON manifest: digest, binary, function count |
+| `kuna://export/{digest}/index.jsonl` | The function index of one export |
+| `kuna://export/{digest}/{function}.c` | The recovered C of one function |
+| `kuna://export/{digest}/{function}.asm` | The disassembly of one function |
+| `kuna://export/{digest}/README.md` | The report Kuna wrote next to the export |
+
+The retrieval loop is the RAG loop with **exact** addressing, not a similarity search:
+
+1. read `kuna://exports` - which binaries have been exported
+2. read `kuna://export/<digest>/index.jsonl` - the function list, one small read
+3. read `kuna://export/<digest>/<function>.c` - that one function
+
+Nothing is pulled into the agent's context that the agent did not ask for by name, and every step
+is a file read rather than a fresh analysis. The decompiled program has an exact index, so an
+embedding search would retrieve the *wrong* function more often than the right one.
+
+A function name goes into the URI percent-encoded, because a name may hold a slash and the URI
+may not. `sub_140027b90` needs no encoding; a name like `ns/fn` becomes `ns%2Ffn`.
+
+The resources are served even when the export was made by the CLI, or by an earlier version of
+the bridge: the digest is the only identifier that matters.
 
 ## The CLI commands
 
@@ -140,6 +185,9 @@ ghydra kuna unpack       <binary> [--output PATH]
 ghydra kuna export       <binary> [--output DIR] [--functions NAMES] [--jobs N|auto]
 ghydra kuna export-read  <directory> [function] [--artifact c|asm|index|readme] [--max-bytes N]
 ```
+
+`<directory>` is a directory or the 12-character digest of one. `ghydra kuna status` lists the
+exports on this machine with their digests.
 
 `--json` works as everywhere else, and has to come **before** the subcommand:
 
@@ -185,6 +233,7 @@ ghydra kuna export-read ./challenge.kuna main --artifact asm
 | `<stem>.asm` | The disassembly and the data bytes |
 | `README.md` | Image details, progress and success/failure counts |
 | `.streaming` | Live status, present only while the export runs |
+| `.ghydra.json` | Which binary the export came from, written by the CLI and the bridge |
 
 An index record looks like this:
 
@@ -196,18 +245,47 @@ An index record looks like this:
 also the proof that the block is complete. Only newline-terminated records are read: an
 unfinished last record is deferred until the next read.
 
-Without `-o`, the export goes to `~/.ghydra/kuna/<hash of path and mtime>/`, so re-analysing the
-same file reuses the same directory and a rebuilt file gets a fresh one.
+## The digest, and why the export is reused
+
+Without `-o`, the export goes to `~/.ghydra/kuna/<digest>/`, where the digest is a hash of the
+path and the modification time: twelve hex characters. A rebuilt binary gets a fresh digest, and
+the same file keeps its own.
+
+That digest is the identity of the export. It is what `kuna_export_read(directory=...)` accepts,
+what the `kuna://export/<digest>/` resources are addressed by, and what `ghydra kuna status`
+lists. It outlives the bridge process, which a job id does not.
+
+The digest also makes the export **reusable**. `kuna_export_start` and `ghydra kuna export` look
+for a complete export under the digest first, and only run the analysis when there is none, or
+when the one on disk does not hold the functions that were asked for. The report says which
+happened with `"reused": true` or `false`.
+
+This is the single most valuable thing in the integration. A 22 MB binary costs about twenty
+seconds to analyse; reading an export that already exists costs milliseconds.
+
+An export is complete when it has an index and is not still being streamed: a streamed export
+appends a record only after that function's C block is done, so an index without the `.streaming`
+marker is a finished one.
+
+The sidecar `.ghydra.json` records which binary the export came from, because the digest is a
+hash and cannot be reversed. An export made before the sidecar existed still names its binary in
+the `README.md` that Kuna writes, and that is where the listing falls back to.
+
+## The MCP side
 
 The MCP side uses the same layout. `kuna_export_start` returns a job id, `kuna_export_status`
-reports the progress, and `kuna_export_read` serves the files. The job registry lives in the
-bridge process: a job started by one bridge is invisible to another, and it does not survive a
-restart. The CLI has no registry at all — `ghydra kuna export` runs synchronously and
-`export-read` works off the directory.
+reports the progress, and `kuna_export_read` serves the files - by job id, or by the directory or
+digest. The job registry lives in the bridge process: a job started by one bridge is invisible to
+another, and it does not survive a restart. The CLI has no registry at all - `ghydra kuna export`
+runs synchronously and `export-read` works off the directory or the digest.
+
+Because the digest survives, the two sides can read each other's exports. An export made by the
+CLI is readable by the bridge, and the other way round.
 
 ## Performance
 
-Measured on this machine, with Kuna 1.785:
+Measured with Kuna 1.785. The numbers are that version's; a newer Kuna may differ, so re-measure
+before quoting them:
 
 | Binary | Size | `summary` | `crypto` | `decompile` |
 | --- | --- | --- | --- | --- |
@@ -217,6 +295,8 @@ Measured on this machine, with Kuna 1.785:
 The cost is the analysis of the whole image, and it is paid on **every** invocation — Kuna keeps
 no state between calls. A 22 MB binary costs about twenty seconds per question asked one-shot.
 Exporting it once and reading the files afterwards turns every later question into a file read.
+
+Re-reading an export that already exists costs about 26 ms, whatever the size of the binary.
 
 ## Limits and gotchas
 
@@ -230,28 +310,57 @@ Exporting it once and reading the files afterwards turns every later question in
   Ghidra instance either.
 - **Kuna's own options are the ones that matter.** `--mode reliable` is slower and more careful
   than `auto`; `--mode fast` is the opposite. The tools pass `mode` straight through.
+- **`max_lines` caps the answer, not the work.** It is applied to the text after the function has
+  been fetched, so it saves context but no time. It is not passed to Kuna.
 - **The bridge must run on the machine that has the binary.** The path is a local filesystem path,
   not something to be fetched from a Ghidra instance.
+- **The timeout differs between the two sides.** On the bridge `GHYDRA_KUNA_TIMEOUT` falls back
+  to `GHYDRA_TIMEOUT`; on the CLI it is a fixed 900 seconds and `ghydra config set timeout` does
+  not change it.
 
 ## Troubleshooting
 
 **"the Kuna integration is disabled"** — the opt-in did not reach this process. Set
 `GHYDRA_KUNA=1` in the environment the bridge runs in, or add the `kuna` section to
-`~/.ghydra/config.json`. `ghydra kuna status` shows which of the two decided.
+`~/.ghydra/config.json`. `ghydra kuna status` shows which of the two decided, and says
+"nothing (the integration is off)" when neither did.
 
 **"the kuna binary was not found"** — the path is wrong, or Kuna is not installed. Check the
 resolved path in `ghydra kuna status`, and set `"kuna": {"path": "..."}` in the config if it
 lives somewhere unusual.
 
 **"unknown job id"** — the job belongs to another bridge process, or the bridge restarted. The
-registry is in memory. Export again, or use the directory directly with
-`ghydra kuna export-read`.
+registry is in memory. Address the export by its digest or its directory instead:
+`kuna_export_read(directory="9f2c1a4b7e03")`, or `ghydra kuna export-read 9f2c1a4b7e03`.
 
 **"the export has no index yet"** — the export is still running, or it failed. `kuna_export_status`
-reports the phase and the live counters.
+reports the phase and the live counters, and the exports listing in `kuna_status` marks a
+streaming export.
 
 **A tool returns nothing for a function** — the name may be a generated one (`sub_<addr>`) rather
 than a symbol. `kuna_functions` lists what Kuna actually recovered.
+
+## Failures carry a code
+
+Every failure has a machine-readable code, the same on the bridge and on the CLI:
+
+| Code | What it means |
+| --- | --- |
+| `KUNA_DISABLED` | The opt-in did not reach this process |
+| `KUNA_MISSING` | The kuna binary is not installed |
+| `KUNA_TIMEOUT` | Kuna ran past its timeout |
+| `KUNA_LAUNCH` | Kuna could not be started at all |
+| `KUNA_FAILED` | Kuna ran and failed |
+| `KUNA_NO_JSON` | Kuna printed something that is not JSON |
+| `KUNA_TOO_LARGE` | The answer is above the 8 MiB cap |
+| `KUNA_NO_FILE` | A file the call named does not exist |
+| `KUNA_IO` | Reading or writing a file failed |
+| `KUNA_NO_DIR` | The export directory does not exist |
+| `KUNA_NO_INDEX` | The export has no index yet |
+| `KUNA_BAD_ARTIFACT` | The artifact name is not one of the four |
+| `KUNA_NO_FUNCTION` | The function is not in the export index |
+
+An agent can branch on the reason instead of reading prose.
 
 ## Tests
 

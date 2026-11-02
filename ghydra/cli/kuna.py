@@ -10,6 +10,7 @@ host: enable it with the GHYDRA_KUNA=1 environment variable, or with
 when both are set.
 """
 
+import os
 import subprocess
 import sys
 
@@ -101,7 +102,8 @@ def status(ctx):
     source = (
         "the config file"
         if config_section.get("enabled") is not None
-        else f"${kuna_helper.ENV_ENABLED}"
+        else (f"${kuna_helper.ENV_ENABLED}" if kuna_helper.ENV_ENABLED in os.environ
+              else "nothing (the integration is off)")
     )
 
     _emit(ctx, "status", {
@@ -111,6 +113,7 @@ def status(ctx):
         "version": version,
         "config_file": kuna_helper.CONFIG_FILE,
         "work_dir": kuna_helper.WORK_DIR,
+        "exports": kuna_helper.list_exports(),
     })
 
 
@@ -436,9 +439,14 @@ def export(ctx, binary, output, functions, jobs):
 def export_read(ctx, directory, function, artifact, max_bytes):
     """Read a function out of a Kuna export.
 
+    The export is named after a 12-character digest, and that digest is
+    enough to read it: `ghydra kuna status` lists the exports on this
+    machine with their digests.
+
     \b
     Examples:
         ghydra kuna export-read ./challenge.kuna main
+        ghydra kuna export-read 9f2c1a4b7e03 main
         ghydra kuna export-read ./challenge.kuna main --artifact asm
         ghydra kuna export-read ./challenge.kuna --artifact index
     """

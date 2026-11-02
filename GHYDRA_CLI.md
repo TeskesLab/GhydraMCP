@@ -298,8 +298,15 @@ ghydra kuna export-read ./challenge.kuna main --artifact asm
 ghydra kuna export-read ./challenge.kuna --artifact index
 ```
 
-Without `-o`, the export goes to `~/.ghydra/kuna/<hash of path and mtime>/`, so re-analysing the
-same file reuses the same directory.
+Without `-o`, the export goes to `~/.ghydra/kuna/<digest of path and mtime>/`, so re-analysing the
+same file reuses the same directory — and, in fact, reuses the export that is already there
+instead of analysing the binary again. The digest is 12 hex characters and it is enough to read
+the export:
+
+```bash
+ghydra kuna status                    # lists the exports on this machine with their digests
+ghydra kuna export-read 9f2c1a4b7e03 main
+```
 
 ## Remaining Command Groups to Implement
 

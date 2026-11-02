@@ -28,10 +28,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from typing import Dict, List, Optional, Union, Any
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 import requests
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.resources import FunctionResource
+from pydantic import AnyUrl
 
 # ================= Core Infrastructure =================
 
@@ -120,6 +122,25 @@ KUNA_DEFAULT_TIMEOUT = int(os.environ.get("GHYDRA_KUNA_TIMEOUT", str(DEFAULT_TIM
 # above a full function listing and well below the payload that stalls an
 # MCP client.
 KUNA_MAX_OUTPUT = 8 * 1024 * 1024
+
+# The machine-readable reasons a Kuna call can fail. The CLI carries the same
+# list, so an agent sees one taxonomy whichever side it drives.
+KUNA_ERROR_CODES = (
+    "KUNA_ERROR",         # the generic fallback
+    "KUNA_DISABLED",      # the opt-in did not reach this process
+    "KUNA_MISSING",       # the kuna binary is not installed
+    "KUNA_TIMEOUT",       # kuna ran past its timeout
+    "KUNA_LAUNCH",        # kuna could not be started at all
+    "KUNA_FAILED",        # kuna ran and failed
+    "KUNA_NO_JSON",       # kuna printed something that is not JSON
+    "KUNA_TOO_LARGE",     # the answer is above the output cap
+    "KUNA_NO_FILE",       # a file the call named does not exist
+    "KUNA_IO",            # reading or writing a file failed
+    "KUNA_NO_DIR",        # the export directory does not exist
+    "KUNA_NO_INDEX",      # the export has no index yet
+    "KUNA_BAD_ARTIFACT",  # the artifact name is not one of the four
+    "KUNA_NO_FUNCTION",   # the function is not in the export index
+)
 
 # Export jobs started by kuna_export_start, keyed by job id. The registry
 # lives in the bridge process: a job started by one bridge is invisible to
@@ -220,10 +241,10 @@ def _kuna_target(binary_path: str) -> Union[str, dict]:
     or names no file.
     """
     if not binary_path:
-        return _kuna_error("binary_path is required")
+        return _kuna_error("binary_path is required", code="KUNA_NO_FILE")
     path = os.path.abspath(os.path.expanduser(binary_path))
     if not os.path.isfile(path):
-        return _kuna_error(f"no such file: {binary_path}")
+        return _kuna_error(f"no such file: {binary_path}", code="KUNA_NO_FILE")
     return path
 
 
@@ -231,11 +252,13 @@ def _kuna_run(args: List[str], timeout: Optional[int] = None) -> dict:
     """Run the kuna binary with args.
 
     Returns {"code": int, "stdout": str, "stderr": str}. A missing binary is
-    reported as 127 and a timeout as 124, the conventional shell codes.
+    reported as 127 and a timeout as 124, the conventional shell codes, and
+    "error_code" carries the matching machine-readable reason.
     """
     executable = _kuna_binary()
     if not executable:
-        return {"code": 127, "stdout": "", "stderr": "the kuna binary was not found"}
+        return {"code": 127, "stdout": "", "stderr": "the kuna binary was not found",
+                "error_code": "KUNA_MISSING"}
     limit = timeout if timeout is not None else KUNA_DEFAULT_TIMEOUT
     try:
         completed = subprocess.run(
@@ -250,9 +273,11 @@ def _kuna_run(args: List[str], timeout: Optional[int] = None) -> dict:
             timeout=limit,
         )
     except subprocess.TimeoutExpired:
-        return {"code": 124, "stdout": "", "stderr": f"kuna timed out after {limit}s"}
+        return {"code": 124, "stdout": "", "stderr": f"kuna timed out after {limit}s",
+                "error_code": "KUNA_TIMEOUT"}
     except OSError as exc:
-        return {"code": 126, "stdout": "", "stderr": f"could not launch kuna: {exc}"}
+        return {"code": 126, "stdout": "", "stderr": f"could not launch kuna: {exc}",
+                "error_code": "KUNA_LAUNCH"}
     return {
         "code": completed.returncode,
         "stdout": completed.stdout or "",
@@ -264,7 +289,8 @@ def _kuna_json(args: List[str], timeout: Optional[int] = None) -> dict:
     """Run kuna and parse its JSON output.
 
     Returns the bridge envelope: {"success": True, "result": <parsed>} or
-    {"success": False, "error": {...}}.
+    {"success": False, "error": {...}}. The error carries one of the
+    KUNA_ERROR_CODES, so an agent can branch on the reason.
     """
     command = " ".join(args[:1])
     outcome = _kuna_run(args, timeout=timeout)
@@ -280,19 +306,23 @@ def _kuna_json(args: List[str], timeout: Optional[int] = None) -> dict:
         detail = outcome["stderr"].strip() or stdout or "no output"
         if isinstance(parsed, dict) and parsed.get("error"):
             detail = str(parsed["error"])
-        return _kuna_error(f"kuna {command} failed (exit {outcome['code']}): {detail}")
+        return _kuna_error(
+            f"kuna {command} failed (exit {outcome['code']}): {detail}",
+            code=outcome.get("error_code", "KUNA_FAILED"),
+        )
 
     if parsed is None:
-        return _kuna_error(f"kuna {command} did not return JSON")
+        return _kuna_error(f"kuna {command} did not return JSON", code="KUNA_NO_JSON")
 
     if len(stdout) > KUNA_MAX_OUTPUT:
         return _kuna_error(
             f"kuna {command} returned {len(stdout)} bytes of JSON, above the "
-            f"{KUNA_MAX_OUTPUT} byte cap; narrow the request"
+            f"{KUNA_MAX_OUTPUT} byte cap; narrow the request",
+            code="KUNA_TOO_LARGE",
         )
 
     if isinstance(parsed, dict) and parsed.get("error"):
-        return _kuna_error(f"kuna {command}: {parsed['error']}")
+        return _kuna_error(f"kuna {command}: {parsed['error']}", code="KUNA_FAILED")
 
     return {"success": True, "result": parsed}
 
@@ -322,7 +352,11 @@ def _kuna_job_view(job: dict) -> dict:
         "finished_at": job.get("finished_at"),
         "returncode": job.get("returncode"),
         "error": job.get("error"),
+        "reused": bool(job.get("reused")),
     }
+    if job.get("functions") is not None:
+        view["functions"] = job["functions"]
+        view["failed"] = job.get("failed", 0)
     streaming = os.path.join(job["dir"], ".streaming")
     if os.path.isfile(streaming):
         try:
@@ -372,6 +406,23 @@ def _kuna_export_file(work_dir: str, suffix: str) -> Optional[str]:
     for entry in entries:
         if entry.endswith(suffix) and os.path.isfile(os.path.join(work_dir, entry)):
             return os.path.join(work_dir, entry)
+    return None
+
+
+def _kuna_find_record(records: List[dict], function: str) -> Optional[dict]:
+    """The index record of a function, by name.
+
+    The exact name wins; a case-insensitive match is the fallback, because a
+    decompiler's names differ in case between runs more often than one would
+    like.
+    """
+    for candidate in records:
+        if candidate.get("name") == function:
+            return candidate
+    lowered = str(function).lower()
+    for candidate in records:
+        if str(candidate.get("name", "")).lower() == lowered:
+            return candidate
     return None
 
 
@@ -428,6 +479,161 @@ def _kuna_extract_asm(work_dir: str, name: str, max_bytes: int) -> Optional[str]
     if max_bytes and len(text) > max_bytes:
         text = text[:max_bytes] + f"\n... truncated at {max_bytes} bytes"
     return text
+
+
+# The sidecar the bridge and the CLI write next to an export. The digest is a
+# hash, not a reversible pointer, so without it an export cannot say which
+# binary it came from - and the listing of exports needs that.
+KUNA_EXPORT_META = ".ghydra.json"
+
+# An export directory is named after a 12 hex character digest.
+KUNA_DIGEST_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _kuna_export_meta_path(directory: str) -> str:
+    """Where the sidecar of an export lives."""
+    return os.path.join(directory, KUNA_EXPORT_META)
+
+
+def _kuna_write_export_meta(directory: str, binary: str, **extra: Any) -> None:
+    """Record which binary an export came from.
+
+    Best effort: the export is already on disk and perfectly usable without
+    the sidecar, so a failure here must not fail the export.
+    """
+    payload: Dict[str, Any] = {
+        "binary": os.path.abspath(binary),
+        "created": time.time(),
+    }
+    payload.update(extra)
+    try:
+        with open(_kuna_export_meta_path(directory), "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+    except OSError:
+        pass
+
+
+def _kuna_read_export_meta(directory: str) -> Dict[str, Any]:
+    """The sidecar of an export, or an empty dict when there is none."""
+    try:
+        with open(_kuna_export_meta_path(directory), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _kuna_readme_binary(directory: str) -> Optional[str]:
+    """The binary an export came from, read from Kuna's own report.
+
+    The sidecar is the primary source, but an export made before the
+    sidecar existed still names its binary in the report Kuna writes.
+    """
+    path = os.path.join(directory, "README.md")
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                match = re.match(r"\|\s*Path\s*\|\s*`(.+?)`\s*\|", line)
+                if match:
+                    raw = match.group(1).strip()
+                    # Kuna writes the Win32 extended-length prefix.
+                    if raw.startswith("\\\\?\\"):
+                        raw = raw[4:]
+                    return raw
+    except OSError:
+        return None
+    return None
+
+
+def _kuna_export_binary(directory: str) -> Optional[str]:
+    """Which binary an export came from, by sidecar or by report."""
+    meta_binary = _kuna_read_export_meta(directory).get("binary")
+    if meta_binary:
+        return meta_binary
+    return _kuna_readme_binary(directory)
+
+
+def _kuna_export_state(directory: str) -> Optional[dict]:
+    """The state of an export directory, or None when it holds no export.
+
+    An export is complete when it has an index and is not still streaming: a
+    streamed export appends a record only after that function's C block is
+    done, so an index without the streaming marker is a finished one.
+    """
+    if not os.path.isdir(directory):
+        return None
+    if os.path.isfile(os.path.join(directory, ".streaming")):
+        return None
+    records = _kuna_index_records(directory)
+    if not records:
+        return None
+    meta = _kuna_read_export_meta(directory)
+    return {
+        "dir": directory,
+        "functions": len(records),
+        "failed": len([record for record in records if record.get("error")]),
+        "binary": meta.get("binary") or _kuna_readme_binary(directory),
+        "created": meta.get("created"),
+        "names": {record.get("name") for record in records},
+    }
+
+
+def _kuna_export_covers(state: dict, functions: Optional[str]) -> bool:
+    """Does this export already hold everything the caller asked for?
+
+    A full export covers every request. A subset export covers a request for
+    one of its own functions, and nothing else.
+    """
+    if not functions:
+        return True
+    wanted = {name.strip() for name in functions.split(",") if name.strip()}
+    if not wanted:
+        return True
+    return wanted.issubset(state.get("names") or set())
+
+
+def _kuna_list_exports() -> List[dict]:
+    """Every export on this machine, newest first.
+
+    The listing is read from disk, so it survives a restart and is the same
+    list the MCP resources expose.
+    """
+    exports: List[dict] = []
+    try:
+        entries = sorted(os.listdir(KUNA_WORK_DIR))
+    except OSError:
+        return []
+    for entry in entries:
+        directory = os.path.join(KUNA_WORK_DIR, entry)
+        if not os.path.isdir(directory):
+            continue
+        records = _kuna_index_records(directory)
+        meta = _kuna_read_export_meta(directory)
+        exports.append({
+            "digest": entry,
+            "dir": directory,
+            "binary": meta.get("binary") or _kuna_readme_binary(directory),
+            "functions": len(records),
+            "failed": len([record for record in records if record.get("error")]),
+            "created": meta.get("created"),
+            "streaming": os.path.isfile(os.path.join(directory, ".streaming")),
+        })
+    exports.sort(key=lambda item: item.get("created") or 0, reverse=True)
+    return exports
+
+
+def _kuna_resolve_export_dir(reference: str) -> str:
+    """Turn an export reference into a directory.
+
+    A bare digest - the 12 hex characters an export is named after - resolves
+    inside the work directory; anything else is a path.
+    """
+    candidate = str(reference or "").strip()
+    if not candidate:
+        raise ValueError("an export directory or digest is required")
+    if KUNA_DIGEST_RE.match(candidate):
+        return os.path.join(KUNA_WORK_DIR, candidate)
+    return os.path.abspath(os.path.expanduser(candidate))
 
 
 instructions = """
@@ -702,11 +908,20 @@ def safe_delete(port: int, endpoint: str) -> dict:
 # Format API responses as plain text for efficient LLM consumption
 
 def format_error(response: dict) -> str:
-    """Format an error response as plain text"""
+    """Format an error response as plain text
+
+    A machine-readable code, when the error carries one, is kept in the text:
+    the Kuna failures have a code an agent can branch on, and dropping it
+    here would leave only the prose.
+    """
     if isinstance(response, dict) and "error" in response:
         err = response["error"]
         if isinstance(err, dict):
-            return f"Error: {err.get('message', 'Unknown error')}"
+            message = err.get("message", "Unknown error")
+            code = err.get("code")
+            if code:
+                return f"Error [{code}]: {message}"
+            return f"Error: {message}"
         return f"Error: {err}"
     return "Error: Unknown error"
 
@@ -1585,9 +1800,22 @@ def format_kuna_status(response: dict, **kwargs) -> str:
     if jobs:
         lines.append(f"Export jobs ({len(jobs)}):")
         for job in jobs:
-            lines.append(f"  {job.get('id')}  {job.get('status')}  {job.get('binary')}")
+            reused = "  (reused)" if job.get("reused") else ""
+            lines.append(f"  {job.get('id')}  {job.get('status')}  {job.get('binary')}{reused}")
     else:
         lines.append("Export jobs: none")
+
+    exports = result.get("exports") or []
+    if exports:
+        lines.append("")
+        lines.append(f"Exports on disk ({len(exports)}):")
+        for export in exports:
+            name = export.get("binary") or "unknown binary"
+            streaming = "  (streaming)" if export.get("streaming") else ""
+            lines.append(
+                f"  {export.get('digest')}  {export.get('functions', 0)} functions  {name}{streaming}"
+            )
+            lines.append(f"    kuna://export/{export.get('digest')}/index.jsonl")
 
     return "\n".join(lines)
 
@@ -1824,6 +2052,19 @@ def format_kuna_export_start(response: dict, **kwargs) -> str:
 
     result = response.get("result", {})
     job_id = result.get("id", "?")
+    if result.get("reused"):
+        return "\n".join([
+            f"Export reused (job {job_id})",
+            f"  Binary: {result.get('binary')}",
+            f"  Dir:    {result.get('dir')}",
+            f"  Status: {result.get('status')}",
+            f"  Functions: {result.get('functions', 0)} ({result.get('failed', 0)} failed)",
+            "",
+            "The export was already there, so the binary was not analysed again.",
+            f"Read it with kuna_export_read(job_id='{job_id}', function='<name>'),",
+            "or as the resources kuna://export/{digest}/index.jsonl and",
+            "kuna://export/{digest}/{function}.c.",
+        ])
     return "\n".join([
         f"Export job {job_id} started",
         f"  Binary: {result.get('binary')}",
@@ -4484,9 +4725,14 @@ def kuna_status() -> dict:
     "kuna": {"enabled": true} in ~/.ghydra/config.json. The config file wins
     when both are set.
 
+    The report carries two lists: the export jobs this bridge process knows
+    about, and the exports on disk. The second one outlives the bridge, and
+    is what the kuna://export/ resources are addressed by.
+
     Returns:
         dict: 'enabled', the resolved binary path and version, where the
-              opt-in came from, and the export jobs known to this bridge
+              opt-in came from, the export jobs known to this bridge and the
+              exports on disk
     """
     config = _kuna_config()
     if config.get("enabled") is not None:
@@ -4516,6 +4762,7 @@ def kuna_status() -> dict:
             "config_file": KUNA_CONFIG_FILE,
             "work_dir": KUNA_WORK_DIR,
             "jobs": jobs,
+            "exports": _kuna_list_exports(),
         },
     }
 
@@ -4846,6 +5093,17 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
     then read from the files on disk instead of paying the analysis cost
     again on each call.
 
+    A complete export that already covers the request is reused instead of
+    re-analysed, and the job record says so with "reused": true. The export
+    directory is named after a digest of the path and the mtime, so the files
+    on disk belong to this binary.
+
+    The export can also be read as MCP resources, addressed by that digest:
+    kuna://exports lists them, and kuna://export/{digest}/index.jsonl,
+    kuna://export/{digest}/{function}.c and kuna://export/{digest}/{function}.asm
+    serve the files themselves. Those URIs survive a restart of this bridge,
+    which a job id does not.
+
     Args:
         binary_path: Path to the executable to export
         functions: Optional comma-separated function names to export
@@ -4879,7 +5137,39 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
     try:
         os.makedirs(work_dir, exist_ok=True)
     except OSError as exc:
-        return _kuna_error(f"could not create the export directory {work_dir}: {exc}")
+        return _kuna_error(
+            f"could not create the export directory {work_dir}: {exc}", code="KUNA_IO"
+        )
+
+    # Reuse a complete export instead of paying the analysis again. Kuna loads
+    # and analyses the whole image on every invocation, so a second export of
+    # the same binary is the most expensive no-op there is. The digest covers
+    # the path and the mtime, so the files on disk belong to this binary.
+    state = _kuna_export_state(work_dir)
+    if state and _kuna_export_covers(state, functions):
+        if not _kuna_read_export_meta(work_dir):
+            _kuna_write_export_meta(work_dir, target)
+        _kuna_sync_resources()
+        identifier = job_id or ("kuna-" + hashlib.sha256(
+            f"{target}|{time.time()}".encode("utf-8")).hexdigest()[:8])
+        now = time.time()
+        job = {
+            "id": identifier,
+            "binary": target,
+            "dir": work_dir,
+            "status": "done",
+            "started_at": now,
+            "finished_at": now,
+            "returncode": 0,
+            "error": None,
+            "pid": None,
+            "reused": True,
+            "functions": state["functions"],
+            "failed": state["failed"],
+        }
+        with _kuna_jobs_lock:
+            _kuna_jobs[identifier] = job
+        return {"success": True, "result": _kuna_job_view(job)}
 
     args = ["decompile-project", target, "-o", work_dir, "--stream", "--jobs", str(jobs)]
     if functions:
@@ -4894,7 +5184,7 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
         log_handle = open(log_path, "w", encoding="utf-8")
         err_handle = open(err_path, "w", encoding="utf-8")
     except OSError as exc:
-        return _kuna_error(f"could not open the export logs: {exc}")
+        return _kuna_error(f"could not open the export logs: {exc}", code="KUNA_IO")
 
     try:
         process = subprocess.Popen(
@@ -4906,7 +5196,7 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
     except OSError as exc:
         log_handle.close()
         err_handle.close()
-        return _kuna_error(f"could not launch kuna: {exc}")
+        return _kuna_error(f"could not launch kuna: {exc}", code="KUNA_LAUNCH")
 
     job = {
         "id": identifier,
@@ -4918,6 +5208,7 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
         "returncode": None,
         "error": None,
         "pid": process.pid,
+        "reused": False,
     }
     with _kuna_jobs_lock:
         _kuna_jobs[identifier] = job
@@ -4933,6 +5224,9 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
                     detail = handle.read().strip()[-2000:] or None
             except OSError:
                 detail = None
+        if returncode == 0:
+            _kuna_write_export_meta(work_dir, target, functions=functions)
+            _kuna_sync_resources()
         with _kuna_jobs_lock:
             job["status"] = "failed" if returncode != 0 else "done"
             job["returncode"] = returncode
@@ -4971,9 +5265,16 @@ def kuna_export_status(job_id: str) -> dict:
 
 @mcp.tool()
 @text_output
-def kuna_export_read(job_id: str, function: str | None = None,
-                     artifact: str = "c", max_bytes: int = 40000) -> dict:
+def kuna_export_read(job_id: str | None = None, function: str | None = None,
+                     artifact: str = "c", max_bytes: int = 40000,
+                     directory: str | None = None) -> dict:
     """Read a function out of a kuna export.
+
+    The export is addressed either by the job that made it, or by its
+    directory. The directory may be a path or the 12-character digest the
+    export is named after, which is what the kuna://export/ resources use.
+    A digest outlives the bridge process that made the export, so an export
+    written by the CLI is readable here too.
 
     Args:
         job_id: The id returned by kuna_export_start
@@ -4982,6 +5283,8 @@ def kuna_export_read(job_id: str, function: str | None = None,
         artifact: "c" (recovered C), "asm" (disassembly), "index" (the
                   function index) or "readme" (the export report)
         max_bytes: Maximum bytes of text to return
+        directory: The export directory, or its digest. Used when job_id is
+                   not given.
 
     Returns:
         dict: The requested text, or the list of exported functions
@@ -4990,30 +5293,57 @@ def kuna_export_read(job_id: str, function: str | None = None,
     if guard:
         return guard
 
-    with _kuna_jobs_lock:
-        job = _kuna_jobs.get(job_id)
-    if job is None:
+    work_dir = None
+    binary = None
+    status = "unknown"
+    if directory:
+        try:
+            work_dir = _kuna_resolve_export_dir(directory)
+        except ValueError as exc:
+            return _kuna_error(str(exc), code="KUNA_NO_DIR")
+    elif job_id:
+        with _kuna_jobs_lock:
+            job = _kuna_jobs.get(job_id)
+        if job is None:
+            return _kuna_error(
+                f"unknown job id '{job_id}'; jobs live in the bridge process that "
+                f"started them, so address the export by its directory or digest",
+                code="KUNA_NO_DIR",
+            )
+        work_dir = job["dir"]
+        binary = job["binary"]
+        status = job["status"]
+    else:
         return _kuna_error(
-            f"unknown job id '{job_id}'; jobs live in the bridge process that started them"
+            "either job_id or directory is required", code="KUNA_NO_DIR"
         )
 
-    work_dir = job["dir"]
+    if not work_dir or not os.path.isdir(work_dir):
+        return _kuna_error(f"no such export directory: {work_dir}", code="KUNA_NO_DIR")
+
+    if not binary:
+        binary = _kuna_export_binary(work_dir)
+
     records = _kuna_index_records(work_dir)
 
     if artifact == "readme":
         path = os.path.join(work_dir, "README.md")
         if not os.path.isfile(path):
-            return _kuna_error("the export has no README.md")
+            return _kuna_error("the export has no README.md", code="KUNA_NO_FILE")
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as handle:
                 text = handle.read(max_bytes if max_bytes else -1)
         except OSError as exc:
-            return _kuna_error(f"could not read the export README: {exc}")
+            return _kuna_error(
+                f"could not read the export README: {exc}", code="KUNA_IO"
+            )
         return {"success": True, "result": {"artifact": "readme", "text": text}}
 
     if not records:
         return _kuna_error(
-            f"the export for {job['binary']} has no index yet (job status: {job['status']})"
+            f"the export for {binary or work_dir} has no index yet "
+            f"(job status: {status})",
+            code="KUNA_NO_INDEX",
         )
 
     if artifact == "index":
@@ -5021,7 +5351,7 @@ def kuna_export_read(job_id: str, function: str | None = None,
             "success": True,
             "result": {
                 "artifact": "index",
-                "binary": job["binary"],
+                "binary": binary,
                 "total": len(records),
                 "functions": [
                     {
@@ -5036,14 +5366,16 @@ def kuna_export_read(job_id: str, function: str | None = None,
         }
 
     if artifact not in ("c", "asm"):
-        return _kuna_error("artifact must be one of: c, asm, index, readme")
+        return _kuna_error(
+            "artifact must be one of: c, asm, index, readme", code="KUNA_BAD_ARTIFACT"
+        )
 
     if not function:
         return {
             "success": True,
             "result": {
                 "artifact": artifact,
-                "binary": job["binary"],
+                "binary": binary,
                 "total": len(records),
                 "functions": [
                     {
@@ -5057,19 +5389,11 @@ def kuna_export_read(job_id: str, function: str | None = None,
             },
         }
 
-    record = None
-    for candidate in records:
-        if candidate.get("name") == function:
-            record = candidate
-            break
+    record = _kuna_find_record(records, function)
     if record is None:
-        lowered = function.lower()
-        for candidate in records:
-            if str(candidate.get("name", "")).lower() == lowered:
-                record = candidate
-                break
-    if record is None:
-        return _kuna_error(f"function '{function}' is not in the export index")
+        return _kuna_error(
+            f"function '{function}' is not in the export index", code="KUNA_NO_FUNCTION"
+        )
 
     if artifact == "c":
         text = _kuna_extract_c(work_dir, record, max_bytes)
@@ -5077,7 +5401,10 @@ def kuna_export_read(job_id: str, function: str | None = None,
         text = _kuna_extract_asm(work_dir, record.get("name", function), max_bytes)
 
     if text is None:
-        return _kuna_error(f"could not read the {artifact} of '{function}' from the export")
+        return _kuna_error(
+            f"could not read the {artifact} of '{function}' from the export",
+            code="KUNA_IO",
+        )
 
     return {
         "success": True,
@@ -5089,6 +5416,151 @@ def kuna_export_read(job_id: str, function: str | None = None,
             "text": text,
         },
     }
+
+
+# ================= Kuna resources =================
+#
+# The export is the durable artifact: the analysis is expensive and the files
+# on disk are the cheap way to read it. The job registry is not durable - it
+# lives in this process - so the export is also exposed as MCP resources,
+# addressed by the digest it is named after. A digest outlives the bridge, so
+# an export written by the CLI is readable here too.
+#
+# The retrieval loop is the RAG loop with exact addressing:
+#   1. read kuna://exports                   - which binaries have been exported
+#   2. read kuna://export/<digest>/index.jsonl - the function list
+#   3. read kuna://export/<digest>/<function>.c - that one function
+#
+# A function name goes into the URI percent-encoded, because a name may hold
+# a slash and the URI may not.
+
+KUNA_RESOURCE_ROOT = "kuna://export"
+
+# The URIs already registered as concrete resources, so a rescan does not
+# register the same export twice.
+_kuna_registered_resources: set = set()
+
+
+def _kuna_export_dir_for(digest: str) -> str:
+    """The export directory a digest names.
+
+    A digest is 12 hex characters. Anything else could name a path outside
+    the work directory, so it is refused rather than resolved.
+    """
+    if not KUNA_DIGEST_RE.match(str(digest or "")):
+        raise ValueError(
+            f"'{digest}' is not an export digest; it is 12 hex characters"
+        )
+    return os.path.join(KUNA_WORK_DIR, digest)
+
+
+def _kuna_resource_text(directory: str, relative: str) -> str:
+    """Read a file out of an export directory."""
+    path = os.path.join(directory, relative)
+    if not os.path.isfile(path):
+        raise ValueError(f"the export has no {relative}")
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        return handle.read()
+
+
+def _kuna_resource_function(digest: str, function: str, artifact: str) -> str:
+    """Read one function's artifact out of an export."""
+    directory = _kuna_export_dir_for(digest)
+    name = unquote(function)
+    records = _kuna_index_records(directory)
+    record = _kuna_find_record(records, name)
+    if record is None:
+        raise ValueError(f"function '{name}' is not in the export index")
+    if artifact == "c":
+        text = _kuna_extract_c(directory, record, 0)
+    else:
+        text = _kuna_extract_asm(directory, record.get("name", name), 0)
+    if text is None:
+        raise ValueError(f"could not read the {artifact} of '{name}' from the export")
+    return text
+
+
+@mcp.resource("kuna://exports", name="kuna-exports", mime_type="application/json")
+def kuna_exports_resource() -> str:
+    """Every Kuna export on this machine, as a JSON manifest.
+
+    Each entry carries the digest the export is named after, the binary it
+    came from, how many functions it holds and whether it is still being
+    written. The digest is what the kuna://export/ resources are addressed
+    by, and it is the only identifier that survives a restart of the bridge.
+    """
+    exports = _kuna_list_exports()
+    return json.dumps({"count": len(exports), "exports": exports}, indent=2)
+
+
+@mcp.resource("kuna://export/{digest}/index.jsonl", name="kuna-export-index",
+              mime_type="application/x-ndjson")
+def kuna_export_index_resource(digest: str) -> str:
+    """The function index of one export: one JSON record per line.
+
+    Each record names a function, its address and its size, and points at the
+    block of recovered C that belongs to it.
+    """
+    return _kuna_resource_text(_kuna_export_dir_for(digest), "index.jsonl")
+
+
+@mcp.resource("kuna://export/{digest}/README.md", name="kuna-export-readme",
+              mime_type="text/markdown")
+def kuna_export_readme_resource(digest: str) -> str:
+    """The report Kuna wrote next to an export."""
+    return _kuna_resource_text(_kuna_export_dir_for(digest), "README.md")
+
+
+@mcp.resource("kuna://export/{digest}/{function}.c", name="kuna-export-c",
+              mime_type="text/x-c")
+def kuna_export_c_resource(digest: str, function: str) -> str:
+    """The recovered C of one function in one export.
+
+    The function name is percent-encoded in the URI.
+    """
+    return _kuna_resource_function(digest, function, "c")
+
+
+@mcp.resource("kuna://export/{digest}/{function}.asm", name="kuna-export-asm",
+              mime_type="text/plain")
+def kuna_export_asm_resource(digest: str, function: str) -> str:
+    """The disassembly of one function in one export.
+
+    The function name is percent-encoded in the URI.
+    """
+    return _kuna_resource_function(digest, function, "asm")
+
+
+def _kuna_sync_resources() -> None:
+    """Register the exports on disk as concrete resources.
+
+    The templates above serve any export by digest, but a client that only
+    reads resources/list would not see them. This puts the index and the
+    report of every export on disk into that listing.
+    """
+    for export in _kuna_list_exports():
+        digest = export["digest"]
+        directory = export["dir"]
+        for relative, mime in (("index.jsonl", "application/x-ndjson"),
+                               ("README.md", "text/markdown")):
+            uri = f"{KUNA_RESOURCE_ROOT}/{digest}/{relative}"
+            if uri in _kuna_registered_resources:
+                continue
+            if not os.path.isfile(os.path.join(directory, relative)):
+                continue
+            _kuna_registered_resources.add(uri)
+            mcp.add_resource(FunctionResource(
+                uri=AnyUrl(uri),
+                name=f"kuna-export-{digest}-{relative}",
+                description=f"The {relative} of the Kuna export {digest}.",
+                mime_type=mime,
+                fn=(lambda d=directory, r=relative: _kuna_resource_text(d, r)),
+            ))
+
+
+# The exports that already exist on disk are worth showing before the first
+# export of this session.
+_kuna_sync_resources()
 
 
 # ================= Project Management =================

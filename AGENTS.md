@@ -354,13 +354,32 @@ tools work with any Ghidra version.
   which writes `"enabled": null`, would silently pin the integration off.
 - **Kuna loads and analyses the whole image on every invocation** — measured: 19 s for a 22 MB
   binary, 0.7 s for a 332 KB one. The cost is the analysis, not the command, so the export flow is
-  the main path: analyse once into `~/.ghydra/kuna/<hash of path+mtime>/`, then read the C, the
+  the main path: analyse once into `~/.ghydra/kuna/<digest of path+mtime>/`, then read the C, the
   disassembly and `index.jsonl` from disk. `kuna strings` requires a filter for the same reason
   (an unfiltered scan of `cmd.exe` returns 480 KB).
-- **The bridge's export jobs live in the bridge process.** The job registry is in memory, so a job
-  started by one bridge is invisible to another, and the registry does not survive a restart. The
-  CLI has no registry: `ghydra kuna export` runs synchronously and `export-read` works off the
-  directory.
+- **A complete export is reused, not re-analysed.** `kuna_export_start` and `ghydra kuna export`
+  look under the digest first and only run Kuna when there is no complete export, or when the one
+  on disk does not hold the functions that were asked for. The report says which happened
+  (`"reused": true`). Measured: re-reading the export of a 332 KB binary takes 26 ms against the
+  691 ms of a fresh analysis; for a 22 MB binary it is 19 s against 26 ms. The digest keys on the
+  path *and* the mtime, so a rebuilt binary gets a fresh directory.
+- **The export is addressed by its digest, not by the job.** The digest is 12 hex characters,
+  survives a restart of the bridge, and is what `kuna_export_read(directory=...)`, the
+  `kuna://export/<digest>/` resources and `ghydra kuna status` all use. The job registry lives in
+  the bridge process, so a job started by one bridge is invisible to another and does not survive
+  a restart — which is why the digest exists. The CLI has no registry: `ghydra kuna export` runs
+  synchronously and `export-read` works off the directory or the digest.
+- **The exports are MCP resources.** `kuna://exports` is a JSON manifest of every export on disk;
+  `kuna://export/{digest}/index.jsonl`, `kuna://export/{digest}/{function}.c`,
+  `kuna://export/{digest}/{function}.asm` and `kuna://export/{digest}/README.md` serve the files.
+  A function name goes into the URI percent-encoded. The resources are the RAG loop with *exact*
+  addressing: list the exports, read the index, read one function. Embeddings would retrieve the
+  wrong function more often than the right one — the corpus has an exact index.
+- **One error taxonomy on both sides.** The bridge and the CLI carry the same 14 codes
+  (`KUNA_DISABLED`, `KUNA_MISSING`, `KUNA_TIMEOUT`, `KUNA_LAUNCH`, `KUNA_FAILED`, `KUNA_NO_JSON`,
+  `KUNA_TOO_LARGE`, `KUNA_NO_FILE`, `KUNA_IO`, `KUNA_NO_DIR`, `KUNA_NO_INDEX`, `KUNA_BAD_ARTIFACT`,
+  `KUNA_NO_FUNCTION`, `KUNA_ERROR`). `test_kuna.py` asserts the two lists are identical, so adding
+  a code to one side without the other fails the suite.
 - **The `kuna_*` tools take no `port`.** They are not part of the plugin API, so they take no
   instance either.
 

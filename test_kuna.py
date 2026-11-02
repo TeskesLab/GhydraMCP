@@ -198,6 +198,15 @@ class KunaBridgeTests(unittest.TestCase):
                 })
                 self.assertIn("boom", text)
 
+    def test_the_error_code_reaches_the_agent(self):
+        """The code is what an agent branches on, so it must survive."""
+        text = bridge.FORMATTERS["kuna_export_read"]({
+            "success": False,
+            "error": {"code": "KUNA_NO_DIR", "message": "no such export directory"},
+        })
+        self.assertIn("KUNA_NO_DIR", text)
+        self.assertIn("no such export directory", text)
+
 
 class KunaCliTests(unittest.TestCase):
     """The CLI contract: the commands run and the formatters handle payloads."""
@@ -250,6 +259,35 @@ class KunaCliTests(unittest.TestCase):
             with self.subTest(command=name):
                 result = self._run(["kuna", name, "--help"])
                 self.assertEqual(result.exit_code, 0, result.output)
+
+    def test_the_status_shows_the_kuna_version(self):
+        """Rich reads square brackets as markup: the version has to survive it.
+
+        The version is printed inside brackets, and rich drops "[kuna 1.988]"
+        whole when it is not escaped - so the version was simply never shown.
+        """
+        from ghydra.formatters import TableFormatter
+
+        text = TableFormatter().format_kuna({
+            "kind": "status",
+            "data": {"enabled": True, "source": "the config file",
+                     "binary": "kuna", "version": "kuna 1.988",
+                     "config_file": "c", "work_dir": "w"},
+        })
+        self.assertIn("kuna 1.988", text)
+
+    def test_the_status_lists_the_exports(self):
+        from ghydra.formatters import TableFormatter
+
+        text = TableFormatter().format_kuna({
+            "kind": "status",
+            "data": {"enabled": True, "source": "the config file",
+                     "binary": "kuna", "config_file": "c", "work_dir": "w",
+                     "exports": [{"digest": "9f2c1a4b7e03", "functions": 818,
+                                  "binary": "/bin/app", "streaming": False}]},
+        })
+        self.assertIn("9f2c1a4b7e03", text)
+        self.assertIn("kuna://export/9f2c1a4b7e03/index.jsonl", text)
 
     def test_a_disabled_integration_fails_the_command(self):
         result = self._run(["kuna", "summary", "C:/nonexistent"])
@@ -374,6 +412,248 @@ class KunaExportTests(unittest.TestCase):
         with self.assertRaises(kuna_helper.KunaError) as caught:
             kuna_helper.read_export(self.dir, artifact="nope")
         self.assertEqual(caught.exception.code, "KUNA_BAD_ARTIFACT")
+
+
+class KunaExportAddressingTests(unittest.TestCase):
+    """The export is addressed by its digest, and it is reused when it exists.
+
+    The job registry lives in the bridge process and dies with it. The digest
+    the export is named after does not, so the digest is what an agent should
+    hold on to - and a complete export should never be paid for twice.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.work = os.path.join(self.tmp.name, "work")
+
+        patches = [
+            mock.patch.object(kuna_helper, "WORK_DIR", self.work),
+            mock.patch.object(bridge, "KUNA_WORK_DIR", self.work),
+        ]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        # A binary to export, and the export that belongs to it.
+        self.binary = os.path.join(self.tmp.name, "target.bin")
+        with open(self.binary, "wb") as handle:
+            handle.write(b"\x00" * 16)
+
+        self.dir = bridge._kuna_work_dir(self.binary)
+        os.makedirs(self.dir, exist_ok=True)
+
+        self.c_text = (
+            "// Function: sub_1 @ 0x1\n"
+            "void sub_1(void)\n{\n}\n\n"
+            "// Function: sub_2 @ 0x2\n"
+            "void sub_2(void)\n{\n}\n"
+        )
+        # Written in binary: the index records byte offsets into this file, and
+        # text mode would turn the newlines into CRLF and shift every offset.
+        with open(os.path.join(self.dir, "x.c"), "wb") as handle:
+            handle.write(self.c_text.encode("utf-8"))
+        first = self.c_text.index("// Function: sub_1")
+        second = self.c_text.index("// Function: sub_2")
+        records = [
+            {"seq": 0, "name": "sub_1", "addr": "0x1", "size": 4,
+             "c_offset": first, "c_len": second - first, "error": None},
+            {"seq": 1, "name": "sub_2", "addr": "0x2", "size": 4,
+             "c_offset": second, "c_len": len(self.c_text) - second, "error": None},
+        ]
+        with open(os.path.join(self.dir, "index.jsonl"), "w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record) + "\n")
+
+        self.digest = os.path.basename(self.dir)
+
+    # ---- the cache ---------------------------------------------------
+
+    def test_a_complete_export_is_reused_instead_of_reanalysed(self):
+        """The second export of a binary must not pay the analysis again."""
+        start = bridge.kuna_export_start.__wrapped__
+        with mock.patch.object(bridge.subprocess, "Popen") as popen:
+            result = start(binary_path=self.binary)
+        popen.assert_not_called()
+        self.assertTrue(result["success"], result)
+        self.assertTrue(result["result"]["reused"])
+        self.assertEqual(result["result"]["status"], "done")
+        self.assertEqual(result["result"]["functions"], 2)
+
+    def test_a_subset_the_export_covers_is_reused(self):
+        start = bridge.kuna_export_start.__wrapped__
+        with mock.patch.object(bridge.subprocess, "Popen") as popen:
+            result = start(binary_path=self.binary, functions="sub_1")
+        popen.assert_not_called()
+        self.assertTrue(result["result"]["reused"])
+
+    def test_a_subset_the_export_does_not_cover_is_reanalysed(self):
+        """An export that never held that function cannot answer for it."""
+        start = bridge.kuna_export_start.__wrapped__
+        with mock.patch.object(bridge.subprocess, "Popen") as popen:
+            popen.return_value.pid = 4242
+            popen.return_value.wait.return_value = 0
+            result = start(binary_path=self.binary, functions="sub_99")
+        self.assertTrue(popen.called)
+        self.assertFalse(result["result"].get("reused"))
+
+    def test_a_streaming_export_is_not_reused(self):
+        """An export still being written is not an answer yet."""
+        with open(os.path.join(self.dir, ".streaming"), "w", encoding="utf-8") as handle:
+            handle.write("{}")
+        self.assertIsNone(bridge._kuna_export_state(self.dir))
+        start = bridge.kuna_export_start.__wrapped__
+        with mock.patch.object(bridge.subprocess, "Popen") as popen:
+            start(binary_path=self.binary)
+        self.assertTrue(popen.called)
+
+    def test_the_cli_reuses_the_export_too(self):
+        """The CLI and the bridge must not disagree about the cost."""
+        with mock.patch.object(kuna_helper, "require_binary", return_value="kuna"):
+            with mock.patch.object(kuna_helper.subprocess, "run") as run:
+                result = kuna_helper.export(self.binary)
+        run.assert_not_called()
+        self.assertTrue(result["reused"])
+        self.assertEqual(result["functions"], 2)
+
+    # ---- the addressing ----------------------------------------------
+
+    def test_the_export_read_accepts_a_digest(self):
+        read = bridge.kuna_export_read.__wrapped__
+        result = read(directory=self.digest, function="sub_1")
+        self.assertTrue(result["success"], result)
+        self.assertIn("void sub_1(void)", result["result"]["text"])
+
+    def test_the_export_read_accepts_a_directory(self):
+        read = bridge.kuna_export_read.__wrapped__
+        result = read(directory=self.dir, function="sub_2")
+        self.assertTrue(result["success"], result)
+        self.assertIn("void sub_2(void)", result["result"]["text"])
+
+    def test_the_export_read_needs_an_address(self):
+        read = bridge.kuna_export_read.__wrapped__
+        result = read()
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["code"], "KUNA_NO_DIR")
+
+    def test_an_unknown_digest_is_reported_as_a_missing_directory(self):
+        read = bridge.kuna_export_read.__wrapped__
+        result = read(directory="ffffffffffff")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["code"], "KUNA_NO_DIR")
+
+    def test_the_cli_export_read_accepts_a_digest(self):
+        result = kuna_helper.read_export(self.digest, function="sub_1")
+        self.assertIn("void sub_1(void)", result["text"])
+
+    def test_the_digest_cannot_escape_the_work_directory(self):
+        """A digest is 12 hex characters; anything else is refused."""
+        with self.assertRaises(ValueError):
+            bridge._kuna_export_dir_for("../../etc")
+        with self.assertRaises(ValueError):
+            bridge._kuna_export_dir_for("not-a-digest")
+
+    # ---- the listing and the sidecar ---------------------------------
+
+    def test_the_listing_is_read_from_disk(self):
+        """The listing survives a restart, because it is not held in memory."""
+        exports = bridge._kuna_list_exports()
+        self.assertEqual(len(exports), 1)
+        self.assertEqual(exports[0]["digest"], self.digest)
+        self.assertEqual(exports[0]["functions"], 2)
+
+    def test_the_export_records_which_binary_it_came_from(self):
+        bridge._kuna_write_export_meta(self.dir, self.binary)
+        self.assertEqual(
+            bridge._kuna_export_binary(self.dir), os.path.abspath(self.binary)
+        )
+
+    def test_the_report_names_the_binary_when_there_is_no_sidecar(self):
+        """An export made before the sidecar still says what it is."""
+        with open(os.path.join(self.dir, "README.md"), "w", encoding="utf-8") as handle:
+            handle.write("# x - kuna project export\n\n| Field | Value |\n|---|---|\n"
+                         "| Path | `\\\\?\\C:\\bin\\app.exe` |\n")
+        self.assertEqual(
+            bridge._kuna_export_binary(self.dir), "C:\\bin\\app.exe"
+        )
+
+    def test_the_cli_lists_the_exports(self):
+        bridge._kuna_write_export_meta(self.dir, self.binary)
+        exports = kuna_helper.list_exports()
+        self.assertEqual(len(exports), 1)
+        self.assertEqual(exports[0]["digest"], self.digest)
+
+    # ---- the resources ------------------------------------------------
+
+    def test_the_resources_are_registered(self):
+        templates = {t.uri_template for t in bridge.mcp._resource_manager.list_templates()}
+        self.assertIn("kuna://export/{digest}/index.jsonl", templates)
+        self.assertIn("kuna://export/{digest}/{function}.c", templates)
+        self.assertIn("kuna://export/{digest}/{function}.asm", templates)
+        self.assertIn("kuna://export/{digest}/README.md", templates)
+
+        resources = {str(r.uri) for r in bridge.mcp._resource_manager.list_resources()}
+        self.assertIn("kuna://exports", resources)
+
+    def test_the_manifest_lists_the_exports(self):
+        bridge._kuna_write_export_meta(self.dir, self.binary)
+        manifest = json.loads(bridge.kuna_exports_resource())
+        self.assertEqual(manifest["count"], 1)
+        self.assertEqual(manifest["exports"][0]["digest"], self.digest)
+
+    def test_the_index_resource_serves_the_index(self):
+        text = bridge.kuna_export_index_resource(self.digest)
+        self.assertIn('"name": "sub_1"', text)
+
+    def test_the_function_resource_serves_the_c(self):
+        text = bridge.kuna_export_c_resource(self.digest, "sub_1")
+        self.assertIn("void sub_1(void)", text)
+
+    def test_the_function_resource_serves_the_disassembly(self):
+        with open(os.path.join(self.dir, "x.asm"), "w", encoding="utf-8") as handle:
+            handle.write("sub_1:  ; 0x1\n  1000: 90    NOP\n")
+        text = bridge.kuna_export_asm_resource(self.digest, "sub_1")
+        self.assertIn("sub_1:  ; 0x1", text)
+
+    def test_a_function_name_is_percent_decoded(self):
+        """A name with a slash cannot go into a URI unescaped."""
+        text = "// Function: ns/fn @ 0x1\nvoid ns/fn(void)\n{\n}\n"
+        with open(os.path.join(self.dir, "x.c"), "wb") as handle:
+            handle.write(text.encode("utf-8"))
+        with open(os.path.join(self.dir, "index.jsonl"), "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"seq": 0, "name": "ns/fn", "addr": "0x1",
+                                     "size": 4, "c_offset": 0,
+                                     "c_len": len(text.encode("utf-8")),
+                                     "error": None}) + "\n")
+        read = bridge.kuna_export_c_resource(self.digest, "ns%2Ffn")
+        self.assertIn("void ns/fn(void)", read)
+
+
+class KunaErrorTaxonomyTests(unittest.TestCase):
+    """One taxonomy of failure reasons, on both sides of the bridge."""
+
+    def test_the_cli_and_the_bridge_carry_the_same_codes(self):
+        import inspect
+
+        source = inspect.getsource(kuna_helper)
+        cli_codes = set(
+            re.findall(r'code(?:\s*:\s*str)?\s*=\s*"(KUNA_[A-Z_]+)"', source)
+        )
+        self.assertTrue(cli_codes)
+        self.assertEqual(cli_codes, set(bridge.KUNA_ERROR_CODES))
+
+    def test_a_missing_binary_is_reported_as_missing(self):
+        """The bridge must tell "not installed" from "failed"."""
+        with mock.patch.object(bridge, "_kuna_binary", return_value=None):
+            outcome = bridge._kuna_run(["--version"])
+        self.assertEqual(outcome["error_code"], "KUNA_MISSING")
+
+    def test_a_timeout_is_reported_as_a_timeout(self):
+        with mock.patch.object(bridge, "_kuna_binary", return_value="kuna"):
+            with mock.patch.object(bridge.subprocess, "run",
+                                   side_effect=bridge.subprocess.TimeoutExpired("kuna", 1)):
+                outcome = bridge._kuna_run(["--version"])
+        self.assertEqual(outcome["error_code"], "KUNA_TIMEOUT")
 
 
 class KunaDocumentationTests(unittest.TestCase):

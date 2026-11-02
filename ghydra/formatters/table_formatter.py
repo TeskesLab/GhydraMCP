@@ -700,14 +700,32 @@ class TableFormatter(BaseFormatter):
 
         if kind == "status":
             state = "enabled" if payload.get("enabled") else "disabled"
+            # The version and the path come from the outside world: square
+            # brackets are rich markup, and rich eats "[kuna 1.988]" whole if
+            # the whole group is not escaped.
             lines = [
                 f"[cyan]Kuna integration:[/cyan] {state} "
                 f"(opt-in via {payload.get('source', 'unknown')})",
-                f"[cyan]Binary:[/cyan] {payload.get('binary') or 'not found'}"
-                + (f"  [{payload.get('version')}]" if payload.get("version") else ""),
-                f"[cyan]Config:[/cyan] {payload.get('config_file', '')}",
-                f"[cyan]Work:[/cyan] {payload.get('work_dir', '')}",
+                f"[cyan]Binary:[/cyan] {escape(str(payload.get('binary') or 'not found'))}"
+                + (f"  {escape('[' + str(payload.get('version')) + ']')}"
+                   if payload.get("version") else ""),
+                f"[cyan]Config:[/cyan] {escape(str(payload.get('config_file', '')))}",
+                f"[cyan]Work:[/cyan] {escape(str(payload.get('work_dir', '')))}",
             ]
+            exports = payload.get("exports") or []
+            if exports:
+                lines.append("")
+                lines.append(f"[cyan]Exports on disk ({len(exports)}):[/cyan]")
+                for export in exports:
+                    streaming = "  (streaming)" if export.get("streaming") else ""
+                    lines.append(
+                        f"  {export.get('digest')}  "
+                        f"{export.get('functions', 0)} functions  "
+                        f"{escape(str(export.get('binary') or 'unknown binary'))}{streaming}"
+                    )
+                    lines.append(
+                        f"    kuna://export/{export.get('digest')}/index.jsonl"
+                    )
             return self._capture("\n".join(lines))
 
         if kind == "summary":
@@ -919,12 +937,18 @@ class TableFormatter(BaseFormatter):
             )
 
         if kind == "export":
+            reused = payload.get("reused")
             lines = [
-                f"[cyan]Exported[/cyan] {payload.get('binary', '?')}",
-                f"[cyan]Dir:[/cyan] {payload.get('dir', '?')}",
+                f"[cyan]{'Reused' if reused else 'Exported'}[/cyan] "
+                f"{escape(str(payload.get('binary', '?')))}",
+                f"[cyan]Dir:[/cyan] {escape(str(payload.get('dir', '?')))}",
                 f"[cyan]Functions:[/cyan] {payload.get('functions', 0)} "
                 f"({payload.get('failed', 0)} failed)",
             ]
+            if reused:
+                lines.append(
+                    "[cyan]The export was already there:[/cyan] the binary was not analysed again"
+                )
             for failure in payload.get("failures", []) or []:
                 lines.append(
                     f"  [red]ERROR[/red] {failure.get('name', '?')}: {failure.get('error')}"

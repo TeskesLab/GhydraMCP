@@ -194,7 +194,14 @@ ghydra kuna export ./challenge.exe -o ./challenge.kuna   # analyse once
 ghydra kuna export-read ./challenge.kuna main              # then read it
 ```
 
-The MCP bridge exposes the same operations as `kuna_*` tools, including `kuna_export_start` / `kuna_export_status` / `kuna_export_read` for the export flow.
+Exporting the same binary again reuses the export that is already on disk instead of analysing it again. The export is named after a digest of the path and the modification time, so it can be read without knowing where the directory is:
+
+```bash
+ghydra kuna status                                      # lists the exports and their digests
+ghydra kuna export-read 9f2c1a4b7e03 main                # by digest
+```
+
+The MCP bridge exposes the same operations as `kuna_*` tools, including `kuna_export_start` / `kuna_export_status` / `kuna_export_read` for the export flow. The exports are also exposed as **MCP resources** addressed by that digest — `kuna://exports` lists them, and `kuna://export/{digest}/index.jsonl` and `kuna://export/{digest}/{function}.c` serve the files. Those URIs outlive the bridge process, so an export made by the CLI is readable by the agent too.
 
 **[GHYDRA_KUNA.md](GHYDRA_KUNA.md) is the full reference** — the opt-in, every tool and command, the export layout, the measured performance and the limits. [GHYDRA_CLI.md](GHYDRA_CLI.md#kuna-commands) has the command summary.
 
@@ -409,9 +416,9 @@ Tools are grouped into namespaces:
 - `kuna_crypto`: Find crypto constants and the functions using them (params: binary_path, algorithm [optional], section [optional])
 - `kuna_xrefs`: Cross-references of a symbol (params: binary_path, target, direction, kind [optional])
 - `kuna_unpack`: Unpack a UPX image (params: binary_path, output [optional])
-- `kuna_export_start`: Export a binary to disk in the background (params: binary_path, functions [optional], jobs, job_id [optional])
+- `kuna_export_start`: Export a binary to disk in the background, or reuse the export that is already there (params: binary_path, functions [optional], jobs, job_id [optional])
 - `kuna_export_status`: Progress of an export job (params: job_id)
-- `kuna_export_read`: Read a function out of an export (params: job_id, function [optional], artifact, max_bytes)
+- `kuna_export_read`: Read a function out of an export, addressed by job id or by directory/digest (params: job_id [optional], function [optional], artifact, max_bytes, directory [optional])
 
 **Example Usage**:
 ```python
