@@ -2131,6 +2131,112 @@ def format_kuna_export_read(response: dict, **kwargs) -> str:
     return f"{header}\n\n{result.get('text', '')}"
 
 
+# ================= x64dbg formatters =================
+
+def format_x64dbg_status(response: dict, **kwargs) -> str:
+    """Format the state of the x64dbg MCP server"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    lines = [
+        f"x64dbg MCP server: reachable at {result.get('host')}:{result.get('port')}",
+        f"  Tools: {result.get('tools', 0)}",
+    ]
+    modules = result.get("modules") or []
+    if modules:
+        lines.append(f"  Modules ({len(modules)}):")
+        for module in modules:
+            lines.append(
+                f"    {hex(module.get('base', 0))}  {hex(module.get('size', 0))}  "
+                f"{module.get('path')}"
+            )
+    else:
+        lines.append("  Modules: none loaded (no debug session?)")
+    if result.get("debug_state"):
+        lines.append(f"  State: {result['debug_state']}")
+    return "\n".join(lines)
+
+
+def format_x64dbg_tools(response: dict, **kwargs) -> str:
+    """Format the x64dbg tool catalogue"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    tools = result.get("tools") or []
+    lines = [f"x64dbg tools ({result.get('count', len(tools))}):", ""]
+    for tool in tools:
+        description = str(tool.get("description") or "").split("\n")[0]
+        if len(description) > 110:
+            description = description[:107] + "..."
+        lines.append(f"  {tool.get('name')}")
+        if description:
+            lines.append(f"    {description}")
+    lines.append("")
+    lines.append("Call one with x64dbg_call(tool='<name>', arguments={...}).")
+    return "\n".join(lines)
+
+
+def format_x64dbg_call(response: dict, **kwargs) -> str:
+    """Format the result of a call to an x64dbg tool"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    return f"{result.get('tool')}\n\n{result.get('text', '')}"
+
+
+def format_x64dbg_target(response: dict, **kwargs) -> str:
+    """Format the correlation between the Ghidra program and the x64dbg session"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    return "\n".join([
+        "Ghidra and x64dbg agree on this binary:",
+        f"  Binary:     {result.get('binary')}",
+        f"  Image base: {result.get('image_base') and hex(result['image_base'])}  (Ghidra, in the file)",
+        f"  Module base:{result.get('module_base') and hex(result['module_base'])}  (x64dbg, in the process)",
+        f"  Delta:      {result.get('delta') and hex(result['delta'])}",
+        "",
+        "A static address becomes a runtime one with:",
+        "  runtime = static - image_base + module_base",
+    ])
+
+
+def format_x64dbg_breakpoint_at(response: dict, **kwargs) -> str:
+    """Format the result of setting a breakpoint on a static address"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    return "\n".join([
+        f"Breakpoint set at {result.get('runtime_address')} "
+        f"(static {result.get('static_address')})",
+        f"  Binary:     {result.get('binary')}",
+        f"  Image base: {result.get('image_base')}",
+        f"  Module base:{result.get('module_base')}",
+        "",
+        result.get("text", ""),
+    ])
+
+
+def format_x64dbg_go_to(response: dict, **kwargs) -> str:
+    """Format the result of moving the instruction pointer to a static address"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    return "\n".join([
+        f"Runtime address {result.get('runtime_address')} "
+        f"(static {result.get('static_address')})",
+        f"  Binary: {result.get('binary')}",
+        "",
+        result.get("text", ""),
+    ])
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -2189,6 +2295,12 @@ FORMATTERS = {
     "kuna_export_start": format_kuna_export_start,
     "kuna_export_status": format_kuna_export_status,
     "kuna_export_read": format_kuna_export_read,
+    "x64dbg_status": format_x64dbg_status,
+    "x64dbg_tools": format_x64dbg_tools,
+    "x64dbg_call": format_x64dbg_call,
+    "x64dbg_target": format_x64dbg_target,
+    "x64dbg_breakpoint_at": format_x64dbg_breakpoint_at,
+    "x64dbg_go_to": format_x64dbg_go_to,
 }
 
 
@@ -5561,6 +5673,804 @@ def _kuna_sync_resources() -> None:
 # The exports that already exist on disk are worth showing before the first
 # export of this session.
 _kuna_sync_resources()
+
+
+# ================= x64dbg integration =================
+# The x64dbg plugin (https://github.com/duty1g/x64dbg-mcp-server) is an MCP
+# server that lives inside the debugger: it answers JSON-RPC 2.0 POSTed to "/"
+# with a bearer token, and every request stands alone - there is no session
+# and no handshake to keep alive.
+#
+# These tools drive it from the bridge, so an agent gets the static side
+# (Ghidra) and the dynamic side (x64dbg) in one place. The two disagree
+# about addresses: Ghidra works on the image as it sits in the file, x64dbg on
+# the loaded process. The translation between them is what makes the pair
+# worth having, and it is what x64dbg_target and x64dbg_breakpoint_at do.
+#
+# The plugin's own tools are not proxied one by one - eighty of them would
+# drown the agent's tool list. The catalogue is exposed instead, and
+# x64dbg_call invokes any of them by name.
+
+X64DBG_DEFAULT_PORT = 9094        # the plugin's default for a 64-bit debuggee
+X64DBG_X32_PORT = 9095            # and for a 32-bit one
+X64DBG_PORT_SCAN = 16             # ports to try when looking for an instance
+X64DBG_ENV_HOST = "GHYDRA_X64DBG_HOST"
+X64DBG_ENV_PORT = "GHYDRA_X64DBG_PORT"
+X64DBG_ENV_TOKEN = "GHYDRA_X64DBG_TOKEN"
+X64DBG_PLUGIN_CONFIG_NAME = "mcp_config.json"
+X64DBG_PROTOCOL_VERSION = "2024-11-05"
+
+# How many times a connection error is retried. The plugin hangs up after
+# every response, and a local TCP connection is reset every now and then on
+# Windows - measured at 7% of the connections on this machine, with curl and
+# with plain sockets alike, so it is the network stack and not this client.
+X64DBG_CONNECT_ATTEMPTS = 3
+
+# How long a connection may take to come up, and how long the server may
+# take to answer. The two are separate because they mean different things: a
+# closed local port does not refuse straight away on Windows - the SYN hangs
+# and is only refused about two seconds later - so a probe must not wait for
+# that, while a tool that blocks (WaitForEvent, run) must be allowed to take
+# its time.
+X64DBG_CONNECT_TIMEOUT = 2.0
+X64DBG_READ_TIMEOUT = 30.0
+X64DBG_PROBE_CONNECT_TIMEOUT = 0.35
+X64DBG_PROBE_READ_TIMEOUT = 2.0
+
+# Which plugin tools may be repeated when the transport fails. The plugin
+# marks every tool as read-only or not, and the hint is in its catalogue.
+_X64DBG_READ_ONLY: Dict[str, bool] = {}
+
+# The machine-readable reasons a call can fail. The CLI carries the same list,
+# so an agent sees one taxonomy whichever side it drives.
+X64DBG_ERROR_CODES = (
+    "X64DBG_ERROR",         # the generic fallback
+    "X64DBG_DISABLED",      # no token, so no way to talk to the server
+    "X64DBG_MISSING",       # nothing answered on the port
+    "X64DBG_TIMEOUT",       # the server did not answer in time
+    "X64DBG_UNAUTHORIZED",  # the bearer token did not match
+    "X64DBG_NO_SESSION",    # no debug session in x64dbg
+    "X64DBG_NO_TOOL",       # the plugin has no tool with that name
+    "X64DBG_BAD_ARGS",      # the tool rejected the arguments
+    "X64DBG_NO_MATCH",      # the binary does not match any loaded module
+)
+
+
+def _x64dbg_error(message: str, code: str = "X64DBG_ERROR") -> dict:
+    """The error envelope, with a code the agent can branch on."""
+    return {"success": False, "error": {"code": code, "message": message}}
+
+
+def _x64dbg_config() -> dict:
+    """Read the "x64dbg" section of ~/.ghydra/config.json.
+
+    Never raises: a missing or malformed config simply means "not configured".
+    """
+    try:
+        # The same file the Kuna integration reads: ~/.ghydra/config.json.
+        with open(KUNA_CONFIG_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    section = data.get("x64dbg")
+    return section if isinstance(section, dict) else {}
+
+
+def _x64dbg_plugin_config(install: str) -> dict:
+    """The plugin's own settings, from the mcp_config.json next to its DLL.
+
+    The file sits in the x64dbg root or in one of its plugin folders; which
+    one depends on how x64dbg was unpacked.
+    """
+    root = os.path.abspath(os.path.expanduser(str(install or "")))
+    candidates = [
+        os.path.join(root, X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "x64", "plugins", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "x32", "plugins", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "release", "x64", "plugins", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "release", "x32", "plugins", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "plugins", X64DBG_PLUGIN_CONFIG_NAME),
+    ]
+    for candidate in candidates:
+        try:
+            with open(candidate, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def _x64dbg_settings() -> dict:
+    """Where the x64dbg MCP server is, and the token to talk to it.
+
+    The configuration file wins over the environment. The token cannot be
+    guessed: the plugin writes it to "mcp_config.json" next to its DLL, so
+    pointing at an installed x64dbg with "path" is enough to find it.
+    """
+    section = _x64dbg_config()
+    host = section.get("host") or os.environ.get(X64DBG_ENV_HOST) or "127.0.0.1"
+    port = section.get("port") or os.environ.get(X64DBG_ENV_PORT) or X64DBG_DEFAULT_PORT
+    token = section.get("token") or os.environ.get(X64DBG_ENV_TOKEN) or ""
+    install = section.get("path") or ""
+
+    plugin = _x64dbg_plugin_config(install) if install else {}
+    if not token:
+        token = plugin.get("AuthToken") or ""
+    if not section.get("host") and plugin.get("IpAddress"):
+        host = plugin["IpAddress"]
+    if not section.get("port") and plugin.get("Port"):
+        port = plugin["Port"]
+
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        port = X64DBG_DEFAULT_PORT
+
+    return {"host": str(host), "port": port, "token": str(token), "path": str(install)}
+
+
+def _x64dbg_classify(message: str) -> str:
+    """The code that matches an error message from the plugin.
+
+    The plugin answers with prose - "Error: No active debug session." - so
+    the reason has to be read out of it.
+    """
+    text = str(message or "").lower()
+    if "no active debug session" in text or "tool requires an active" in text:
+        return "X64DBG_NO_SESSION"
+    if "no such tool" in text or "unknown tool" in text:
+        return "X64DBG_NO_TOOL"
+    if "required" in text or "invalid" in text or "missing" in text:
+        return "X64DBG_BAD_ARGS"
+    return "X64DBG_ERROR"
+
+
+def _x64dbg_post(host: str, port: int, token: str, method: str,
+                 params: Optional[dict] = None, timeout: Optional[float] = None,
+                 connect_timeout: Optional[float] = None,
+                 idempotent: bool = False) -> Any:
+    """One JSON-RPC request to the x64dbg MCP server, and its result.
+
+    Raises _X64dbgFailure with a machine-readable code.
+
+    The request does not go through the shared session: the plugin closes the
+    connection after every response, and a pooled connection would be reused
+    after the server had already hung up on it.
+
+    idempotent says the request may be sent again when the transport fails:
+    a handshake, the catalogue, or a tool the plugin marks as read-only. A
+    tool that changes the debuggee is never repeated, because the first
+    attempt may already have reached it.
+    """
+    payload: Dict[str, Any] = {
+        "jsonrpc": "2.0",
+        "id": int(time.time() * 1000) % 1000000,
+        "method": method,
+    }
+    if params is not None:
+        payload["params"] = params
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    url = f"http://{host}:{int(port)}/"
+    connect_limit = connect_timeout if connect_timeout is not None else X64DBG_CONNECT_TIMEOUT
+    read_limit = timeout if timeout is not None else X64DBG_READ_TIMEOUT
+    connection_attempts = X64DBG_CONNECT_ATTEMPTS
+    timeout_attempts = 2 if idempotent else 1
+
+    while True:
+        try:
+            response = requests.post(
+                url, json=payload, headers=headers,
+                timeout=(connect_limit, read_limit),
+            )
+            break
+        except requests.ConnectTimeout as exc:
+            # The connection never came up: a closed port, or a SYN the
+            # network stack dropped.
+            connection_attempts -= 1
+            if connection_attempts > 0:
+                continue
+            raise _X64dbgFailure(
+                f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"
+            ) from None
+        except requests.ReadTimeout as exc:
+            # The server did not answer in time. Only a request that is safe
+            # to repeat may be tried again.
+            timeout_attempts -= 1
+            if timeout_attempts > 0:
+                continue
+            raise _X64dbgFailure(
+                f"the x64dbg MCP server did not answer within {read_limit}s",
+                "X64DBG_TIMEOUT",
+            ) from None
+        except requests.ConnectionError as exc:
+            # The connection died on the way: the plugin hangs up after every
+            # response, and the local network stack resets a connection every
+            # now and then (measured: 7% on this machine).
+            connection_attempts -= 1
+            if connection_attempts > 0:
+                continue
+            raise _X64dbgFailure(
+                f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"
+            ) from None
+        except requests.RequestException as exc:
+            raise _X64dbgFailure(
+                f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"
+            ) from None
+
+    if response.status_code == 401:
+        raise _X64dbgFailure(
+            "the x64dbg MCP server rejected the bearer token", "X64DBG_UNAUTHORIZED"
+        )
+    if response.status_code >= 400:
+        raise _X64dbgFailure(
+            f"the x64dbg MCP server answered {response.status_code}", "X64DBG_ERROR"
+        )
+
+    body = (response.text or "").strip()
+    if not body:
+        raise _X64dbgFailure(
+            "the x64dbg MCP server answered with an empty body", "X64DBG_ERROR"
+        )
+    try:
+        data = json.loads(body)
+    except ValueError:
+        raise _X64dbgFailure(
+            f"the x64dbg MCP server did not answer JSON: {body[:200]}", "X64DBG_ERROR"
+        ) from None
+
+    if isinstance(data, dict) and data.get("error"):
+        error = data["error"]
+        message = error.get("message", "") if isinstance(error, dict) else str(error)
+        raise _X64dbgFailure(message or "the call failed", _x64dbg_classify(message))
+    if isinstance(data, dict):
+        return data.get("result")
+    return data
+
+
+class _X64dbgFailure(Exception):
+    """A failure from the x64dbg side, with a machine-readable code."""
+
+    def __init__(self, message: str, code: str = "X64DBG_ERROR") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _x64dbg_instance() -> dict:
+    """Find an x64dbg MCP server.
+
+    The plugin binds 9094 for a 64-bit debuggee and 9095 for a 32-bit one,
+    and the ports around them are tried too. A server that answers 401 is
+    still a server: it means the token is wrong, which is worth saying.
+
+    The ports are probed concurrently, and the probe timeout is short. A
+    closed local port does not refuse straight away on Windows - it hangs on
+    the first SYN and is only refused about two seconds later - so probing
+    them one at a time with a long timeout would cost a couple of seconds per
+    port. A live instance answers in milliseconds, so a third of a second is
+    plenty to tell it from a closed port.
+    """
+    settings = _x64dbg_settings()
+
+    def _probe(port: int) -> Optional[str]:
+        """The port that answered, or None."""
+        try:
+            _x64dbg_post(settings["host"], port, settings["token"], "initialize", {
+                "protocolVersion": X64DBG_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "ghydramcp", "version": BRIDGE_VERSION},
+            }, timeout=X64DBG_PROBE_READ_TIMEOUT,
+                connect_timeout=X64DBG_PROBE_CONNECT_TIMEOUT, idempotent=True)
+        except _X64dbgFailure as exc:
+            return "unauthorized" if exc.code == "X64DBG_UNAUTHORIZED" else None
+        return str(port)
+
+    # The configured port and the two defaults are where the server almost
+    # always is, so they are probed first, and the wider walk only happens
+    # when none of them answered.
+    likely = list(dict.fromkeys([settings["port"], X64DBG_DEFAULT_PORT, X64DBG_X32_PORT]))
+    others = [
+        candidate + offset
+        for offset in range(1, X64DBG_PORT_SCAN)
+        for candidate in (X64DBG_DEFAULT_PORT, X64DBG_X32_PORT)
+        if (candidate + offset) not in likely
+    ]
+
+    unauthorized = False
+    for group in (likely, others):
+        if not group:
+            continue
+        with ThreadPoolExecutor(max_workers=min(16, len(group))) as pool:
+            answers = list(pool.map(_probe, group))
+        for port, answer in zip(group, answers):
+            if answer and answer != "unauthorized":
+                return {
+                    "host": settings["host"], "port": port, "token": settings["token"],
+                    "path": settings["path"], "unauthorized": False,
+                }
+        if any(answer == "unauthorized" for answer in answers):
+            unauthorized = True
+            break
+
+    if unauthorized:
+        raise _X64dbgFailure(
+            "an x64dbg MCP server answered but rejected the bearer token; set "
+            '"x64dbg": {"token": ...} in ~/.ghydra/config.json, or point '
+            '"x64dbg": {"path": ...} at the x64dbg installation',
+            "X64DBG_UNAUTHORIZED",
+        )
+    raise _X64dbgFailure(
+        "no x64dbg MCP server answered on the ports around 9094; is x64dbg running "
+        "with the plugin loaded?",
+        "X64DBG_MISSING",
+    )
+
+
+def _x64dbg_is_read_only(instance: dict, name: str) -> bool:
+    """Whether the plugin marks a tool as read-only.
+
+    The catalogue carries the hint, and it is fetched once and kept: the tool
+    set does not change while the debugger runs.
+    """
+    key = f"{instance['host']}:{instance['port']}:{name}"
+    if key not in _X64DBG_READ_ONLY:
+        try:
+            result = _x64dbg_post(
+                instance["host"], instance["port"], instance["token"], "tools/list",
+                timeout=X64DBG_READ_TIMEOUT, idempotent=True,
+            )
+        except _X64dbgFailure:
+            return False
+        tools = result.get("tools") if isinstance(result, dict) else None
+        for tool in tools or []:
+            if not isinstance(tool, dict):
+                continue
+            annotations = tool.get("annotations") or {}
+            tool_key = f"{instance['host']}:{instance['port']}:{tool.get('name')}"
+            _X64DBG_READ_ONLY[tool_key] = bool(annotations.get("readOnlyHint"))
+    return _X64DBG_READ_ONLY.get(key, False)
+
+
+def _x64dbg_call_tool(instance: dict, name: str, arguments: Optional[dict] = None,
+                      timeout: Optional[float] = None) -> str:
+    """Call one plugin tool and return its text.
+
+    A read-only tool may be called again when the transport fails; a tool
+    that changes the debuggee may not, because the first attempt may already
+    have reached it.
+    """
+    result = _x64dbg_post(
+        instance["host"], instance["port"], instance["token"], "tools/call",
+        {"name": name, "arguments": arguments or {}}, timeout=timeout,
+        idempotent=_x64dbg_is_read_only(instance, name),
+    )
+    if isinstance(result, dict):
+        content = result.get("content")
+        if isinstance(content, list):
+            parts = [
+                str(item.get("text", ""))
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            ]
+            if parts:
+                return "\n".join(parts)
+        if result.get("isError"):
+            raise _X64dbgFailure("the tool reported an error", "X64DBG_ERROR")
+        if "text" in result:
+            return str(result["text"])
+    return ""
+
+
+def _x64dbg_normalize_path(path: str) -> str:
+    """A path that the two sides can be compared on.
+
+    The x64dbg side reports the module path with the Win32 extended-length
+    prefix and in its own case; Ghidra reports the executable path as the
+    file system gave it.
+    """
+    text = str(path or "").strip().strip('"')
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    if not text:
+        return ""
+    try:
+        return os.path.normcase(os.path.abspath(text))
+    except (OSError, ValueError):
+        return os.path.normcase(text)
+
+
+def _x64dbg_parse_modules(text: str) -> List[dict]:
+    """The modules out of the ListModules text.
+
+    The tool answers one module per line, "0xBASE | 0xSIZE | PATH".
+    """
+    modules: List[dict] = []
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) < 3:
+            continue
+        try:
+            base = int(parts[0], 16)
+            size = int(parts[1], 16)
+        except ValueError:
+            continue
+        modules.append({"base": base, "size": size, "path": "|".join(parts[2:]).strip()})
+    return modules
+
+
+def _x64dbg_find_module(modules: List[dict], binary_path: str) -> Optional[dict]:
+    """The module that is the given binary.
+
+    The paths are compared first as full paths and then by file name: the two
+    sides can disagree about the directory - a copy, a symlink, a different
+    drive letter - but not about the file.
+    """
+    wanted = _x64dbg_normalize_path(binary_path)
+    if not wanted:
+        return None
+    for module in modules:
+        if _x64dbg_normalize_path(module.get("path", "")) == wanted:
+            return module
+    wanted_name = os.path.basename(wanted).lower()
+    for module in modules:
+        candidate = _x64dbg_normalize_path(module.get("path", ""))
+        if candidate and os.path.basename(candidate).lower() == wanted_name:
+            return module
+    return None
+
+
+def _x64dbg_parse_int(value: Any) -> Optional[int]:
+    """An address, however it was written: "0x140001000", "140001000" or 0."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.lower().startswith("0x"):
+            return int(text, 16)
+        return int(text, 16) if all(char in "0123456789abcdefABCDEF" for char in text) \
+            else int(text, 10)
+    except ValueError:
+        return None
+
+
+def _x64dbg_program_info(port: int) -> dict:
+    """The Ghidra program's image base and executable path."""
+    response = safe_get(port, "/program")
+    if not response.get("success", False):
+        error = response.get("error") or {}
+        raise _X64dbgFailure(
+            error.get("message", "the Ghidra instance did not answer /program"),
+            "X64DBG_ERROR",
+        )
+    result = response.get("result") or {}
+    return {
+        "path": result.get("path") or result.get("executable") or "",
+        "image_base": _x64dbg_parse_int(result.get("imageBase", result.get("image_base"))),
+        "name": result.get("name") or "",
+    }
+
+
+def _x64dbg_target_descriptor(port: int | None = None) -> dict:
+    """Correlate the Ghidra program with the x64dbg session.
+
+    The two sides disagree about addresses by a constant, and this is what
+    works out that constant: the image base Ghidra loads the file at, and the
+    base the loader gave the module in the process.
+    """
+    ghidra_port = _get_instance_port(port)
+    program = _x64dbg_program_info(ghidra_port)
+    instance = _x64dbg_instance()
+    text = _x64dbg_call_tool(instance, "ListModules")
+    modules = _x64dbg_parse_modules(text)
+
+    binary_path = program.get("path") or ""
+    module = _x64dbg_find_module(modules, binary_path)
+    if module is None:
+        raise _X64dbgFailure(
+            f"no loaded module matches the binary Ghidra has open ({binary_path or 'unknown'}); "
+            f"the loaded modules are: " + ", ".join(item["path"] for item in modules),
+            "X64DBG_NO_MATCH",
+        )
+
+    image_base = program.get("image_base")
+    if image_base is None:
+        raise _X64dbgFailure(
+            "the Ghidra instance did not report an image base for this program",
+            "X64DBG_ERROR",
+        )
+
+    module_base = module["base"]
+    return {
+        "ghidra_port": ghidra_port,
+        "binary": binary_path,
+        "image_base": image_base,
+        "module_base": module_base,
+        "module_size": module.get("size"),
+        "module_path": module.get("path"),
+        "delta": module_base - image_base,
+        "x64dbg_host": instance["host"],
+        "x64dbg_port": instance["port"],
+    }
+
+
+@mcp.tool()
+@text_output
+def x64dbg_status() -> dict:
+    """Whether the x64dbg MCP server is reachable, and what it is doing.
+
+    The x64dbg plugin is an MCP server that lives inside the debugger. It
+    answers on 127.0.0.1:9094 for a 64-bit debuggee and :9095 for a 32-bit
+    one, and it wants a bearer token. Point at it with "x64dbg": {"port": ...,
+    "token": ...} in ~/.ghydra/config.json, or with "path" pointing at the
+    x64dbg installation, and the token is read from the plugin's own
+    mcp_config.json.
+
+    Returns:
+        dict: Whether the server answered, where it is, how many tools it
+              has and the modules it has loaded
+    """
+    try:
+        instance = _x64dbg_instance()
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    try:
+        tools = _x64dbg_post(
+            instance["host"], instance["port"], instance["token"], "tools/list",
+            timeout=X64DBG_READ_TIMEOUT, idempotent=True,
+        )
+        tool_list = tools.get("tools") if isinstance(tools, dict) else None
+        tool_list = tool_list if isinstance(tool_list, list) else []
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    modules: List[dict] = []
+    debug_state = None
+    try:
+        text = _x64dbg_call_tool(instance, "ListModules")
+        modules = _x64dbg_parse_modules(text)
+    except _X64dbgFailure:
+        modules = []
+    try:
+        debug_state = _x64dbg_call_tool(instance, "GetDebugState").strip()
+    except _X64dbgFailure:
+        debug_state = None
+
+    return {
+        "success": True,
+        "result": {
+            "reachable": True,
+            "host": instance["host"],
+            "port": instance["port"],
+            "tools": len(tool_list),
+            "modules": modules,
+            "debug_state": debug_state,
+        },
+    }
+
+
+@mcp.tool()
+@text_output
+def x64dbg_tools() -> dict:
+    """The x64dbg plugin's tool catalogue, with the schema of each tool.
+
+    The plugin carries eighty tools. They are not exposed one by one here -
+    that would drown the agent's tool list - so the catalogue is exposed
+    instead, and x64dbg_call invokes any of them by name.
+
+    Returns:
+        dict: The tools: name, description and input schema
+    """
+    try:
+        instance = _x64dbg_instance()
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    try:
+        result = _x64dbg_post(
+            instance["host"], instance["port"], instance["token"], "tools/list",
+            timeout=X64DBG_READ_TIMEOUT, idempotent=True,
+        )
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    tools = result.get("tools") if isinstance(result, dict) else None
+    tools = tools if isinstance(tools, list) else []
+    return {
+        "success": True,
+        "result": {
+            "count": len(tools),
+            "tools": [
+                {
+                    "name": tool.get("name"),
+                    "description": tool.get("description"),
+                    "input_schema": tool.get("inputSchema"),
+                    "read_only": bool(
+                        (tool.get("annotations") or {}).get("readOnlyHint")),
+                }
+                for tool in tools if isinstance(tool, dict)
+            ],
+        },
+    }
+
+
+@mcp.tool()
+@text_output
+def x64dbg_call(tool: str, arguments: dict | None = None,
+                timeout: int | None = None) -> dict:
+    """Call one of the x64dbg plugin's tools by name.
+
+    The name and the arguments are the ones x64dbg_tools reports. Every
+    response carries a "[state]" line and any debugger events that fired
+    since the last call, so read them.
+
+    A tool the plugin marks as read-only may be called again when the
+    transport fails; one that changes the debuggee is never repeated, because
+    the first attempt may already have reached it.
+
+    Args:
+        tool: The plugin tool to call, for example "SetBreakpoint"
+        arguments: The arguments for that tool
+        timeout: How long to wait, in seconds (30 by default). The tools that
+            block - run, WaitForEvent, WaitForPause - need more than that.
+
+    Returns:
+        dict: The tool's text
+    """
+    if not tool:
+        return _x64dbg_error("tool is required", code="X64DBG_BAD_ARGS")
+    try:
+        instance = _x64dbg_instance()
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+    try:
+        text = _x64dbg_call_tool(
+            instance, tool, arguments or {},
+            timeout=float(timeout) if timeout else None,
+        )
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+    return {"success": True, "result": {"tool": tool, "text": text}}
+
+
+@mcp.tool()
+@text_output
+def x64dbg_target(port: int | None = None) -> dict:
+    """Correlate the Ghidra program with the x64dbg session.
+
+    Ghidra works on the image as it sits in the file, at the image base.
+    x64dbg works on the live process, where the loader put the module
+    somewhere else. The two differ by a constant, and this is what works it
+    out: the image base of the program Ghidra has open, and the base of the
+    module x64dbg has loaded.
+
+    The result carries both bases and the delta between them, so a static
+    address can be turned into a runtime one and back.
+
+    Args:
+        port: The Ghidra instance (the current one by default)
+
+    Returns:
+        dict: The image base, the module base, the delta and the binary
+    """
+    try:
+        descriptor = _x64dbg_target_descriptor(port)
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+    except ValueError as exc:
+        return _x64dbg_error(str(exc), code="X64DBG_ERROR")
+    return {"success": True, "result": descriptor}
+
+
+@mcp.tool()
+@text_output
+def x64dbg_breakpoint_at(address: str, port: int | None = None) -> dict:
+    """Set a breakpoint on a Ghidra address.
+
+    The address is the static one - the one Ghidra shows, the one static
+    analysis just found - and it is translated into the runtime address
+    before the breakpoint is set. This is the step that turns a function
+    recovered by decompilation into a place the debugger actually stops.
+
+    Args:
+        address: The static address, as Ghidra shows it ("0x140001234")
+        port: The Ghidra instance (the current one by default)
+
+    Returns:
+        dict: The static and the runtime address, and what the plugin said
+    """
+    static_address = _x64dbg_parse_int(address)
+    if static_address is None:
+        return _x64dbg_error(
+            f"'{address}' is not an address", code="X64DBG_BAD_ARGS"
+        )
+    try:
+        descriptor = _x64dbg_target_descriptor(port)
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+    except ValueError as exc:
+        return _x64dbg_error(str(exc), code="X64DBG_ERROR")
+
+    runtime = static_address - descriptor["image_base"] + descriptor["module_base"]
+    try:
+        instance = _x64dbg_instance()
+        text = _x64dbg_call_tool(instance, "SetBreakpoint", {"target": hex(runtime)})
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    return {
+        "success": True,
+        "result": {
+            "static_address": hex(static_address),
+            "runtime_address": hex(runtime),
+            "image_base": hex(descriptor["image_base"]),
+            "module_base": hex(descriptor["module_base"]),
+            "binary": descriptor["binary"],
+            "text": text,
+        },
+    }
+
+
+@mcp.tool()
+@text_output
+def x64dbg_go_to(address: str, port: int | None = None) -> dict:
+    """Move the instruction pointer to a Ghidra address.
+
+    The address is translated from the static one into the runtime one, the
+    same way x64dbg_breakpoint_at does it.
+
+    Args:
+        address: The static address, as Ghidra shows it ("0x140001234")
+        port: The Ghidra instance (the current one by default)
+
+    Returns:
+        dict: The static and the runtime address, and what the plugin said
+    """
+    static_address = _x64dbg_parse_int(address)
+    if static_address is None:
+        return _x64dbg_error(
+            f"'{address}' is not an address", code="X64DBG_BAD_ARGS"
+        )
+    try:
+        descriptor = _x64dbg_target_descriptor(port)
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+    except ValueError as exc:
+        return _x64dbg_error(str(exc), code="X64DBG_ERROR")
+
+    runtime = static_address - descriptor["image_base"] + descriptor["module_base"]
+    try:
+        instance = _x64dbg_instance()
+        text = _x64dbg_call_tool(instance, "Disassemble", {"address": hex(runtime)})
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    return {
+        "success": True,
+        "result": {
+            "static_address": hex(static_address),
+            "runtime_address": hex(runtime),
+            "binary": descriptor["binary"],
+            "text": text,
+        },
+    }
 
 
 # ================= Project Management =================

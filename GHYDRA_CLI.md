@@ -308,6 +308,60 @@ ghydra kuna status                    # lists the exports on this machine with t
 ghydra kuna export-read 9f2c1a4b7e03 main
 ```
 
+## x64dbg Commands
+
+The `x64dbg` group drives the [x64dbg MCP server](https://github.com/duty1g/x64dbg-mcp-server), the
+plugin that lives inside the debugger. It is local: no Ghidra instance is involved for the
+debugger itself, but the workflow commands read the image base from Ghidra.
+
+```bash
+# Is the debugger there, and what is it looking at
+ghydra x64dbg status
+
+# The plugin's catalogue: eighty tools, with their schemas
+ghydra x64dbg tools
+
+# Call any of them by name
+ghydra x64dbg call GetAllRegisters
+ghydra x64dbg call SetBreakpoint --arg target=0x7FF7A1234000
+ghydra x64dbg call ReadMemory --json-args '{"address": "0x7FF7A1234000", "size": 64}'
+
+# The tools that block need more time than the default 30 seconds
+ghydra x64dbg call WaitForEvent --json-args '{"timeoutMs": 60000}' --timeout 90
+
+# How the Ghidra program and the x64dbg session line up
+ghydra x64dbg target
+
+# A breakpoint on a Ghidra address, translated into the runtime address
+ghydra x64dbg breakpoint 0x140001234
+
+# Move the instruction pointer there
+ghydra x64dbg go-to 0x140001234
+
+# Machine-readable
+ghydra --json x64dbg target
+```
+
+The addresses are the **static** ones — the addresses Ghidra shows. The translation is
+`runtime = static − image_base + module_base`, and the two binaries are matched by full path
+first and by file name second.
+
+The plugin wants a bearer token, and it writes it to its own `mcp_config.json`. Pointing at the
+installation is enough:
+
+```json
+{
+  "x64dbg": {
+    "path": "C:/tools/x64dbg"
+  }
+}
+```
+
+`"host"`, `"port"` and `"token"` set it outright, and `GHYDRA_X64DBG_HOST`, `GHYDRA_X64DBG_PORT`
+and `GHYDRA_X64DBG_TOKEN` do the same from the environment. The config file wins.
+
+**[GHYDRA_X64DBG.md](GHYDRA_X64DBG.md)** is the full reference.
+
 ## Remaining Command Groups to Implement
 
 The following command groups follow the same pattern as `instances` and `functions`. Here's how to implement them:
