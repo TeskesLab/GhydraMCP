@@ -2174,7 +2174,7 @@ def format_x64dbg_tools(response: dict, **kwargs) -> str:
         if description:
             lines.append(f"    {description}")
     lines.append("")
-    lines.append("Call one with x64dbg_call(tool='<name>', arguments={...}).")
+    lines.append("Call one with x64dbg_call(tool='<name>', tool_arguments={...}).")
     return "\n".join(lines)
 
 
@@ -6396,7 +6396,7 @@ def x64dbg_tools() -> dict:
 
 @mcp.tool()
 @text_output
-def x64dbg_call(tool: str, arguments: dict | None = None,
+def x64dbg_call(tool: str, tool_arguments: dict | None = None,
                 timeout: int | None = None) -> dict:
     """Call one of the x64dbg plugin's tools by name.
 
@@ -6408,9 +6408,14 @@ def x64dbg_call(tool: str, arguments: dict | None = None,
     transport fails; one that changes the debuggee is never repeated, because
     the first attempt may already have reached it.
 
+    The arguments are called "tool_arguments" and not "arguments" on purpose:
+    "arguments" is the name of the container the MCP protocol itself uses
+    for a tool's parameters, and a client that flattens the two loses the
+    value on the floor.
+
     Args:
         tool: The plugin tool to call, for example "SetBreakpoint"
-        arguments: The arguments for that tool
+        tool_arguments: The arguments for that tool
         timeout: How long to wait, in seconds (30 by default). The tools that
             block - run, WaitForEvent, WaitForPause - need more than that.
 
@@ -6425,7 +6430,7 @@ def x64dbg_call(tool: str, arguments: dict | None = None,
         return _x64dbg_error(str(exc), code=exc.code)
     try:
         text = _x64dbg_call_tool(
-            instance, tool, arguments or {},
+            instance, tool, tool_arguments or {},
             timeout=float(timeout) if timeout else None,
         )
     except _X64dbgFailure as exc:

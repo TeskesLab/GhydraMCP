@@ -184,6 +184,13 @@ The bridge and the CLI duplicate all request logic, so one endpoint means **six*
 
 Name tools `resource_verb` (`functions_get_cfg`, `data_create`).
 
+**A tool parameter must not be called `arguments`.** That is the name of the container the MCP
+protocol uses for a tool's parameters, so a client that flattens the two loses the value — the
+call goes through with no arguments and the tool does something else instead of failing. It
+happened to `x64dbg_call`, and the unit tests did not catch it because they called the function
+instead of the protocol: `test_x64dbg.py` now drives a tool through `mcp.call_tool(...)`, and a
+guard asserts that no bridge tool declares a parameter the protocol reserves.
+
 Note `safe_put`/`safe_post`/`safe_patch` **mutate the payload you pass in** (`data.pop("headers", None)`).
 The popped `headers` dict is the only way to satisfy the server's Origin check on state-changing
 calls, so don't reuse a literal dict across calls.

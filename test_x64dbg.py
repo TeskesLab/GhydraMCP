@@ -535,6 +535,48 @@ class X64dbgBridgeTests(unittest.TestCase):
         self.assertTrue(result["success"], result)
         self.assertIn("0x7FF7A1230000", result["result"]["text"])
 
+    def test_the_arguments_reach_the_plugin_through_the_mcp_binding(self):
+        """The arguments have to survive the protocol, not just the call.
+
+        Calling the function directly is not the same thing: the MCP layer
+        binds the parameters, and a parameter called "arguments" collides
+        with the name of the container the protocol uses for them. A client
+        that flattens the two loses the value - and the tool silently does
+        the wrong thing instead of failing.
+        """
+        import asyncio
+
+        async def call():
+            return await bridge.mcp.call_tool("x64dbg_call", {
+                "tool": "SetBreakpoint",
+                "tool_arguments": {"target": "0x7FF7A1234000"},
+            })
+
+        content = asyncio.run(call())
+        text = "\n".join(
+            item.get("text", "") if isinstance(item, dict)
+            else getattr(item, "text", "")
+            for item in content
+        )
+        self.assertIn(("SetBreakpoint", {"target": "0x7FF7A1234000"}), self.fake.calls,
+                      "the arguments did not reach the plugin")
+        self.assertIn("Breakpoint set", text)
+
+    def test_no_tool_declares_a_parameter_the_protocol_reserves(self):
+        """"arguments" is the container the protocol uses for the parameters.
+
+        A tool parameter with that name is a hazard: a client that flattens
+        the two drops the value, and the tool does something else instead of
+        failing.
+        """
+        reserved = ("arguments",)
+        for tool in bridge.mcp._tool_manager.list_tools():
+            schema = getattr(tool, "parameters", None) or {}
+            properties = list((schema.get("properties") or {}).keys())
+            with self.subTest(tool=tool.name):
+                for name in properties:
+                    self.assertNotIn(name, reserved)
+
     def test_the_address_is_translated_for_the_breakpoint(self):
         """The whole point: a Ghidra address becomes a live breakpoint."""
         program = {

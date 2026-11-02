@@ -115,13 +115,17 @@ sixty tools picks badly, so the catalogue and a generic pass-through are exposed
 | `x64dbg_breakpoint_at` | Set a breakpoint on a Ghidra address, translated into the runtime address |
 | `x64dbg_go_to` | Move the instruction pointer to a Ghidra address, translated the same way |
 
-`x64dbg_call` takes a `timeout`, in seconds (30 by default). The tools that block — `run`,
-`WaitForEvent`, `WaitForPause` — need more:
+`x64dbg_call` takes a `timeout`, in seconds (30 by default), and the plugin's own arguments in
+`tool_arguments`. The tools that block — `run`, `WaitForEvent`, `WaitForPause` — need more:
 
 ```python
 client.use_tool("ghydra", "x64dbg_call",
-                {"tool": "WaitForEvent", "arguments": {"timeoutMs": 60000}, "timeout": 90})
+                {"tool": "WaitForEvent", "tool_arguments": {"timeoutMs": 60000}, "timeout": 90})
 ```
+
+The arguments are called `tool_arguments` and not `arguments` because `arguments` is the name of
+the container the MCP protocol itself uses for a tool's parameters. A client that flattens the
+two loses the value, and the tool then does something else instead of failing.
 
 The debugger is local, so these tools take no `port` for it. The workflow tools take one, and it
 is the **Ghidra** instance, as everywhere else in the bridge.
