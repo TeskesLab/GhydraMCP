@@ -74,7 +74,7 @@ def _emit(ctx, kind, data):
 def _fail(ctx, exc):
     """Report a failure and stop with a non-zero exit code.
 
-    The code goes with it: the nine x64dbg codes are what an agent branches
+    The code goes with it: the ten x64dbg codes are what an agent branches
     on, and the bridge reports them the same way.
     """
     code = getattr(exc, "code", "") or ""

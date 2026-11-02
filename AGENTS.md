@@ -235,9 +235,11 @@ config precedence, the address model, the bridge tools and the error taxonomy.
 
 **The x64dbg suite is not immune to the network stack.** A local TCP connection is reset every
 now and then on this machine (measured: 7%), so a suite that opens dozens of connections will
-see a failure every now and then unless the client retries — which it does. When a test fails
-there, look at the transport before the logic: `X64DBG_MISSING` with a `ConnectionResetError`
-underneath is the machine, not the code.
+see a failure every now and then unless the client retries — which it does, but only where
+repeating is safe. When a test fails there, look at the transport before the logic: a
+`ConnectionResetError` underneath is the machine, not the code. It reaches the test as
+`X64DBG_UNCERTAIN` when the tool changes the debuggee (the request was delivered and its
+answer was lost, so it was not repeated) and as `X64DBG_MISSING` when it did not leave.
 
 Target selection is inconsistent and worth knowing:
 - `test_javalin_port.py` honors `GHYDRAMCP_TEST_HOST` **and** `GHYDRAMCP_TEST_PORT`.

@@ -134,15 +134,16 @@ ghydra x64dbg go-to 0x140001234
 
 ## Failures carry a code
 
-The bridge and the CLI carry the same nine codes, so an agent can branch on the reason instead
+The bridge and the CLI carry the same ten codes, so an agent can branch on the reason instead
 of reading prose:
 
 | Code | What it means |
 | --- | --- |
 | `X64DBG_ERROR` | The generic fallback |
 | `X64DBG_DISABLED` | No token, so no way to talk to the server |
-| `X64DBG_MISSING` | Nothing answered on the port |
+| `X64DBG_MISSING` | Nothing answered on the port, and the request never left |
 | `X64DBG_TIMEOUT` | The server did not answer in time |
+| `X64DBG_UNCERTAIN` | The request was sent but the answer was lost: the debugger may already have acted |
 | `X64DBG_UNAUTHORIZED` | The bearer token did not match |
 | `X64DBG_NO_SESSION` | No debug session in x64dbg |
 | `X64DBG_NO_TOOL` | The plugin has no tool with that name |
@@ -167,6 +168,15 @@ while the answer was coming: the plugin marks every tool with `annotations.readO
 read-only tool may be called again; a tool that changes the debuggee is not repeated, because
 the first attempt may already have reached it. A connection that never came up is the one
 exception: the request was never sent, so it is always safe to try again.
+
+That last distinction is the one an agent has to be told about, because the two failures look the
+same from the outside and mean opposite things. `X64DBG_MISSING` means "nothing was sent, nothing
+happened, the debugger is not listening". `X64DBG_UNCERTAIN` means "the debugger took the request
+and the answer was lost on the way back" — the connection died after the request was handed over,
+which is what the local network stack does to about one connection in fourteen. The request was
+not repeated, because the debugger may already have acted on it: a breakpoint may be set, and the
+state of the debuggee is unknown. A read-only tool never ends in `X64DBG_UNCERTAIN`, because it
+is always safe to send it again.
 
 The connect timeout and the read timeout are separate for the same reason: a closed local port
 does not refuse straight away on Windows — the SYN hangs and is only refused about two seconds

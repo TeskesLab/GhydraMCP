@@ -5736,6 +5736,7 @@ X64DBG_ERROR_CODES = (
     "X64DBG_DISABLED",      # no token, so no way to talk to the server
     "X64DBG_MISSING",       # nothing answered on the port
     "X64DBG_TIMEOUT",       # the server did not answer in time
+    "X64DBG_UNCERTAIN",     # the request was sent but the answer was lost
     "X64DBG_UNAUTHORIZED",  # the bearer token did not match
     "X64DBG_NO_SESSION",    # no debug session in x64dbg
     "X64DBG_NO_TOOL",       # the plugin has no tool with that name
@@ -5863,6 +5864,26 @@ def _x64dbg_never_sent(exc: BaseException) -> bool:
     return False
 
 
+def _x64dbg_uncertain(reason: str) -> str:
+    """The failure when a request was delivered and its answer was lost.
+
+    The local network stack resets a loopback connection every now and then,
+    so a request can reach the debugger and still lose its answer on the way
+    back. The debugger may then have acted on it - and a request that changes
+    the debuggee is never sent twice, because the second one would act on an
+    unknown state. The caller has to be told that the state is unknown
+    instead of being told that the server is gone.
+    """
+    return ("the x64dbg MCP server took the request but the answer was lost "
+            f"({reason}). The request was not repeated, so the debugger may "
+            "already have acted on it.")
+
+
+def _x64dbg_repeatable(reason: str) -> str:
+    """The failure when a request that may be sent again did not get through."""
+    return f"{reason}. The request is safe to repeat."
+
+
 def _x64dbg_post(host: str, port: int, token: str, method: str,
                  params: Optional[dict] = None, timeout: Optional[float] = None,
                  connect_timeout: Optional[float] = None,
@@ -5923,15 +5944,15 @@ def _x64dbg_post(host: str, port: int, token: str, method: str,
                 f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"
             ) from None
         except requests.ReadTimeout as exc:
-            # The server did not answer in time. Only a request that is safe
-            # to repeat may be tried again.
+            # The request was delivered and the answer did not come back.
+            # Only a request that is safe to repeat may be tried again.
             delivered_left -= 1
             if delivered_left > 0:
                 continue
-            raise _X64dbgFailure(
-                f"the x64dbg MCP server did not answer within {read_limit}s",
-                "X64DBG_TIMEOUT",
-            ) from None
+            reason = f"the x64dbg MCP server did not answer within {read_limit}s"
+            if idempotent:
+                raise _X64dbgFailure(_x64dbg_repeatable(reason), "X64DBG_TIMEOUT") from None
+            raise _X64dbgFailure(_x64dbg_uncertain(reason), "X64DBG_UNCERTAIN") from None
         except requests.Timeout as exc:
             raise _X64dbgFailure(
                 f"the x64dbg MCP server did not answer within {read_limit}s",
@@ -5944,18 +5965,21 @@ def _x64dbg_post(host: str, port: int, token: str, method: str,
                 connect_left -= 1
                 if connect_left > 0:
                     continue
-            else:
-                # The connection died while the answer was coming. The plugin
-                # hangs up after every response, and the local network stack
-                # resets a connection every now and then, but the server may
-                # already have acted on the request - so only a request that is
-                # safe to repeat is tried again.
-                delivered_left -= 1
-                if delivered_left > 0:
-                    continue
-            raise _X64dbgFailure(
-                f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"
-            ) from None
+                raise _X64dbgFailure(
+                    f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"
+                ) from None
+            # The connection died while the answer was coming. The plugin
+            # hangs up after every response, and the local network stack
+            # resets a connection every now and then, but the server may
+            # already have acted on the request - so only a request that is
+            # safe to repeat is tried again.
+            delivered_left -= 1
+            if delivered_left > 0:
+                continue
+            reason = (f"the connection to {url} died while the answer was coming: {exc}")
+            if idempotent:
+                raise _X64dbgFailure(_x64dbg_repeatable(reason), "X64DBG_MISSING") from None
+            raise _X64dbgFailure(_x64dbg_uncertain(reason), "X64DBG_UNCERTAIN") from None
         except requests.RequestException as exc:
             raise _X64dbgFailure(
                 f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"

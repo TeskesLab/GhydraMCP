@@ -260,7 +260,8 @@ class X64dbgRetryTests(unittest.TestCase):
             client = x64dbg_helper.Client("127.0.0.1", fake.port, "test-token")
             with self.assertRaises(x64dbg_helper.X64dbgError) as caught:
                 client.call_tool("SetBreakpoint", {"target": "0x7FF7A1234000"})
-            self.assertEqual(caught.exception.code, "X64DBG_MISSING")
+            self.assertEqual(caught.exception.code, "X64DBG_UNCERTAIN")
+            self.assertIn("may already have acted", str(caught.exception))
             self.assertEqual(
                 [name for name, _ in fake.calls], ["SetBreakpoint"],
                 "the mutating tool was delivered more than once")
@@ -277,10 +278,30 @@ class X64dbgRetryTests(unittest.TestCase):
                         {"host": "127.0.0.1", "port": fake.port,
                          "token": "test-token", "path": ""},
                         "SetBreakpoint", {"target": "0x7FF7A1234000"})
-            self.assertEqual(caught.exception.code, "X64DBG_MISSING")
+            self.assertEqual(caught.exception.code, "X64DBG_UNCERTAIN")
             self.assertEqual(
                 [name for name, _ in fake.calls], ["SetBreakpoint"],
                 "the mutating tool was delivered more than once")
+
+    def test_a_request_that_never_left_says_the_server_is_missing(self):
+        """Nothing was sent, so nothing may have happened: the server is gone.
+
+        This is the other half of the pair. A connection that never came up
+        is not the same as a connection that died on the way back, and the
+        two deserve different codes: the first one means "the debugger is
+        not there", the second one means "the debugger may already have
+        acted". urllib3 names the two cases, and the client reads the name.
+        """
+        class NewConnectionError(Exception):
+            """The name urllib3 gives the failure of the connect phase."""
+
+        failure = x64dbg_helper.requests.ConnectionError("connection refused")
+        failure.__cause__ = NewConnectionError("refused")
+        with mock.patch.object(x64dbg_helper.requests, "post", side_effect=failure):
+            client = x64dbg_helper.Client("127.0.0.1", 9094, "test-token")
+            with self.assertRaises(x64dbg_helper.X64dbgError) as caught:
+                client.call_tool("SetBreakpoint", {"target": "0x7FF7A1234000"})
+        self.assertEqual(caught.exception.code, "X64DBG_MISSING")
 
 
 class X64dbgCliTests(unittest.TestCase):
@@ -453,6 +474,29 @@ class X64dbgBridgeTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+    def _deliver(self, tool, **kwargs):
+        """Run a bridge call, and run it again if the transport ate it.
+
+        The local network stack on this machine resets about one loopback
+        connection in fourteen - with curl and with plain sockets alike, and
+        with the server seeing nothing at all - so a single request is not a
+        reliable way to reach the fake plugin. The bridge does not repeat a
+        mutating tool, which is the rule under test in X64dbgRetryTests, so
+        the retry belongs here, in the test, where repeating is harmless:
+        the fake server only records the calls.
+        """
+        result = {}
+        for _ in range(3):
+            result = tool(**kwargs)
+            if result.get("success"):
+                return result
+            code = ((result.get("error") or {}).get("code")) or ""
+            if code not in ("X64DBG_MISSING", "X64DBG_TIMEOUT", "X64DBG_UNCERTAIN"):
+                # A real reason - a bad token, no session, a bad address -
+                # must not be papered over by a retry.
+                return result
+        return result
+
     def test_the_status_reports_the_server(self):
         result = bridge.x64dbg_status.__wrapped__()
         self.assertTrue(result["success"], result)
@@ -480,7 +524,8 @@ class X64dbgBridgeTests(unittest.TestCase):
         }
         with mock.patch.object(bridge, "safe_get", return_value=program):
             with mock.patch.object(bridge, "_get_instance_port", return_value=8192):
-                result = bridge.x64dbg_breakpoint_at.__wrapped__(address="0x140001234")
+                result = self._deliver(bridge.x64dbg_breakpoint_at.__wrapped__,
+                                       address="0x140001234")
 
         self.assertTrue(result["success"], result)
         self.assertEqual(result["result"]["static_address"], "0x140001234")
@@ -496,7 +541,8 @@ class X64dbgBridgeTests(unittest.TestCase):
         }
         with mock.patch.object(bridge, "safe_get", return_value=program):
             with mock.patch.object(bridge, "_get_instance_port", return_value=8192):
-                result = bridge.x64dbg_go_to.__wrapped__(address="0x140001234")
+                result = self._deliver(bridge.x64dbg_go_to.__wrapped__,
+                                       address="0x140001234")
 
         self.assertTrue(result["success"], result)
         self.assertEqual(result["result"]["runtime_address"], "0x7ff7a1231234")
