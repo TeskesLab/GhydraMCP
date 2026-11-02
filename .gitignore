@@ -43,6 +43,9 @@ __pypackages__/
 # ---------------------------------------------------------------------------
 # Tooling caches and local state
 # ---------------------------------------------------------------------------
+# Git worktrees live here. Each one is a full checkout of the repository,
+# so it must never be committed.
+/.worktrees/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
