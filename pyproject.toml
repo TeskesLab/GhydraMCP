@@ -32,4 +32,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ghydra"]
-include = ["bridge_mcp_hydra.py", "ghydra/**/*.py"]
+# Defining `packages` disables `include`-based file selection, so the
+# top-level bridge module must be force-included. Without it the wheel ships
+# the `ghydramcp` entry point (bridge_mcp_hydra:main) but not the module,
+# and `uvx --from git+... ghydramcp` fails with
+# "ModuleNotFoundError: No module named 'bridge_mcp_hydra'".
+[tool.hatch.build.targets.wheel.force-include]
+"bridge_mcp_hydra.py" = "bridge_mcp_hydra.py"
