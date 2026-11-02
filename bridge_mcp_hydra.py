@@ -5697,6 +5697,8 @@ X64DBG_PORT_SCAN = 32             # ports to try when looking for an instance
 X64DBG_ENV_HOST = "GHYDRA_X64DBG_HOST"
 X64DBG_ENV_PORT = "GHYDRA_X64DBG_PORT"
 X64DBG_ENV_TOKEN = "GHYDRA_X64DBG_TOKEN"
+# The plugin asks the OS for the path of the *process*, so the file lands
+# next to x64dbg.exe and not next to the plugin DLL.
 X64DBG_PLUGIN_CONFIG_NAME = "mcp_config.json"
 X64DBG_PROTOCOL_VERSION = "2024-11-05"
 

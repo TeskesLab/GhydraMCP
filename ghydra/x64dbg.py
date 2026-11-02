@@ -69,7 +69,8 @@ ENV_TOKEN = "GHYDRA_X64DBG_TOKEN"
 
 CONFIG_SECTION = "x64dbg"
 
-# The plugin's own settings file, next to its DLL.
+# The plugin's own settings file. The plugin asks the OS for the path of the
+# *process*, so the file lands next to x64dbg.exe and not next to the DLL.
 PLUGIN_CONFIG_NAME = "mcp_config.json"
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -98,7 +99,7 @@ class X64dbgError(Exception):
 
 
 def read_plugin_config(install: str) -> Dict[str, Any]:
-    """The plugin's own settings, from the mcp_config.json next to its DLL.
+    """The plugin's own settings, from the mcp_config.json next to x64dbg.exe.
 
     The file sits in the x64dbg root or in one of its plugin folders; which
     one depends on how x64dbg was unpacked.
