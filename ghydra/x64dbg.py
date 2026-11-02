@@ -68,6 +68,10 @@ PROBE_READ_TIMEOUT = 2.0
 ENV_HOST = "GHYDRA_X64DBG_HOST"
 ENV_PORT = "GHYDRA_X64DBG_PORT"
 ENV_TOKEN = "GHYDRA_X64DBG_TOKEN"
+# The installation, where the plugin's own mcp_config.json - and with it the
+# token - is found. The token is the one thing that cannot be guessed, so
+# this is what makes the integration usable without editing a config file.
+ENV_PATH = "GHYDRA_X64DBG_PATH"
 
 CONFIG_SECTION = "x64dbg"
 
@@ -143,7 +147,7 @@ def resolve_config(section: Optional[dict] = None) -> Dict[str, Any]:
     host = settings.get("host") or os.environ.get(ENV_HOST) or "127.0.0.1"
     port = settings.get("port") or os.environ.get(ENV_PORT) or DEFAULT_PORT
     token = settings.get("token") or os.environ.get(ENV_TOKEN) or ""
-    install = settings.get("path") or ""
+    install = settings.get("path") or os.environ.get(ENV_PATH) or ""
 
     plugin = read_plugin_config(install) if install else {}
     if not token:

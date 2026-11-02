@@ -8,8 +8,9 @@ dynamic side can be worked in the same session.
 
 The plugin binds 127.0.0.1:9094 for a 64-bit debuggee and :9095 for a 32-bit
 one, and it wants a bearer token. Point at it with "x64dbg": {"port": ...,
-"token": ...} in ~/.ghydra/config.json, or with "path" pointing at the x64dbg
-installation - the token is then read from the plugin's own mcp_config.json.
+"token": ...} in ~/.ghydra/config.json, or with "path" - or
+GHYDRA_X64DBG_PATH - pointing at the x64dbg installation: the token is then
+read from the plugin's own mcp_config.json.
 """
 
 import json
@@ -98,7 +99,8 @@ def _client(ctx, timeout: float = X64DBG_DEFAULT_TIMEOUT):
             raise x64dbg_helper.X64dbgError(
                 "no bearer token for the x64dbg MCP server. Set "
                 '"x64dbg": {"token": "..."} in ~/.ghydra/config.json, or '
-                '"x64dbg": {"path": "C:/tools/x64dbg"} to read it from the '
+                '"x64dbg": {"path": "C:/tools/x64dbg"} - or '
+                "GHYDRA_X64DBG_PATH - to read it from the "
                 "plugin's own mcp_config.json.",
                 code="X64DBG_DISABLED",
             )
@@ -116,7 +118,8 @@ def _client(ctx, timeout: float = X64DBG_DEFAULT_TIMEOUT):
         raise x64dbg_helper.X64dbgError(
             "the x64dbg MCP server rejected the bearer token. Set "
             '"x64dbg": {"token": "..."} in ~/.ghydra/config.json, or '
-            '"x64dbg": {"path": "C:/tools/x64dbg"} to read it from the '
+            '"x64dbg": {"path": "C:/tools/x64dbg"} - or '
+            "GHYDRA_X64DBG_PATH - to read it from the "
             "plugin's own mcp_config.json.",
             code="X64DBG_UNAUTHORIZED",
         )

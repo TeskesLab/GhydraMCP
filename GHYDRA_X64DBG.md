@@ -60,8 +60,28 @@ The `mcp_config.json` in that directory (or in one of its plugin folders) carrie
 }
 ```
 
-The environment carries the same three: `GHYDRA_X64DBG_HOST`, `GHYDRA_X64DBG_PORT` and
-`GHYDRA_X64DBG_TOKEN`. The config file wins over the environment, as everywhere else.
+The environment carries the same, and the path too: `GHYDRA_X64DBG_HOST`, `GHYDRA_X64DBG_PORT`,
+`GHYDRA_X64DBG_TOKEN` and `GHYDRA_X64DBG_PATH`. The config file wins over the environment, as
+everywhere else. The path is worth having in the environment because the token is the one thing
+that cannot be guessed: `GHYDRA_X64DBG_PATH` is enough to make the integration work without
+editing a configuration file at all.
+
+## Verified against the real plugin
+
+The integration was exercised against the real x64dbg plugin — the one built from
+`x64dbg-mcp-server` — with `cmd.exe` loaded under the debugger:
+
+- The plugin wrote its `mcp_config.json` next to `x64dbg.exe`, and the token, the port (9094) and
+  the bind address were read from there.
+- `x64dbg_status` reported the server, its **80 tools**, and the five loaded modules with their
+  runtime bases.
+- The address model was checked against the running debugger: the static entry point of
+  `cmd.exe` (`0x140027B90`, at the image base `0x140000000`) translated to the runtime address of
+  the module as the loader had placed it, and that address disassembled to the real entry stub.
+  The static address on its own is not mapped in the live process and does not disassemble — which
+  is the point of the translation.
+- The breakpoint was then set at that translated address, and the debugger listed it as
+  `cmd.exe!entry breakpoint`: it resolved the address to the entry point by name.
 
 ## The address model
 

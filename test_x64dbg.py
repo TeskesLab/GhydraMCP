@@ -421,6 +421,26 @@ class X64dbgConfigTests(unittest.TestCase):
             settings = x64dbg_helper.resolve_config({})
         self.assertEqual(settings["token"], "from-env")
 
+    def test_the_installation_can_come_from_the_environment(self):
+        """The token is the one thing that cannot be guessed, so the path to
+        the installation is worth having in the environment: it is what makes
+        the integration usable without editing a configuration file."""
+        plugins = os.path.join(self.tmp.name, "x64", "plugins")
+        os.makedirs(plugins)
+        with open(os.path.join(plugins, "mcp_config.json"), "w", encoding="utf-8") as handle:
+            json.dump({"IpAddress": "127.0.0.1", "Port": 9094,
+                       "AuthToken": "plugin-token"}, handle)
+
+        with mock.patch.dict(os.environ, {"GHYDRA_X64DBG_PATH": self.tmp.name}):
+            settings = x64dbg_helper.resolve_config({})
+        self.assertEqual(settings["token"], "plugin-token")
+        self.assertEqual(settings["path"], self.tmp.name)
+
+    def test_the_config_file_wins_over_the_environment_path(self):
+        with mock.patch.dict(os.environ, {"GHYDRA_X64DBG_PATH": "C:/from-env"}):
+            settings = x64dbg_helper.resolve_config({"path": "C:/from-file"})
+        self.assertEqual(settings["path"], "C:/from-file")
+
     def test_the_token_is_read_from_the_plugin_configuration(self):
         """Pointing at the installation is enough: the plugin wrote the token."""
         plugins = os.path.join(self.tmp.name, "x64", "plugins")

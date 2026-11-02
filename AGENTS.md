@@ -414,6 +414,10 @@ plugin API, so it changes neither `API_VERSION` nor the Java side.
   `x64dbg.exe` (it asks the OS for the *process* path, not the DLL's), so
   `"x64dbg": {"path": "<installation>"}` is enough to find it; `"x64dbg": {"token": ...}`
   sets it outright. The plugin's `IpAddress`, `Port` and `AuthToken` keys are the ones in that file.
+  The environment carries `GHYDRA_X64DBG_HOST`, `GHYDRA_X64DBG_PORT`, `GHYDRA_X64DBG_TOKEN` and
+  `GHYDRA_X64DBG_PATH`; the config file wins over the environment, as everywhere else. The path in
+  the environment is what makes the integration usable without editing a configuration file, since
+  the token is the one thing that cannot be guessed.
 - **The port**: 9094 for a 64-bit debuggee and 9095 for a 32-bit one. The released plugin binds
   exactly those two and stops serving if the port is taken; the fixed build (PR #13 upstream)
   walks up to 32 ports instead. The bridge and the CLI look for the port rather than assume it,

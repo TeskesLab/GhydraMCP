@@ -5697,6 +5697,10 @@ X64DBG_PORT_SCAN = 32             # ports to try when looking for an instance
 X64DBG_ENV_HOST = "GHYDRA_X64DBG_HOST"
 X64DBG_ENV_PORT = "GHYDRA_X64DBG_PORT"
 X64DBG_ENV_TOKEN = "GHYDRA_X64DBG_TOKEN"
+# The installation, where the plugin's own mcp_config.json - and with it the
+# token - is found. The token is the one thing that cannot be guessed, so
+# this is what makes the integration usable without editing a config file.
+X64DBG_ENV_PATH = "GHYDRA_X64DBG_PATH"
 # The plugin asks the OS for the path of the *process*, so the file lands
 # next to x64dbg.exe and not next to the plugin DLL.
 X64DBG_PLUGIN_CONFIG_NAME = "mcp_config.json"
@@ -5801,14 +5805,15 @@ def _x64dbg_settings() -> dict:
     """Where the x64dbg MCP server is, and the token to talk to it.
 
     The configuration file wins over the environment. The token cannot be
-    guessed: the plugin writes it to "mcp_config.json" next to its DLL, so
-    pointing at an installed x64dbg with "path" is enough to find it.
+    guessed: the plugin writes it to "mcp_config.json" next to x64dbg.exe, so
+    pointing at an installed x64dbg with "path" - or GHYDRA_X64DBG_PATH - is
+    enough to find it.
     """
     section = _x64dbg_config()
     host = section.get("host") or os.environ.get(X64DBG_ENV_HOST) or "127.0.0.1"
     port = section.get("port") or os.environ.get(X64DBG_ENV_PORT) or X64DBG_DEFAULT_PORT
     token = section.get("token") or os.environ.get(X64DBG_ENV_TOKEN) or ""
-    install = section.get("path") or ""
+    install = section.get("path") or os.environ.get(X64DBG_ENV_PATH) or ""
 
     plugin = _x64dbg_plugin_config(install) if install else {}
     if not token:
@@ -6296,9 +6301,9 @@ def x64dbg_status() -> dict:
     The x64dbg plugin is an MCP server that lives inside the debugger. It
     answers on 127.0.0.1:9094 for a 64-bit debuggee and :9095 for a 32-bit
     one, and it wants a bearer token. Point at it with "x64dbg": {"port": ...,
-    "token": ...} in ~/.ghydra/config.json, or with "path" pointing at the
-    x64dbg installation, and the token is read from the plugin's own
-    mcp_config.json.
+    "token": ...} in ~/.ghydra/config.json, or with "path" - or
+    GHYDRA_X64DBG_PATH - pointing at the x64dbg installation, and the token is
+    read from the plugin's own mcp_config.json.
 
     Returns:
         dict: Whether the server answered, where it is, how many tools it
