@@ -33,9 +33,10 @@ import requests
 DEFAULT_PORT = 9094
 X32_PORT = 9095
 
-# How many ports to try when looking for an instance. The plugin does not walk
-# the ports by itself, but a second instance has to live somewhere.
-PORT_SCAN = 16
+# How many ports to try when looking for an instance. The plugin walks up to
+# 32 ports when the configured one is taken, so the scan has to reach as far
+# as the plugin can go.
+PORT_SCAN = 32
 
 # How many times a connection error is retried. The plugin hangs up after
 # every response, and a local TCP connection is reset every now and then on

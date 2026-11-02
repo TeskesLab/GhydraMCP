@@ -5693,7 +5693,7 @@ _kuna_sync_resources()
 
 X64DBG_DEFAULT_PORT = 9094        # the plugin's default for a 64-bit debuggee
 X64DBG_X32_PORT = 9095            # and for a 32-bit one
-X64DBG_PORT_SCAN = 16             # ports to try when looking for an instance
+X64DBG_PORT_SCAN = 32             # ports to try when looking for an instance
 X64DBG_ENV_HOST = "GHYDRA_X64DBG_HOST"
 X64DBG_ENV_PORT = "GHYDRA_X64DBG_PORT"
 X64DBG_ENV_TOKEN = "GHYDRA_X64DBG_TOKEN"

@@ -29,6 +29,10 @@ It binds `127.0.0.1:9094` for a 64-bit debuggee and `127.0.0.1:9095` for a 32-bi
 wants a bearer token. The token cannot be guessed: the plugin writes it to its own
 `mcp_config.json`, next to its DLL.
 
+When the configured port is taken — a second x64dbg, or anything else on the machine — the
+plugin walks up to the next free port and logs the one it actually bound. The port is therefore
+looked for, not assumed: the scan reaches as far as the plugin can go.
+
 ## Configure it
 
 The token is the one thing that has to be found somewhere. Point at the installation and the

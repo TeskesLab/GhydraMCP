@@ -407,8 +407,9 @@ plugin API, so it changes neither `API_VERSION` nor the Java side.
 - **The token cannot be guessed.** The plugin writes it to its own `mcp_config.json` next to the
   DLL, so `"x64dbg": {"path": "<installation>"}` is enough to find it; `"x64dbg": {"token": ...}`
   sets it outright. The plugin's `IpAddress`, `Port` and `AuthToken` keys are the ones in that file.
-- **The port**: 9094 for a 64-bit debuggee, 9095 for a 32-bit one. The bridge and the CLI look
-  for it instead of assuming it.
+- **The port**: 9094 for a 64-bit debuggee, 9095 for a 32-bit one, and the plugin walks up to 32
+  ports when the configured one is taken. The bridge and the CLI look for the port instead of
+  assuming it, and the scan reaches as far as the plugin can go.
 - **The address model**: `runtime = static − image_base + module_base`. The `image_base` comes
   from the Ghidra `/program` endpoint, the `module_base` from the plugin's `ListModules`. The two
   binaries are matched by full path first and by file name second, because the two sides can
