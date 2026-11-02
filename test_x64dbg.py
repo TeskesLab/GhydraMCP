@@ -519,6 +519,20 @@ class X64dbgBridgeTests(unittest.TestCase):
         self.assertEqual(result["result"]["image_base"], 0x140000000)
         self.assertEqual(result["result"]["module_base"], 0x7FF7A1230000)
 
+    def test_the_token_stays_out_of_the_payload(self):
+        """The descriptor is handed to the agent as it is, so it holds no token."""
+        program = {
+            "success": True,
+            "result": {"path": "C:\\Windows\\System32\\cmd.exe",
+                       "imageBase": "0x140000000"},
+        }
+        with mock.patch.object(bridge, "safe_get", return_value=program):
+            with mock.patch.object(bridge, "_get_instance_port", return_value=8192):
+                result = bridge.x64dbg_target.__wrapped__()
+
+        self.assertTrue(result["success"], result)
+        self.assertNotIn("test-token", json.dumps(result))
+
     def test_a_binary_that_is_not_loaded_is_reported(self):
         program = {
             "success": True,

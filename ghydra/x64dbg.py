@@ -30,12 +30,14 @@ from typing import Any, Dict, List, Optional
 import requests
 
 # The plugin's defaults: 9094 for a 64-bit debuggee, 9095 for a 32-bit one.
+# The released plugin binds exactly those and stops serving when the port is
+# taken; the fixed build walks up instead.
 DEFAULT_PORT = 9094
 X32_PORT = 9095
 
-# How many ports to try when looking for an instance. The plugin walks up to
-# 32 ports when the configured one is taken, so the scan has to reach as far
-# as the plugin can go.
+# How many ports to try when looking for an instance. The fixed plugin walks
+# up to 32 ports when the configured one is taken, so the scan has to reach
+# as far as that build can go.
 PORT_SCAN = 32
 
 # How many times a connection error is retried. The plugin hangs up after
@@ -46,10 +48,10 @@ PORT_SCAN = 32
 # really not there.
 CONNECT_ATTEMPTS = 3
 
-# How many times a request that is safe to repeat is sent again. A reset is
+# How many times a request that is safe to repeat is sent in all. A reset is
 # 7% of the connections, so two in a row - what a read-only request has to
-# survive - happens about once in every two hundred calls. Three attempts
-# make that rare enough not to be a test flake.
+# survive - happens about once in every two hundred calls. Three attempts,
+# two re-sends, make that rare enough not to be a test flake.
 DELIVERED_ATTEMPTS = 3
 
 # How long a connection may take to come up, and how long the server may

@@ -5708,10 +5708,10 @@ X64DBG_PROTOCOL_VERSION = "2024-11-05"
 # with plain sockets alike, so it is the network stack and not this client.
 X64DBG_CONNECT_ATTEMPTS = 3
 
-# How many times a request that is safe to repeat is sent again. A reset is
+# How many times a request that is safe to repeat is sent in all. A reset is
 # 7% of the connections, so two in a row - what a read-only request has to
-# survive - happens about once in every two hundred calls. Three attempts
-# make that rare enough not to be a test flake.
+# survive - happens about once in every two hundred calls. Three attempts,
+# two re-sends, make that rare enough not to be a test flake.
 X64DBG_DELIVERED_ATTEMPTS = 3
 
 # How long a connection may take to come up, and how long the server may
@@ -6261,7 +6261,6 @@ def _x64dbg_target_descriptor(port: int | None = None) -> dict:
         "delta": module_base - image_base,
         "x64dbg_host": instance["host"],
         "x64dbg_port": instance["port"],
-        "x64dbg_token": instance["token"],
     }
 
 
@@ -6466,10 +6465,13 @@ def x64dbg_breakpoint_at(address: str, port: int | None = None) -> dict:
     runtime = static_address - descriptor["image_base"] + descriptor["module_base"]
     try:
         # The descriptor already found the server; looking for it again
-        # would probe the ports a second time.
+        # would probe the ports a second time. The token comes from the
+        # settings, not from the descriptor: the descriptor is returned to
+        # the agent as it is.
+        settings = _x64dbg_settings()
         instance = {
             "host": descriptor["x64dbg_host"], "port": descriptor["x64dbg_port"],
-            "token": descriptor["x64dbg_token"], "path": "",
+            "token": settings["token"], "path": settings["path"],
         }
         text = _x64dbg_call_tool(instance, "SetBreakpoint", {"target": hex(runtime)})
     except _X64dbgFailure as exc:
@@ -6519,10 +6521,13 @@ def x64dbg_go_to(address: str, port: int | None = None) -> dict:
     runtime = static_address - descriptor["image_base"] + descriptor["module_base"]
     try:
         # The descriptor already found the server; looking for it again
-        # would probe the ports a second time.
+        # would probe the ports a second time. The token comes from the
+        # settings, not from the descriptor: the descriptor is returned to
+        # the agent as it is.
+        settings = _x64dbg_settings()
         instance = {
             "host": descriptor["x64dbg_host"], "port": descriptor["x64dbg_port"],
-            "token": descriptor["x64dbg_token"], "path": "",
+            "token": settings["token"], "path": settings["path"],
         }
         # "cip" is the x64dbg name for the instruction pointer, in a 64-bit
         # debuggee and in a 32-bit one alike; the plugin turns it into
