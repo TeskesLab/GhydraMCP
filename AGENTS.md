@@ -185,11 +185,17 @@ The bridge and the CLI duplicate all request logic, so one endpoint means **six*
 Name tools `resource_verb` (`functions_get_cfg`, `data_create`).
 
 **A tool parameter must not be called `arguments`.** That is the name of the container the MCP
-protocol uses for a tool's parameters, so a client that flattens the two loses the value — the
-call goes through with no arguments and the tool does something else instead of failing. It
+protocol uses for a tool's parameters, so a client that re-encodes the container loses the value
+— the call goes through with no arguments and the tool does something else instead of failing. It
 happened to `x64dbg_call`, and the unit tests did not catch it because they called the function
 instead of the protocol: `test_x64dbg.py` now drives a tool through `mcp.call_tool(...)`, and a
 guard asserts that no bridge tool declares a parameter the protocol reserves.
+
+**A tool parameter that takes a nested object should also accept its JSON text.** A client that
+delivers a tool's parameters over stdio may turn the nested object into a string or drop it —
+measured on this desktop with the official GitHub MCP server, whose `labels` array arrived as
+something that was not an array. `x64dbg_call` takes `tool_arguments` as an object *or* as its
+JSON text, and parses the text itself rather than relying on the client to get it right.
 
 Note `safe_put`/`safe_post`/`safe_patch` **mutate the payload you pass in** (`data.pop("headers", None)`).
 The popped `headers` dict is the only way to satisfy the server's Origin check on state-changing

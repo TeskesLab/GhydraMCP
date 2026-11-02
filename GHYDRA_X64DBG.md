@@ -123,9 +123,15 @@ client.use_tool("ghydra", "x64dbg_call",
                 {"tool": "WaitForEvent", "tool_arguments": {"timeoutMs": 60000}, "timeout": 90})
 ```
 
-The arguments are called `tool_arguments` and not `arguments` because `arguments` is the name of
-the container the MCP protocol itself uses for a tool's parameters. A client that flattens the
-two loses the value, and the tool then does something else instead of failing.
+The arguments may also be given as their JSON text, and the parameter is not called `arguments`
+because that is the name of the container the MCP protocol itself uses for a tool's parameters. A
+client that re-encodes the container turns a nested object into a string — or loses it — and the
+tool then does something else instead of failing:
+
+```python
+client.use_tool("ghydra", "x64dbg_call",
+                {"tool": "WaitForEvent", "tool_arguments": '{"timeoutMs": 60000}', "timeout": 90})
+```
 
 The debugger is local, so these tools take no `port` for it. The workflow tools take one, and it
 is the **Ghidra** instance, as everywhere else in the bridge.

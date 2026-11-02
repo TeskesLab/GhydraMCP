@@ -546,21 +546,33 @@ class X64dbgBridgeTests(unittest.TestCase):
         """
         import asyncio
 
-        async def call():
-            return await bridge.mcp.call_tool("x64dbg_call", {
-                "tool": "SetBreakpoint",
-                "tool_arguments": {"target": "0x7FF7A1234000"},
-            })
+        async def call(arguments):
+            return await bridge.mcp.call_tool("x64dbg_call", arguments)
 
-        content = asyncio.run(call())
-        text = "\n".join(
-            item.get("text", "") if isinstance(item, dict)
-            else getattr(item, "text", "")
-            for item in content
-        )
-        self.assertIn(("SetBreakpoint", {"target": "0x7FF7A1234000"}), self.fake.calls,
-                      "the arguments did not reach the plugin")
-        self.assertIn("Breakpoint set", text)
+        for form, expected in (
+            ({"tool": "SetBreakpoint",
+              "tool_arguments": {"target": "0x7FF7A1234000"}},
+             ("SetBreakpoint", {"target": "0x7FF7A1234000"})),
+            ({"tool": "SetBreakpoint",
+              "tool_arguments": '{"target": "0x7FF7A1234000"}'},
+             ("SetBreakpoint", {"target": "0x7FF7A1234000"})),
+        ):
+            with self.subTest(form=type(expected)):
+                content = asyncio.run(call(form))
+                text = "\n".join(
+                    item.get("text", "") if isinstance(item, dict)
+                    else getattr(item, "text", "")
+                    for item in content
+                )
+                self.assertIn(expected, self.fake.calls,
+                              "the arguments did not reach the plugin")
+                self.assertIn("Breakpoint set", text)
+
+    def test_arguments_that_are_not_json_are_refused(self):
+        result = bridge.x64dbg_call.__wrapped__(
+            tool="SetBreakpoint", tool_arguments="not json at all")
+        self.assertFalse(result["success"], result)
+        self.assertEqual(result["error"]["code"], "X64DBG_BAD_ARGS")
 
     def test_no_tool_declares_a_parameter_the_protocol_reserves(self):
         """"arguments" is the container the protocol uses for the parameters.

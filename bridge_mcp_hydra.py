@@ -6394,9 +6394,36 @@ def x64dbg_tools() -> dict:
     }
 
 
+def _x64dbg_parse_arguments(value: Any) -> dict:
+    """The plugin's arguments, from an object or from their JSON text.
+
+    Some MCP clients deliver a nested object as text. "arguments" is the
+    name of the container the protocol itself uses for a tool's parameters,
+    and a client that re-encodes the container turns the value into a
+    string. The text is parsed here, so the caller may pass either, and a
+    client that delivers the object plainly is not forced to quote it.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    text = str(value).strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        raise _X64dbgFailure(
+            "the arguments are not JSON", "X64DBG_BAD_ARGS") from None
+    if not isinstance(parsed, dict):
+        raise _X64dbgFailure(
+            "the arguments are not a JSON object", "X64DBG_BAD_ARGS") from None
+    return parsed
+
+
 @mcp.tool()
 @text_output
-def x64dbg_call(tool: str, tool_arguments: dict | None = None,
+def x64dbg_call(tool: str, tool_arguments: dict | str | None = None,
                 timeout: int | None = None) -> dict:
     """Call one of the x64dbg plugin's tools by name.
 
@@ -6408,14 +6435,16 @@ def x64dbg_call(tool: str, tool_arguments: dict | None = None,
     transport fails; one that changes the debuggee is never repeated, because
     the first attempt may already have reached it.
 
-    The arguments are called "tool_arguments" and not "arguments" on purpose:
-    "arguments" is the name of the container the MCP protocol itself uses
-    for a tool's parameters, and a client that flattens the two loses the
-    value on the floor.
+    The arguments may be given as an object or as their JSON text, and the
+    parameter is not called "arguments" on purpose: that is the name of the
+    container the MCP protocol itself uses for a tool's parameters, and a
+    client that flattens the two loses the value on the floor. Some clients
+    deliver a nested object as text whatever the name is, which is why both
+    forms are accepted.
 
     Args:
         tool: The plugin tool to call, for example "SetBreakpoint"
-        tool_arguments: The arguments for that tool
+        tool_arguments: The arguments for that tool, as an object or as JSON
         timeout: How long to wait, in seconds (30 by default). The tools that
             block - run, WaitForEvent, WaitForPause - need more than that.
 
@@ -6430,7 +6459,7 @@ def x64dbg_call(tool: str, tool_arguments: dict | None = None,
         return _x64dbg_error(str(exc), code=exc.code)
     try:
         text = _x64dbg_call_tool(
-            instance, tool, tool_arguments or {},
+            instance, tool, _x64dbg_parse_arguments(tool_arguments),
             timeout=float(timeout) if timeout else None,
         )
     except _X64dbgFailure as exc:
