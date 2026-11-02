@@ -18,6 +18,7 @@ import sys
 import click
 
 from .. import x64dbg as x64dbg_helper
+from ..client.exceptions import GhidraError
 from ..utils import rich_echo
 
 # How long a plugin call may take. The tools that block - run, WaitForEvent,
@@ -71,13 +72,22 @@ def _emit(ctx, kind, data):
 
 
 def _fail(ctx, exc):
-    """Report an x64dbg failure and stop with a non-zero exit code."""
-    rich_echo(f"Error: {exc}", err=True)
+    """Report a failure and stop with a non-zero exit code.
+
+    The code goes with it: the nine x64dbg codes are what an agent branches
+    on, and the bridge reports them the same way.
+    """
+    code = getattr(exc, "code", "") or ""
+    prefix = f"Error [{code}]" if code else "Error"
+    rich_echo(f"{prefix}: {exc}", err=True)
     ctx.exit(1)
 
 
 def _client(ctx, timeout: float = X64DBG_DEFAULT_TIMEOUT):
-    """A client for the x64dbg MCP server, or None with the reason."""
+    """A client for the x64dbg MCP server.
+
+    Raises X64dbgError when there is no way to talk to it.
+    """
     section = _section(ctx)
     settings = x64dbg_helper.resolve_config(section)
     if not settings["token"]:
@@ -85,42 +95,44 @@ def _client(ctx, timeout: float = X64DBG_DEFAULT_TIMEOUT):
         # it to its own mcp_config.json, so pointing at the installation is
         # enough - but only if the path was given.
         if not settings["path"]:
-            return None, (
+            raise x64dbg_helper.X64dbgError(
                 "no bearer token for the x64dbg MCP server. Set "
                 '"x64dbg": {"token": "..."} in ~/.ghydra/config.json, or '
                 '"x64dbg": {"path": "C:/tools/x64dbg"} to read it from the '
-                "plugin's own mcp_config.json."
+                "plugin's own mcp_config.json.",
+                code="X64DBG_DISABLED",
             )
 
     # The plugin binds 9094 for a 64-bit debuggee and 9095 for a 32-bit one,
     # so the port is looked for rather than assumed.
     instance = x64dbg_helper.discover(section)
     if instance is None:
-        return None, (
+        raise x64dbg_helper.X64dbgError(
             "no x64dbg MCP server answered on the ports around 9094; is "
-            "x64dbg running with the plugin loaded?"
+            "x64dbg running with the plugin loaded?",
+            code="X64DBG_MISSING",
         )
     if instance.get("unauthorized"):
-        return None, (
+        raise x64dbg_helper.X64dbgError(
             "the x64dbg MCP server rejected the bearer token. Set "
             '"x64dbg": {"token": "..."} in ~/.ghydra/config.json, or '
             '"x64dbg": {"path": "C:/tools/x64dbg"} to read it from the '
-            "plugin's own mcp_config.json."
+            "plugin's own mcp_config.json.",
+            code="X64DBG_UNAUTHORIZED",
         )
     return x64dbg_helper.Client(
         instance["host"], instance["port"], instance["token"],
         timeout=timeout,
-    ), None
+    )
 
 
 def _program_info(ctx):
-    """The Ghidra program's image base and executable path."""
+    """The Ghidra program's image base and executable path.
+
+    The Ghidra client raises GhidraError when the instance is not there, so
+    the caller catches that as well.
+    """
     response = ctx.obj['client'].get("/program")
-    if not response.get("success", False):
-        error = response.get("error") or {}
-        raise x64dbg_helper.X64dbgError(
-            error.get("message", "the Ghidra instance did not answer /program")
-        )
     result = response.get("result") or {}
     return {
         "path": result.get("path") or "",
@@ -137,9 +149,10 @@ def status(ctx):
     Examples:
         ghydra x64dbg status
     """
-    client, problem = _client(ctx)
-    if client is None:
-        _fail(ctx, x64dbg_helper.X64dbgError(problem, code="X64DBG_DISABLED"))
+    try:
+        client = _client(ctx)
+    except x64dbg_helper.X64dbgError as exc:
+        _fail(ctx, exc)
         return
     try:
         tools = client.list_tools()
@@ -173,9 +186,10 @@ def tools(ctx):
     Examples:
         ghydra x64dbg tools
     """
-    client, problem = _client(ctx)
-    if client is None:
-        _fail(ctx, x64dbg_helper.X64dbgError(problem, code="X64DBG_DISABLED"))
+    try:
+        client = _client(ctx)
+    except x64dbg_helper.X64dbgError as exc:
+        _fail(ctx, exc)
         return
     try:
         catalogue = client.list_tools()
@@ -199,7 +213,8 @@ def tools(ctx):
 @x64dbg.command('call')
 @click.argument('tool')
 @click.option('--arg', 'args', multiple=True, metavar='KEY=VALUE',
-              help='An argument for the tool. Repeat it for more than one.')
+              help='An argument for the tool, as a string. Repeat it for more '
+                   'than one. A number needs --json-args.')
 @click.option('--json-args', 'json_args', default=None,
               help='The arguments as a JSON object.')
 @click.option('--timeout', 'timeout', type=float, default=X64DBG_DEFAULT_TIMEOUT,
@@ -214,9 +229,10 @@ def call(ctx, tool, args, json_args, timeout):
         ghydra x64dbg call SetBreakpoint --arg target=0x7FF7A1234000
         ghydra x64dbg call ReadMemory --json-args '{"address": "0x7FF7A1234000", "size": 64}'
     """
-    client, problem = _client(ctx, timeout=timeout)
-    if client is None:
-        _fail(ctx, x64dbg_helper.X64dbgError(problem, code="X64DBG_DISABLED"))
+    try:
+        client = _client(ctx, timeout=timeout)
+    except x64dbg_helper.X64dbgError as exc:
+        _fail(ctx, exc)
         return
 
     arguments = {}
@@ -250,9 +266,7 @@ def call(ctx, tool, args, json_args, timeout):
 
 def _descriptor(ctx):
     """The correlation between the Ghidra program and the x64dbg session."""
-    client, problem = _client(ctx)
-    if client is None:
-        raise x64dbg_helper.X64dbgError(problem, code="X64DBG_DISABLED")
+    client = _client(ctx)
     program = _program_info(ctx)
     text = client.call_tool("ListModules")
     modules = x64dbg_helper.parse_modules(text)
@@ -285,6 +299,9 @@ def target(ctx):
     try:
         client, program, module = _descriptor(ctx)
     except x64dbg_helper.X64dbgError as exc:
+        _fail(ctx, exc)
+        return
+    except GhidraError as exc:
         _fail(ctx, exc)
         return
 
@@ -321,6 +338,9 @@ def breakpoint(ctx, address):
     try:
         client, program, module = _descriptor(ctx)
     except x64dbg_helper.X64dbgError as exc:
+        _fail(ctx, exc)
+        return
+    except GhidraError as exc:
         _fail(ctx, exc)
         return
 
@@ -364,6 +384,9 @@ def go_to(ctx, address):
     try:
         client, program, module = _descriptor(ctx)
     except x64dbg_helper.X64dbgError as exc:
+        _fail(ctx, exc)
+        return
+    except GhidraError as exc:
         _fail(ctx, exc)
         return
 

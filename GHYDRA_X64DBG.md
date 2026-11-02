@@ -27,11 +27,12 @@ every request stands alone. There is no handshake to maintain; `initialize` is a
 
 It binds `127.0.0.1:9094` for a 64-bit debuggee and `127.0.0.1:9095` for a 32-bit one, and it
 wants a bearer token. The token cannot be guessed: the plugin writes it to its own
-`mcp_config.json`, next to its DLL.
+`mcp_config.json`, next to `x64dbg.exe` — it asks the OS for the process path, not the DLL's.
 
-When the configured port is taken — a second x64dbg, or anything else on the machine — the
-plugin walks up to the next free port and logs the one it actually bound. The port is therefore
-looked for, not assumed: the scan reaches as far as the plugin can go.
+The released plugin binds exactly those two ports and stops serving when one of them is taken.
+The fixed build (PR #13 upstream) walks up to the next free port instead and logs the one it
+bound, so the port is looked for rather than assumed, and the scan reaches as far as that build
+can go.
 
 ## Configure it
 
@@ -161,19 +162,32 @@ guessed:
   not this client. The client retries a connection error, up to three attempts, each on a fresh
   connection.
 
-A timeout is only retried when the request is safe to repeat. The plugin marks every tool with
-`annotations.readOnlyHint`, so a read-only tool may be called again; a tool that changes the
-debuggee is not repeated, because the first attempt may already have reached it.
+A timeout is only retried when the request is safe to repeat, and so is a connection that died
+while the answer was coming: the plugin marks every tool with `annotations.readOnlyHint`, so a
+read-only tool may be called again; a tool that changes the debuggee is not repeated, because
+the first attempt may already have reached it. A connection that never came up is the one
+exception: the request was never sent, so it is always safe to try again.
 
 The connect timeout and the read timeout are separate for the same reason: a closed local port
 does not refuse straight away on Windows — the SYN hangs and is only refused about two seconds
 later — so the port scan uses a short connect timeout (0.35 s) and probes the ports
 concurrently, while a tool that blocks gets the read timeout it asked for.
 
+A connection that is reset *and* whose reset is lost behaves the same way from the outside: the
+client waits for an answer that is never coming, and the call ends with the read timeout rather
+than with an error. The retry then succeeds on a fresh connection, but the wait was the read
+timeout — thirty seconds by default, which is the price of a call the network stack swallowed.
+
 ## Limits and gotchas
 
 - The plugin has to be loaded and the debugger has to be running. A server that answers `401` is
   still a server: it means the token is wrong, which is worth saying.
+- **The tools that block need a timeout of their own.** `run`, `WaitForEvent` and `WaitForPause`
+  block for minutes by default, and the default read timeout is 30 seconds, so a call to one of
+  them without a `timeout` always times out. Give it more than the tool's own `timeoutMs`.
+- An address is read as hexadecimal whatever it looks like: `"0x140001234"`, `"140001234"` and
+  `"140001234"` are the same number, and so is `"4096"` — which is `0x4096`, not 4096. That is
+  what Ghidra's `imageBase` needs too.
 - `x64dbg_go_to` moves the instruction pointer, so the debuggee has to be paused.
 - The tool catalogue is fetched once and kept: the plugin's tool set does not change while the
   debugger runs.

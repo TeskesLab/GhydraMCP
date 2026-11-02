@@ -404,12 +404,14 @@ plugin API, so it changes neither `API_VERSION` nor the Java side.
   answer is `application/json` — no SSE framing. The server keeps no state, so every request
   stands alone and there is no handshake to maintain. `tools/call` answers
   `{"content": [{"type": "text", "text": ...}]}`; an error is `{"error": {...}}`.
-- **The token cannot be guessed.** The plugin writes it to its own `mcp_config.json` next to the
-  DLL, so `"x64dbg": {"path": "<installation>"}` is enough to find it; `"x64dbg": {"token": ...}`
+- **The token cannot be guessed.** The plugin writes it to its own `mcp_config.json` next to
+  `x64dbg.exe` (it asks the OS for the *process* path, not the DLL's), so
+  `"x64dbg": {"path": "<installation>"}` is enough to find it; `"x64dbg": {"token": ...}`
   sets it outright. The plugin's `IpAddress`, `Port` and `AuthToken` keys are the ones in that file.
-- **The port**: 9094 for a 64-bit debuggee, 9095 for a 32-bit one, and the plugin walks up to 32
-  ports when the configured one is taken. The bridge and the CLI look for the port instead of
-  assuming it, and the scan reaches as far as the plugin can go.
+- **The port**: 9094 for a 64-bit debuggee and 9095 for a 32-bit one. The released plugin binds
+  exactly those two and stops serving if the port is taken; the fixed build (PR #13 upstream)
+  walks up to 32 ports instead. The bridge and the CLI look for the port rather than assume it,
+  and the scan reaches as far as the fixed plugin can go.
 - **The address model**: `runtime = static − image_base + module_base`. The `image_base` comes
   from the Ghidra `/program` endpoint, the `module_base` from the plugin's `ListModules`. The two
   binaries are matched by full path first and by file name second, because the two sides can
@@ -425,9 +427,11 @@ plugin API, so it changes neither `API_VERSION` nor the Java side.
 - **A local connection is reset every now and then on this machine**: measured at 7% of the
   connections, with curl and with plain sockets alike, so it is the Windows network stack and not
   the client. The client retries a connection error (up to three attempts, on a fresh connection).
-- **A timeout is only retried when the request is safe to repeat.** The plugin marks every tool
-  with `annotations.readOnlyHint`, so a read-only tool may be called again; a tool that changes
-  the debuggee may not, because the first attempt may already have reached it.
+- **A timeout is only retried when the request is safe to repeat**, and so is a connection that
+  died while the answer was coming: the plugin marks every tool with `annotations.readOnlyHint`,
+  so a read-only tool may be called again; a tool that changes the debuggee may not, because the
+  first attempt may already have reached it. A connection that never came up is the one
+  exception: the request was never sent, so that one is always safe to try again.
 - **The connect timeout and the read timeout are separate.** A closed local port does not refuse
   straight away on Windows — the SYN hangs and is only refused about two seconds later — so the
   probe uses a short connect timeout (0.35 s) and the ports are probed concurrently. A tool that

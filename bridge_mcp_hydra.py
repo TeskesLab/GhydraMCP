@@ -5706,6 +5706,12 @@ X64DBG_PROTOCOL_VERSION = "2024-11-05"
 # with plain sockets alike, so it is the network stack and not this client.
 X64DBG_CONNECT_ATTEMPTS = 3
 
+# How many times a request that is safe to repeat is sent again. A reset is
+# 7% of the connections, so two in a row - what a read-only request has to
+# survive - happens about once in every two hundred calls. Three attempts
+# make that rare enough not to be a test flake.
+X64DBG_DELIVERED_ATTEMPTS = 3
+
 # How long a connection may take to come up, and how long the server may
 # take to answer. The two are separate because they mean different things: a
 # closed local port does not refuse straight away on Windows - the SYN hangs
@@ -5822,17 +5828,40 @@ def _x64dbg_classify(message: str) -> str:
     text = str(message or "").lower()
     if "no active debug session" in text or "tool requires an active" in text:
         return "X64DBG_NO_SESSION"
-    if "no such tool" in text or "unknown tool" in text:
+    if "no such tool" in text or "unknown tool" in text or "not found" in text:
         return "X64DBG_NO_TOOL"
     if "required" in text or "invalid" in text or "missing" in text:
         return "X64DBG_BAD_ARGS"
     return "X64DBG_ERROR"
 
 
+def _x64dbg_never_sent(exc: BaseException) -> bool:
+    """Whether the request was never handed to the server.
+
+    A connection that could not be established is one thing: the request
+    never left, so trying again is safe. A connection that died while the
+    answer was coming is another - there the server may already have acted
+    on the request, and only a request that is safe to repeat may be tried
+    again.
+
+    urllib3 names the two cases "NewConnectionError" and "ProtocolError".
+    The name is checked instead of the class, so this file does not have to
+    depend on urllib3 directly: it comes with requests, but the bridge is a
+    standalone script with its own dependency list.
+    """
+    cause: Optional[BaseException] = exc
+    while cause is not None:
+        if type(cause).__name__ == "NewConnectionError":
+            return True
+        cause = cause.__cause__ or cause.__context__
+    return False
+
+
 def _x64dbg_post(host: str, port: int, token: str, method: str,
                  params: Optional[dict] = None, timeout: Optional[float] = None,
                  connect_timeout: Optional[float] = None,
-                 idempotent: bool = False) -> Any:
+                 idempotent: bool = False,
+                 connect_attempts: int = X64DBG_CONNECT_ATTEMPTS) -> Any:
     """One JSON-RPC request to the x64dbg MCP server, and its result.
 
     Raises _X64dbgFailure with a machine-readable code.
@@ -5843,8 +5872,13 @@ def _x64dbg_post(host: str, port: int, token: str, method: str,
 
     idempotent says the request may be sent again when the transport fails:
     a handshake, the catalogue, or a tool the plugin marks as read-only. A
-    tool that changes the debuggee is never repeated, because the first
-    attempt may already have reached it.
+    tool that changes the debuggee is never repeated that way, because the
+    first attempt may already have reached it.
+
+    connect_attempts is how many times to try when the connection never
+    came up. The request was never sent in that case, so trying again is
+    safe - but a closed port stays closed, so the port scan asks for one
+    attempt only.
     """
     payload: Dict[str, Any] = {
         "jsonrpc": "2.0",
@@ -5864,8 +5898,8 @@ def _x64dbg_post(host: str, port: int, token: str, method: str,
     url = f"http://{host}:{int(port)}/"
     connect_limit = connect_timeout if connect_timeout is not None else X64DBG_CONNECT_TIMEOUT
     read_limit = timeout if timeout is not None else X64DBG_READ_TIMEOUT
-    connection_attempts = X64DBG_CONNECT_ATTEMPTS
-    timeout_attempts = 2 if idempotent else 1
+    connect_left = max(1, int(connect_attempts))
+    delivered_left = X64DBG_DELIVERED_ATTEMPTS if idempotent else 1
 
     while True:
         try:
@@ -5875,10 +5909,9 @@ def _x64dbg_post(host: str, port: int, token: str, method: str,
             )
             break
         except requests.ConnectTimeout as exc:
-            # The connection never came up: a closed port, or a SYN the
-            # network stack dropped.
-            connection_attempts -= 1
-            if connection_attempts > 0:
+            # The connection never came up: the request was never sent.
+            connect_left -= 1
+            if connect_left > 0:
                 continue
             raise _X64dbgFailure(
                 f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"
@@ -5886,20 +5919,34 @@ def _x64dbg_post(host: str, port: int, token: str, method: str,
         except requests.ReadTimeout as exc:
             # The server did not answer in time. Only a request that is safe
             # to repeat may be tried again.
-            timeout_attempts -= 1
-            if timeout_attempts > 0:
+            delivered_left -= 1
+            if delivered_left > 0:
                 continue
             raise _X64dbgFailure(
                 f"the x64dbg MCP server did not answer within {read_limit}s",
                 "X64DBG_TIMEOUT",
             ) from None
+        except requests.Timeout as exc:
+            raise _X64dbgFailure(
+                f"the x64dbg MCP server did not answer within {read_limit}s",
+                "X64DBG_TIMEOUT",
+            ) from None
         except requests.ConnectionError as exc:
-            # The connection died on the way: the plugin hangs up after every
-            # response, and the local network stack resets a connection every
-            # now and then (measured: 7% on this machine).
-            connection_attempts -= 1
-            if connection_attempts > 0:
-                continue
+            if _x64dbg_never_sent(exc):
+                # The connection was never established, so the request never
+                # left: trying again is safe for any request.
+                connect_left -= 1
+                if connect_left > 0:
+                    continue
+            else:
+                # The connection died while the answer was coming. The plugin
+                # hangs up after every response, and the local network stack
+                # resets a connection every now and then, but the server may
+                # already have acted on the request - so only a request that is
+                # safe to repeat is tried again.
+                delivered_left -= 1
+                if delivered_left > 0:
+                    continue
             raise _X64dbgFailure(
                 f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"
             ) from None
@@ -5970,7 +6017,8 @@ def _x64dbg_instance() -> dict:
                 "capabilities": {},
                 "clientInfo": {"name": "ghydramcp", "version": BRIDGE_VERSION},
             }, timeout=X64DBG_PROBE_READ_TIMEOUT,
-                connect_timeout=X64DBG_PROBE_CONNECT_TIMEOUT, idempotent=True)
+                connect_timeout=X64DBG_PROBE_CONNECT_TIMEOUT, idempotent=True,
+                connect_attempts=1)
         except _X64dbgFailure as exc:
             return "unauthorized" if exc.code == "X64DBG_UNAUTHORIZED" else None
         return str(port)
@@ -6207,6 +6255,7 @@ def _x64dbg_target_descriptor(port: int | None = None) -> dict:
         "delta": module_base - image_base,
         "x64dbg_host": instance["host"],
         "x64dbg_port": instance["port"],
+        "x64dbg_token": instance["token"],
     }
 
 
@@ -6410,7 +6459,12 @@ def x64dbg_breakpoint_at(address: str, port: int | None = None) -> dict:
 
     runtime = static_address - descriptor["image_base"] + descriptor["module_base"]
     try:
-        instance = _x64dbg_instance()
+        # The descriptor already found the server; looking for it again
+        # would probe the ports a second time.
+        instance = {
+            "host": descriptor["x64dbg_host"], "port": descriptor["x64dbg_port"],
+            "token": descriptor["x64dbg_token"], "path": "",
+        }
         text = _x64dbg_call_tool(instance, "SetBreakpoint", {"target": hex(runtime)})
     except _X64dbgFailure as exc:
         return _x64dbg_error(str(exc), code=exc.code)
@@ -6458,7 +6512,12 @@ def x64dbg_go_to(address: str, port: int | None = None) -> dict:
 
     runtime = static_address - descriptor["image_base"] + descriptor["module_base"]
     try:
-        instance = _x64dbg_instance()
+        # The descriptor already found the server; looking for it again
+        # would probe the ports a second time.
+        instance = {
+            "host": descriptor["x64dbg_host"], "port": descriptor["x64dbg_port"],
+            "token": descriptor["x64dbg_token"], "path": "",
+        }
         # "cip" is the x64dbg name for the instruction pointer, in a 64-bit
         # debuggee and in a 32-bit one alike; the plugin turns it into
         # "mov cip, <address>".

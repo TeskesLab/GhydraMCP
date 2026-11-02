@@ -346,6 +346,10 @@ The addresses are the **static** ones — the addresses Ghidra shows. The transl
 `runtime = static − image_base + module_base`, and the two binaries are matched by full path
 first and by file name second.
 
+An address is read as hexadecimal however it is written, so `0x140001234` and `140001234` are
+the same number. `--arg` sends strings only: a parameter the plugin wants as a number needs
+`--json-args`.
+
 The plugin wants a bearer token, and it writes it to its own `mcp_config.json`. Pointing at the
 installation is enough:
 

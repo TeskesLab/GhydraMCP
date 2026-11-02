@@ -7,6 +7,8 @@ and the failure paths are all exercised for real.
 
 import json
 import os
+import socket
+import struct
 import sys
 import tempfile
 import threading
@@ -35,6 +37,18 @@ CATALOGUE = [
     {
         "name": "ListModules",
         "description": "Lists all loaded modules.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "annotations": {"readOnlyHint": True, "openWorldHint": False},
+    },
+    {
+        "name": "GetDebugState",
+        "description": "Returns the current debugger state.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "annotations": {"readOnlyHint": True, "openWorldHint": False},
+    },
+    {
+        "name": "NoSession",
+        "description": "Fails when there is no debug session.",
         "inputSchema": {"type": "object", "properties": {}},
         "annotations": {"readOnlyHint": True, "openWorldHint": False},
     },
@@ -112,7 +126,17 @@ class _Handler(BaseHTTPRequestHandler):
             params = request.get("params") or {}
             name = params.get("name")
             arguments = params.get("arguments") or {}
+            # The call is recorded before the answer: the delivery is what
+            # matters, not the reply.
             self.server.calls.append((name, arguments))
+            if self.server.reset_first and not self.server.reset_done:
+                # Hang up without answering: the connection dies the way the
+                # local network stack makes it die.
+                self.server.reset_done = True
+                self.connection.setsockopt(
+                    socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                self.connection.close()
+                return
             if name == "ListModules":
                 self._reply(request_id, {
                     "content": [{"type": "text", "text": MODULES_TEXT}],
@@ -140,11 +164,13 @@ class _Handler(BaseHTTPRequestHandler):
 class FakeX64dbg:
     """The fake plugin, running on a port of its own."""
 
-    def __init__(self, token="test-token"):
+    def __init__(self, token="test-token", reset_first=False):
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self.server.expected_token = token
         self.server.calls = []
         self.server.errors = []
+        self.server.reset_first = reset_first
+        self.server.reset_done = False
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     def __enter__(self):
@@ -183,7 +209,7 @@ class X64dbgClientTests(unittest.TestCase):
             client = x64dbg_helper.Client("127.0.0.1", fake.port, "test-token")
             result = client.initialize()
             self.assertEqual(result["protocolVersion"], "2024-11-05")
-            self.assertEqual(len(client.list_tools()), 2)
+            self.assertEqual(len(client.list_tools()), len(CATALOGUE))
             self.assertIn("0x7FF7A1230000", client.call_tool("ListModules", {}))
 
     def test_the_bearer_token_is_sent(self):
@@ -211,6 +237,91 @@ class X64dbgClientTests(unittest.TestCase):
             with self.assertRaises(x64dbg_helper.X64dbgError) as caught:
                 client.call_tool("NoSession", {})
             self.assertEqual(caught.exception.code, "X64DBG_NO_SESSION")
+
+
+class X64dbgRetryTests(unittest.TestCase):
+    """What happens when the connection dies in the middle of a call.
+
+    The plugin hangs up after every response and the local network stack
+    resets a connection every now and then, so the client has to try again -
+    but only when the request is safe to repeat.
+    """
+
+    def test_a_read_only_tool_is_tried_again(self):
+        """Nothing was changed, so trying again is safe."""
+        with FakeX64dbg(reset_first=True) as fake:
+            client = x64dbg_helper.Client("127.0.0.1", fake.port, "test-token")
+            text = client.call_tool("ListModules")
+        self.assertIn("0x7FF7A1230000", text)
+
+    def test_a_mutating_tool_is_not_delivered_twice(self):
+        """The server may already have set the breakpoint."""
+        with FakeX64dbg(reset_first=True) as fake:
+            client = x64dbg_helper.Client("127.0.0.1", fake.port, "test-token")
+            with self.assertRaises(x64dbg_helper.X64dbgError) as caught:
+                client.call_tool("SetBreakpoint", {"target": "0x7FF7A1234000"})
+            self.assertEqual(caught.exception.code, "X64DBG_MISSING")
+            self.assertEqual(
+                [name for name, _ in fake.calls], ["SetBreakpoint"],
+                "the mutating tool was delivered more than once")
+
+    def test_the_bridge_does_not_repeat_a_mutating_tool(self):
+        """The same rule on the bridge side."""
+        with FakeX64dbg(reset_first=True) as fake:
+            with mock.patch.object(bridge, "_x64dbg_settings", return_value={
+                "host": "127.0.0.1", "port": fake.port,
+                "token": "test-token", "path": "",
+            }):
+                with self.assertRaises(bridge._X64dbgFailure) as caught:
+                    bridge._x64dbg_call_tool(
+                        {"host": "127.0.0.1", "port": fake.port,
+                         "token": "test-token", "path": ""},
+                        "SetBreakpoint", {"target": "0x7FF7A1234000"})
+            self.assertEqual(caught.exception.code, "X64DBG_MISSING")
+            self.assertEqual(
+                [name for name, _ in fake.calls], ["SetBreakpoint"],
+                "the mutating tool was delivered more than once")
+
+
+class X64dbgCliTests(unittest.TestCase):
+    """The CLI: the code reaches the user, and nothing escapes."""
+
+    def _run(self, args):
+        """Run the CLI and return what the user would see."""
+        from click.testing import CliRunner
+        from ghydra.cli.main import cli
+        result = CliRunner().invoke(cli, args)
+        return result, result.output + (getattr(result, "stderr", "") or "")
+
+    def test_a_missing_server_is_reported_with_its_code(self):
+        with mock.patch.object(x64dbg_helper, "resolve_config", return_value={
+                "host": "127.0.0.1", "port": 9094, "token": "t", "path": ""}):
+            with mock.patch.object(x64dbg_helper, "discover", return_value=None):
+                result, output = self._run(["x64dbg", "status"])
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("X64DBG_MISSING", output)
+
+    def test_a_missing_token_is_reported_with_its_code(self):
+        with mock.patch.object(x64dbg_helper, "resolve_config", return_value={
+                "host": "127.0.0.1", "port": 9094, "token": "", "path": ""}):
+            result, output = self._run(["x64dbg", "status"])
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("X64DBG_DISABLED", output)
+
+    def test_a_ghidra_failure_is_reported_not_raised(self):
+        """The Ghidra client raises; the command has to report it."""
+        from ghydra.client.exceptions import GhidraConnectionError
+        with mock.patch.object(x64dbg_helper, "resolve_config", return_value={
+                "host": "127.0.0.1", "port": 9094, "token": "t", "path": ""}):
+            with mock.patch.object(x64dbg_helper, "discover", return_value={
+                    "host": "127.0.0.1", "port": 9094, "token": "t", "path": "",
+                    "unauthorized": False}):
+                with mock.patch("ghydra.client.http_client.GhidraHTTPClient.get",
+                                side_effect=GhidraConnectionError("no Ghidra here")):
+                    result, output = self._run(["x64dbg", "target"])
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("no Ghidra here", output)
+        self.assertNotIsInstance(result.exception, GhidraConnectionError)
 
 
 class X64dbgAddressTests(unittest.TestCase):
@@ -332,13 +443,13 @@ class X64dbgBridgeTests(unittest.TestCase):
     def test_the_status_reports_the_server(self):
         result = bridge.x64dbg_status.__wrapped__()
         self.assertTrue(result["success"], result)
-        self.assertEqual(result["result"]["tools"], 2)
+        self.assertEqual(result["result"]["tools"], len(CATALOGUE))
         self.assertEqual(len(result["result"]["modules"]), 2)
 
     def test_the_catalogue_is_listed(self):
         result = bridge.x64dbg_tools.__wrapped__()
         self.assertTrue(result["success"], result)
-        self.assertEqual(result["result"]["count"], 2)
+        self.assertEqual(result["result"]["count"], len(CATALOGUE))
         names = [tool["name"] for tool in result["result"]["tools"]]
         self.assertIn("SetBreakpoint", names)
 

@@ -46,6 +46,12 @@ PORT_SCAN = 32
 # really not there.
 CONNECT_ATTEMPTS = 3
 
+# How many times a request that is safe to repeat is sent again. A reset is
+# 7% of the connections, so two in a row - what a read-only request has to
+# survive - happens about once in every two hundred calls. Three attempts
+# make that rare enough not to be a test flake.
+DELIVERED_ATTEMPTS = 3
+
 # How long a connection may take to come up, and how long the server may
 # take to answer. The two are separate because they mean different things: a
 # closed local port does not refuse straight away on Windows - the SYN hangs
@@ -122,8 +128,8 @@ def resolve_config(section: Optional[dict] = None) -> Dict[str, Any]:
 
     The configuration file wins over the environment, like everywhere else in
     this project. The token is the one thing that cannot be guessed: the
-    plugin writes it to "mcp_config.json" next to its DLL, so pointing at an
-    installed x64dbg with "path" is enough for the token to be found.
+    plugin writes it to "mcp_config.json" next to x64dbg.exe, so pointing at
+    an installed x64dbg with "path" is enough for the token to be found.
     """
     settings = dict(section or {})
     host = settings.get("host") or os.environ.get(ENV_HOST) or "127.0.0.1"
@@ -168,6 +174,27 @@ def _classify(message: str) -> str:
     return "X64DBG_ERROR"
 
 
+def _never_sent(exc: BaseException) -> bool:
+    """Whether the request was never handed to the server.
+
+    A connection that could not be established is one thing: the request
+    never left, so trying again is safe. A connection that died while the
+    answer was coming is another - there the server may already have acted
+    on the request, and only a request that is safe to repeat may be tried
+    again.
+
+    urllib3 names the two cases "NewConnectionError" and "ProtocolError".
+    The name is checked instead of the class, so this module does not have
+    to depend on urllib3 directly: it comes with requests, but the bridge
+    is a standalone script with its own dependency list.
+    """
+    cause: Optional[BaseException] = exc
+    while cause is not None:
+        if type(cause).__name__ == "NewConnectionError":
+            return True
+        cause = cause.__cause__ or cause.__context__
+    return False
+
 class Client:
     """A client for the x64dbg MCP server."""
 
@@ -183,13 +210,18 @@ class Client:
 
     def _post(self, method: str, params: Optional[dict] = None,
               timeout: Optional[float] = None, connect_timeout: Optional[float] = None,
-              idempotent: bool = False) -> Any:
+              idempotent: bool = False, connect_attempts: int = CONNECT_ATTEMPTS) -> Any:
         """One JSON-RPC request, and the result it carries.
 
         `idempotent` says the request may be sent again when the transport
         fails: a handshake, the catalogue, or a tool the plugin marks as
-        read-only. A tool that changes the debuggee is never repeated, because
-        the first attempt may already have reached it.
+        read-only. A tool that changes the debuggee is never repeated that
+        way, because the first attempt may already have reached it.
+
+        `connect_attempts` is how many times to try when the connection never
+        came up. The request was never sent in that case, so trying again is
+        safe - but a closed port stays closed, so the port scan asks for one
+        attempt only.
         """
         self._request_id += 1
         payload: Dict[str, Any] = {
@@ -209,9 +241,8 @@ class Client:
 
         read_limit = timeout if timeout is not None else self.timeout
         connect_limit = connect_timeout if connect_timeout is not None else CONNECT_TIMEOUT
-        last_error: Optional[Exception] = None
-        connection_attempts = CONNECT_ATTEMPTS
-        timeout_attempts = 2 if idempotent else 1
+        connect_left = max(1, int(connect_attempts))
+        delivered_left = DELIVERED_ATTEMPTS if idempotent else 1
 
         while True:
             try:
@@ -221,11 +252,9 @@ class Client:
                 )
                 break
             except requests.ConnectTimeout as exc:
-                # The connection never came up: a closed port, or a SYN the
-                # network stack dropped.
-                last_error = exc
-                connection_attempts -= 1
-                if connection_attempts > 0:
+                # The connection never came up: the request was never sent.
+                connect_left -= 1
+                if connect_left > 0:
                     continue
                 raise X64dbgError(
                     f"could not reach the x64dbg MCP server at {self.base_url}: {exc}",
@@ -234,22 +263,34 @@ class Client:
             except requests.ReadTimeout as exc:
                 # The server did not answer in time. Only a request that is
                 # safe to repeat may be tried again.
-                last_error = exc
-                timeout_attempts -= 1
-                if timeout_attempts > 0:
+                delivered_left -= 1
+                if delivered_left > 0:
                     continue
                 raise X64dbgError(
                     f"the x64dbg MCP server did not answer within {read_limit}s",
                     code="X64DBG_TIMEOUT",
                 ) from None
+            except requests.Timeout as exc:
+                raise X64dbgError(
+                    f"the x64dbg MCP server did not answer within {read_limit}s",
+                    code="X64DBG_TIMEOUT",
+                ) from None
             except requests.ConnectionError as exc:
-                # The connection died on the way: the plugin hangs up after
-                # every response, and the local network stack resets a
-                # connection every now and then.
-                last_error = exc
-                connection_attempts -= 1
-                if connection_attempts > 0:
-                    continue
+                if _never_sent(exc):
+                    # The connection was never established, so the request
+                    # never left: trying again is safe for any request.
+                    connect_left -= 1
+                    if connect_left > 0:
+                        continue
+                else:
+                    # The connection died while the answer was coming. The
+                    # plugin hangs up after every response, and the local
+                    # network stack resets a connection every now and then,
+                    # but the server may already have acted on the request -
+                    # so only a request that is safe to repeat is tried again.
+                    delivered_left -= 1
+                    if delivered_left > 0:
+                        continue
                 raise X64dbgError(
                     f"could not reach the x64dbg MCP server at {self.base_url}: {exc}",
                     code="X64DBG_MISSING",
@@ -292,13 +333,15 @@ class Client:
         return data
 
     def initialize(self, timeout: Optional[float] = None,
-                   connect_timeout: Optional[float] = None) -> Dict[str, Any]:
+                   connect_timeout: Optional[float] = None,
+                   connect_attempts: int = CONNECT_ATTEMPTS) -> Dict[str, Any]:
         """The handshake. The server keeps no state, so this is a courtesy."""
         result = self._post("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {"name": "ghydramcp", "version": "3.0.0"},
-        }, timeout=timeout, connect_timeout=connect_timeout, idempotent=True)
+        }, timeout=timeout, connect_timeout=connect_timeout, idempotent=True,
+            connect_attempts=connect_attempts)
         return result if isinstance(result, dict) else {}
 
     def list_tools(self) -> List[Dict[str, Any]]:
@@ -316,6 +359,8 @@ class Client:
         if name not in self._read_only:
             try:
                 for tool in self.list_tools():
+                    if not isinstance(tool, dict):
+                        continue
                     annotations = tool.get("annotations") or {}
                     self._read_only[str(tool.get("name"))] = bool(
                         annotations.get("readOnlyHint"))
@@ -384,7 +429,10 @@ def discover(section: Optional[dict] = None, timeout: Optional[float] = None) ->
         """The port that answered, or None."""
         client = Client(settings["host"], port, settings["token"], timeout=read_limit)
         try:
-            client.initialize(timeout=read_limit, connect_timeout=connect_limit)
+            # A closed port stays closed, so the scan asks for one attempt:
+            # every extra one costs the whole connect timeout again.
+            client.initialize(timeout=read_limit, connect_timeout=connect_limit,
+                              connect_attempts=1)
         except X64dbgError as exc:
             return "unauthorized" if exc.code == "X64DBG_UNAUTHORIZED" else None
         return str(port)
@@ -402,12 +450,15 @@ def discover(section: Optional[dict] = None, timeout: Optional[float] = None) ->
                     "token": settings["token"], "path": settings["path"],
                     "unauthorized": False,
                 }
-        if any(answer == "unauthorized" for answer in answers):
-            unauthorized = {
-                "host": settings["host"], "port": likely[0],
-                "token": settings["token"], "path": settings["path"],
-                "unauthorized": True,
-            }
+        for port, answer in zip(group, answers):
+            if answer == "unauthorized":
+                unauthorized = {
+                    "host": settings["host"], "port": port,
+                    "token": settings["token"], "path": settings["path"],
+                    "unauthorized": True,
+                }
+                break
+        if unauthorized:
             break
     return unauthorized
 
