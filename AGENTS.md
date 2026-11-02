@@ -400,6 +400,17 @@ tools work with any Ghidra version.
   2 750 ms of the export itself; for a 44 MB binary it is 152 ms against the 154 s of the export.
   The re-read is not quite free either — it reads the index, which holds one record per function.
   The digest keys on the path *and* the mtime, so a rebuilt binary gets a fresh directory.
+- **A subset is not the whole binary, and the digest does not know that.** The digest keys on the
+  path and the mtime, *not* on the filter, so the same directory serves a filtered export and an
+  unfiltered one. An export made with `--functions main` holds only that function; reusing it for
+  an unfiltered request would answer with the subset and call it the whole binary. So the sidecar
+  `.ghydra.json` records the filter, and an unfiltered request against a filtered export is
+  analysed again.
+- **A directory the caller named has no provenance of its own.** The digest directory carries the
+  provenance in its name; a directory given with `-o` does not. The sidecar therefore records the
+  mtime as well as the binary, and an export in a named directory is only reused when the sidecar
+  says it came from this binary, with the mtime it has now — another binary, or the same path
+  rebuilt, is analysed again instead of answered with stale artifacts.
 - **The performance numbers are measured, not remembered.** `scripts/bench_kuna.py` produces the
   table in `GHYDRA_KUNA.md` and is committed with it. A Kuna upgrade changes the numbers, so they
   are re-measured rather than quoted.
@@ -444,7 +455,24 @@ plugin API, so it changes neither `API_VERSION` nor the Java side.
 - **The port**: 9094 for a 64-bit debuggee and 9095 for a 32-bit one. The released plugin binds
   exactly those two and stops serving if the port is taken; the fixed build (PR #13 upstream)
   walks up to 32 ports instead. The bridge and the CLI look for the port rather than assume it,
-  and the scan reaches as far as the fixed plugin can go.
+  and the scan reaches as far as the fixed plugin can go. The walk starts from the **configured**
+  port as well as from the two defaults, because that is where the fixed build starts: a server
+  on the configured port plus one has to be found too.
+- **The plugin's file fills the blanks and only the blanks.** It says which address the plugin
+  listens on, and that is used when nothing else says so — but a host or a port that came from
+  the config file or from the environment is a decision the user made, and the plugin's file
+  does not get to overrule it.
+- **No token means `X64DBG_DISABLED`, before the scan.** There is no way to talk to the server
+  without one, and probing the ports would only report a missing server or a rejected token:
+  neither of them says what is actually wrong. The CLI and the bridge refuse the same way.
+- **The plugin's text is escaped before it reaches Rich.** Every answer carries a `[state]` line,
+  and Rich reads a bracketed word as a style: without the escape the marker is swallowed and the
+  agent loses the line that says what the debugger is doing. `escape()` the raw text, never the
+  markup around it.
+- **The arguments' types are restored from the plugin's own schema.** A `--arg count=3` reaches
+  the plugin as the string `"3"`, and the plugin ignores a parameter it cannot read and answers
+  with its default: the call comes back with ten instructions when three were asked for. The
+  schema says what every parameter is, so the type is put back from it — not guessed.
 - **The address model**: `runtime = static − image_base + module_base`. The `image_base` comes
   from the Ghidra `/program` endpoint, the `module_base` from the plugin's `ListModules`. The two
   binaries are matched by full path first and by file name second, because the two sides can

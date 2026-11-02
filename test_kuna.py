@@ -11,6 +11,7 @@ Run with:  python test_kuna.py
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import unittest
@@ -496,6 +497,82 @@ class KunaExportAddressingTests(unittest.TestCase):
             result = start(binary_path=self.binary, functions="sub_99")
         self.assertTrue(popen.called)
         self.assertFalse(result["result"].get("reused"))
+
+    def test_a_filtered_export_does_not_answer_for_the_whole_binary(self):
+        """An export made with a filter holds only what it was asked for.
+
+        The digest is keyed by the path and the mtime, not by the filter, so
+        the same directory serves both - and an unfiltered request that
+        reused it would answer with the subset and call it the whole binary.
+        """
+        kuna_helper.write_export_meta(self.dir, self.binary, functions="sub_1")
+        state = kuna_helper.export_state(self.dir)
+        self.assertTrue(state["filtered"])
+        self.assertFalse(kuna_helper.export_covers(state, None))
+        self.assertTrue(kuna_helper.export_covers(state, "sub_1"))
+
+    def test_a_filtered_export_is_reanalysed_for_an_unfiltered_request(self):
+        start = bridge.kuna_export_start.__wrapped__
+        bridge._kuna_write_export_meta(self.dir, self.binary, functions="sub_1")
+        with mock.patch.object(bridge.subprocess, "Popen") as popen:
+            popen.return_value.pid = 4242
+            popen.return_value.wait.return_value = 0
+            result = start(binary_path=self.binary)
+        self.assertTrue(popen.called)
+        self.assertFalse(result["result"].get("reused"))
+
+    def test_the_cli_reanalyses_a_subset_for_an_unfiltered_request(self):
+        """The CLI and the bridge must not disagree about the cost."""
+        kuna_helper.write_export_meta(self.dir, self.binary, functions="sub_1")
+        with mock.patch.object(kuna_helper, "require_binary", return_value="kuna"):
+            with mock.patch.object(kuna_helper.subprocess, "run") as run:
+                run.return_value.returncode = 0
+                run.return_value.stdout = "{}"
+                run.return_value.stderr = ""
+                result = kuna_helper.export(self.binary)
+        self.assertTrue(run.called)
+        self.assertFalse(result.get("reused"))
+
+    def test_an_export_of_another_binary_is_not_reused(self):
+        """A directory the caller named has no provenance of its own.
+
+        The digest directory is keyed by the path and the mtime, so what is
+        in it belongs to that binary. A directory somebody else named can
+        hold anything, so the sidecar has to say so.
+        """
+        state = {
+            "binary": os.path.abspath(self.binary),
+            "mtime": os.path.getmtime(self.binary),
+        }
+        self.assertTrue(kuna_helper.export_matches(state, self.binary))
+
+        other = os.path.join(self.tmp.name, "other.bin")
+        with open(other, "wb") as handle:
+            handle.write(b"\x00")
+        self.assertFalse(kuna_helper.export_matches(state, other))
+
+        # A binary rebuilt at the same path is a different binary.
+        rebuilt = dict(state, mtime=state["mtime"] - 10)
+        self.assertFalse(kuna_helper.export_matches(rebuilt, self.binary))
+
+    def test_a_custom_directory_holding_another_binary_is_not_reused(self):
+        custom = os.path.join(self.tmp.name, "custom")
+        os.makedirs(custom, exist_ok=True)
+        for name in os.listdir(self.dir):
+            shutil.copy(os.path.join(self.dir, name), os.path.join(custom, name))
+        other = os.path.join(self.tmp.name, "other.bin")
+        with open(other, "wb") as handle:
+            handle.write(b"\x00")
+        kuna_helper.write_export_meta(custom, other)
+
+        with mock.patch.object(kuna_helper, "require_binary", return_value="kuna"):
+            with mock.patch.object(kuna_helper.subprocess, "run") as run:
+                run.return_value.returncode = 0
+                run.return_value.stdout = "{}"
+                run.return_value.stderr = ""
+                result = kuna_helper.export(self.binary, output=custom)
+        self.assertTrue(run.called)
+        self.assertFalse(result.get("reused"))
 
     def test_a_streaming_export_is_not_reused(self):
         """An export still being written is not an answer yet."""

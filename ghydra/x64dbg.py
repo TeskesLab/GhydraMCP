@@ -152,9 +152,14 @@ def resolve_config(section: Optional[dict] = None) -> Dict[str, Any]:
     plugin = read_plugin_config(install) if install else {}
     if not token:
         token = plugin.get("AuthToken") or ""
-    if not settings.get("host") and plugin.get("IpAddress"):
+    # The plugin file fills the blanks and only the blanks: a host or a port
+    # that came from the config file or from the environment is a decision
+    # the user made, and the plugin file does not get to overrule it.
+    if (not settings.get("host") and not os.environ.get(ENV_HOST)
+            and plugin.get("IpAddress")):
         host = plugin["IpAddress"]
-    if not settings.get("port") and plugin.get("Port"):
+    if (not settings.get("port") and not os.environ.get(ENV_PORT)
+            and plugin.get("Port")):
         port = plugin["Port"]
 
     try:
@@ -228,6 +233,52 @@ def _repeatable(reason: str) -> str:
     return f"{reason}. The request is safe to repeat."
 
 
+def restore_types(schema: Optional[dict], arguments: Optional[dict]) -> dict:
+    """Put back the types that arrived as text.
+
+    A "--arg count=3" reaches the plugin as the string "3", and a plugin
+    that cannot read a parameter ignores it and does something else: the
+    call comes back with the default count instead of the one that was
+    asked for. The plugin's own schema says what every parameter is, so
+    the type is restored here, from the schema, rather than left to the
+    plugin. A value the schema does not describe is left alone.
+    """
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(properties, dict) or not arguments:
+        return arguments or {}
+    restored = dict(arguments)
+    for field, value in arguments.items():
+        if not isinstance(value, str):
+            continue
+        declared = properties.get(field)
+        if not isinstance(declared, dict):
+            continue
+        kind = declared.get("type")
+        if kind == "integer":
+            try:
+                restored[field] = int(value, 0)
+            except ValueError:
+                pass
+        elif kind == "number":
+            try:
+                restored[field] = float(value)
+            except ValueError:
+                pass
+        elif kind == "boolean":
+            if value.lower() in ("true", "false"):
+                restored[field] = value.lower() == "true"
+        elif kind in ("array", "object"):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                continue
+            if kind == "array" and isinstance(parsed, list):
+                restored[field] = parsed
+            elif kind == "object" and isinstance(parsed, dict):
+                restored[field] = parsed
+    return restored
+
+
 class Client:
     """A client for the x64dbg MCP server."""
 
@@ -240,6 +291,7 @@ class Client:
         self.base_url = f"http://{self.host}:{self.port}/"
         self._request_id = 0
         self._read_only: Dict[str, bool] = {}
+        self._schemas: Dict[str, dict] = {}
 
     def _post(self, method: str, params: Optional[dict] = None,
               timeout: Optional[float] = None, connect_timeout: Optional[float] = None,
@@ -387,6 +439,28 @@ class Client:
         tools = result.get("tools") if isinstance(result, dict) else None
         return tools if tools is not None and isinstance(tools, list) else []
 
+    def _load_catalogue(self) -> None:
+        """Fetch the plugin's catalogue once.
+
+        It carries the read-only hint and the input schema of every tool:
+        the hint says whether a call may be repeated, and the schema says
+        what type every parameter is.
+        """
+        if self._read_only or self._schemas:
+            return
+        try:
+            tools = self.list_tools()
+        except X64dbgError:
+            return
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            annotations = tool.get("annotations") or {}
+            name = str(tool.get("name"))
+            self._read_only[name] = bool(annotations.get("readOnlyHint"))
+            schema = tool.get("inputSchema")
+            self._schemas[name] = schema if isinstance(schema, dict) else {}
+
     def is_read_only(self, name: str) -> bool:
         """Whether the plugin marks a tool as read-only.
 
@@ -394,15 +468,7 @@ class Client:
         tool set does not change while the debugger runs.
         """
         if name not in self._read_only:
-            try:
-                for tool in self.list_tools():
-                    if not isinstance(tool, dict):
-                        continue
-                    annotations = tool.get("annotations") or {}
-                    self._read_only[str(tool.get("name"))] = bool(
-                        annotations.get("readOnlyHint"))
-            except X64dbgError:
-                return False
+            self._load_catalogue()
         return self._read_only.get(name, False)
 
     def call_tool(self, name: str, arguments: Optional[dict] = None) -> str:
@@ -415,8 +481,11 @@ class Client:
         that changes the debuggee may not, because the first attempt may
         already have reached it.
         """
+        self._load_catalogue()
         result = self._post(
-            "tools/call", {"name": name, "arguments": arguments or {}},
+            "tools/call",
+            {"name": name,
+             "arguments": restore_types(self._schemas.get(name), arguments or {})},
             idempotent=self.is_read_only(name),
         )
         if isinstance(result, dict):
@@ -436,12 +505,34 @@ class Client:
         return ""
 
 
+def candidate_ports(port: int) -> tuple:
+    """The ports to try: the likely ones first, then the walk.
+
+    The walk starts from the configured port as well as from the two
+    defaults: the fixed plugin walks up from the port it was told to use, so
+    a server on the configured port plus one has to be reachable.
+    """
+    likely = list(dict.fromkeys([port, DEFAULT_PORT, X32_PORT]))
+    bases = tuple(dict.fromkeys((port, DEFAULT_PORT, X32_PORT)))
+    others = [
+        candidate + offset
+        for offset in range(1, PORT_SCAN)
+        for candidate in bases
+        if (candidate + offset) not in likely
+    ]
+    return likely, others
+
+
 def discover(section: Optional[dict] = None, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """Find an x64dbg MCP server.
 
     The plugin binds 9094 for a 64-bit debuggee and 9095 for a 32-bit one,
     and the ports around them are tried too. A server that answers 401 is
     still a server: it means the token is wrong, which is worth saying.
+
+    Raises X64dbgError when there is no token at all: there is no way to
+    talk to the server without one, and the scan would only report a
+    missing server or a rejected token.
 
     The ports are probed concurrently and the probe timeout is short. A closed
     local port does not refuse straight away on Windows - the SYN hangs and is
@@ -451,16 +542,22 @@ def discover(section: Optional[dict] = None, timeout: Optional[float] = None) ->
     it from a closed port.
     """
     settings = resolve_config(section)
+    if not settings["token"]:
+        # A token is the one thing that cannot be guessed. Without one there
+        # is no way to talk to the server, and probing the ports would only
+        # report a missing server or a rejected token - neither of which says
+        # what is actually wrong.
+        raise X64dbgError(
+            "no bearer token for the x64dbg MCP server. Set "
+            '"x64dbg": {"token": "..."} in ~/.ghydra/config.json, or point '
+            '"x64dbg": {"path": "C:/tools/x64dbg"} - or GHYDRA_X64DBG_PATH - '
+            "to read it from the plugin's own mcp_config.json.",
+            code="X64DBG_DISABLED",
+        )
     connect_limit = PROBE_CONNECT_TIMEOUT if timeout is None else timeout
     read_limit = PROBE_READ_TIMEOUT if timeout is None else timeout
 
-    likely = list(dict.fromkeys([settings["port"], DEFAULT_PORT, X32_PORT]))
-    others = [
-        candidate + offset
-        for offset in range(1, PORT_SCAN)
-        for candidate in (DEFAULT_PORT, X32_PORT)
-        if (candidate + offset) not in likely
-    ]
+    likely, others = candidate_ports(settings["port"])
 
     def _probe(port: int) -> Optional[str]:
         """The port that answered, or None."""

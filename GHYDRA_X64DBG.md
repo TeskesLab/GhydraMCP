@@ -32,7 +32,8 @@ wants a bearer token. The token cannot be guessed: the plugin writes it to its o
 The released plugin binds exactly those two ports and stops serving when one of them is taken.
 The fixed build (PR #13 upstream) walks up to the next free port instead and logs the one it
 bound, so the port is looked for rather than assumed, and the scan reaches as far as that build
-can go.
+can go. The walk starts from the configured port as well as from the two defaults, because that
+is where the fixed build starts: a server on the configured port plus one has to be found too.
 
 ## Configure it
 
@@ -65,6 +66,11 @@ The environment carries the same, and the path too: `GHYDRA_X64DBG_HOST`, `GHYDR
 everywhere else. The path is worth having in the environment because the token is the one thing
 that cannot be guessed: `GHYDRA_X64DBG_PATH` is enough to make the integration work without
 editing a configuration file at all.
+
+The plugin's own file fills the blanks and only the blanks. It says which address the plugin
+listens on, and that is what is used when nothing else says so — but a host or a port that came
+from the config file or from the environment is a decision the user made, and the plugin's file
+does not get to overrule it. The token is the one thing the file is there for.
 
 ## Verified against the real plugin
 
@@ -170,6 +176,12 @@ ghydra x64dbg go-to 0x140001234
 
 `ghydra --json x64dbg status` prints the same thing as JSON.
 
+`--arg` takes strings, and the plugin's own schema says what each parameter really is, so a
+number that arrives as text is put back before the call: `--arg count=3` reaches the plugin as
+the number 3. Without that, the plugin ignores a parameter it cannot read and answers with its
+default — the call would come back with ten instructions when three were asked for. `--json-args`
+takes the arguments as a JSON object, for the cases where the type matters to the caller too.
+
 ## Failures carry a code
 
 The bridge and the CLI carry the same ten codes, so an agent can branch on the reason instead
@@ -178,7 +190,7 @@ of reading prose:
 | Code | What it means |
 | --- | --- |
 | `X64DBG_ERROR` | The generic fallback |
-| `X64DBG_DISABLED` | No token, so no way to talk to the server |
+| `X64DBG_DISABLED` | No token, so there is no way to talk to the server: the scan is not even tried |
 | `X64DBG_MISSING` | Nothing answered on the port, and the request never left |
 | `X64DBG_TIMEOUT` | The server did not answer in time |
 | `X64DBG_UNCERTAIN` | The request was sent but the answer was lost: the debugger may already have acted |

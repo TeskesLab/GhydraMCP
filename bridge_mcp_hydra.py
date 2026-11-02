@@ -505,6 +505,13 @@ def _kuna_write_export_meta(directory: str, binary: str, **extra: Any) -> None:
         "binary": os.path.abspath(binary),
         "created": time.time(),
     }
+    # The mtime is the other half of the provenance: the digest is keyed by
+    # the path and the mtime, so a binary rebuilt at the same path is a
+    # different binary and an export of the old one must not be reused.
+    try:
+        payload["mtime"] = os.path.getmtime(os.path.abspath(binary))
+    except OSError:
+        pass
     payload.update(extra)
     try:
         with open(_kuna_export_meta_path(directory), "w", encoding="utf-8") as handle:
@@ -574,6 +581,10 @@ def _kuna_export_state(directory: str) -> Optional[dict]:
         "failed": len([record for record in records if record.get("error")]),
         "binary": meta.get("binary") or _kuna_readme_binary(directory),
         "created": meta.get("created"),
+        # Whether the export was made with a filter: a subset export holds
+        # only the functions it was asked for, so it is not a full export of
+        # the binary.
+        "filtered": bool(meta.get("functions")),
         "names": {record.get("name") for record in records},
     }
 
@@ -582,13 +593,13 @@ def _kuna_export_covers(state: dict, functions: Optional[str]) -> bool:
     """Does this export already hold everything the caller asked for?
 
     A full export covers every request. A subset export covers a request for
-    one of its own functions, and nothing else.
+    one of its own functions, and nothing else - and an unfiltered request
+    needs an export that was itself unfiltered, or the whole binary is
+    analysed again.
     """
-    if not functions:
-        return True
-    wanted = {name.strip() for name in functions.split(",") if name.strip()}
+    wanted = {name.strip() for name in (functions or "").split(",") if name.strip()}
     if not wanted:
-        return True
+        return not state.get("filtered")
     return wanted.issubset(state.get("names") or set())
 
 
@@ -5825,9 +5836,14 @@ def _x64dbg_settings() -> dict:
     plugin = _x64dbg_plugin_config(install) if install else {}
     if not token:
         token = plugin.get("AuthToken") or ""
-    if not section.get("host") and plugin.get("IpAddress"):
+    # The plugin file fills the blanks and only the blanks: a host or a port
+    # that came from the config file or from the environment is a decision
+    # the user made, and the plugin file does not get to overrule it.
+    if (not section.get("host") and not os.environ.get(X64DBG_ENV_HOST)
+            and plugin.get("IpAddress")):
         host = plugin["IpAddress"]
-    if not section.get("port") and plugin.get("Port"):
+    if (not section.get("port") and not os.environ.get(X64DBG_ENV_PORT)
+            and plugin.get("Port")):
         port = plugin["Port"]
 
     try:
@@ -6035,6 +6051,24 @@ class _X64dbgFailure(Exception):
         self.code = code
 
 
+def _x64dbg_candidate_ports(port: int) -> tuple:
+    """The ports to try: the likely ones first, then the walk.
+
+    The walk starts from the configured port as well as from the two
+    defaults: the fixed plugin walks up from the port it was told to use, so
+    a server on the configured port plus one has to be reachable.
+    """
+    likely = list(dict.fromkeys([port, X64DBG_DEFAULT_PORT, X64DBG_X32_PORT]))
+    bases = tuple(dict.fromkeys((port, X64DBG_DEFAULT_PORT, X64DBG_X32_PORT)))
+    others = [
+        candidate + offset
+        for offset in range(1, X64DBG_PORT_SCAN)
+        for candidate in bases
+        if (candidate + offset) not in likely
+    ]
+    return likely, others
+
+
 def _x64dbg_instance() -> dict:
     """Find an x64dbg MCP server.
 
@@ -6050,6 +6084,18 @@ def _x64dbg_instance() -> dict:
     plenty to tell it from a closed port.
     """
     settings = _x64dbg_settings()
+    if not settings["token"]:
+        # A token is the one thing that cannot be guessed. Without one there
+        # is no way to talk to the server, and probing the ports would only
+        # report a missing server or a rejected token - neither of which says
+        # what is actually wrong.
+        raise _X64dbgFailure(
+            "no bearer token for the x64dbg MCP server. Set "
+            '"x64dbg": {"token": "..."} in ~/.ghydra/config.json, or point '
+            '"x64dbg": {"path": "C:/tools/x64dbg"} - or GHYDRA_X64DBG_PATH - '
+            "to read it from the plugin's own mcp_config.json.",
+            "X64DBG_DISABLED",
+        )
 
     def _probe(port: int) -> Optional[str]:
         """The port that answered, or None."""
@@ -6068,13 +6114,7 @@ def _x64dbg_instance() -> dict:
     # The configured port and the two defaults are where the server almost
     # always is, so they are probed first, and the wider walk only happens
     # when none of them answered.
-    likely = list(dict.fromkeys([settings["port"], X64DBG_DEFAULT_PORT, X64DBG_X32_PORT]))
-    others = [
-        candidate + offset
-        for offset in range(1, X64DBG_PORT_SCAN)
-        for candidate in (X64DBG_DEFAULT_PORT, X64DBG_X32_PORT)
-        if (candidate + offset) not in likely
-    ]
+    likely, others = _x64dbg_candidate_ports(settings["port"])
 
     unauthorized = False
     for group in (likely, others):

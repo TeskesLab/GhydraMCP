@@ -94,16 +94,17 @@ def _client(ctx, timeout: float = X64DBG_DEFAULT_TIMEOUT):
     if not settings["token"]:
         # A token is the one thing that cannot be guessed. The plugin writes
         # it to its own mcp_config.json, so pointing at the installation is
-        # enough - but only if the path was given.
-        if not settings["path"]:
-            raise x64dbg_helper.X64dbgError(
-                "no bearer token for the x64dbg MCP server. Set "
-                '"x64dbg": {"token": "..."} in ~/.ghydra/config.json, or '
-                '"x64dbg": {"path": "C:/tools/x64dbg"} - or '
-                "GHYDRA_X64DBG_PATH - to read it from the "
-                "plugin's own mcp_config.json.",
-                code="X64DBG_DISABLED",
-            )
+        # usually enough - but when there is no token at all, there is
+        # nothing to talk to the server with, and the scan would only report
+        # a missing server or a rejected token.
+        raise x64dbg_helper.X64dbgError(
+            "no bearer token for the x64dbg MCP server. Set "
+            '"x64dbg": {"token": "..."} in ~/.ghydra/config.json, or '
+            '"x64dbg": {"path": "C:/tools/x64dbg"} - or '
+            "GHYDRA_X64DBG_PATH - to read it from the "
+            "plugin's own mcp_config.json.",
+            code="X64DBG_DISABLED",
+        )
 
     # The plugin binds 9094 for a 64-bit debuggee and 9095 for a 32-bit one,
     # so the port is looked for rather than assumed.

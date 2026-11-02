@@ -270,7 +270,21 @@ marker is a finished one.
 
 The sidecar `.ghydra.json` records which binary the export came from, because the digest is a
 hash and cannot be reversed. An export made before the sidecar existed still names its binary in
-the `README.md` that Kuna writes, and that is where the listing falls back to.
+the `README.md` that Kuna writes, and that is where the listing falls back to. The sidecar also
+records the modification time and the filter the export was made with, because the digest keys
+on the path and the modification time but not on the filter.
+
+**A subset is not the whole binary.** The digest is keyed by the path and the modification time,
+so the same directory serves a filtered export and an unfiltered one. An export made with
+`--functions main` holds only that function, and an unfiltered request that reused it would
+answer with the subset and call it the whole binary. So the sidecar remembers the filter, and an
+unfiltered request against a filtered export is analysed again.
+
+**A directory the caller named has no provenance of its own.** The digest directory is keyed by
+the path and the modification time, so what is in it belongs to that binary. A directory given
+with `-o` can hold anything, so the export in it is only reused when the sidecar says it came
+from this binary, with the modification time it has now: another binary, or the same path
+rebuilt, is analysed again instead of answered with stale artifacts.
 
 ## The MCP side
 

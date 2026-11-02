@@ -241,6 +241,13 @@ def write_export_meta(directory: str, binary: str, **extra: Any) -> None:
         "binary": os.path.abspath(binary),
         "created": time.time(),
     }
+    # The mtime is the other half of the provenance: the digest is keyed by
+    # the path and the mtime, so a binary rebuilt at the same path is a
+    # different binary and an export of the old one must not be reused.
+    try:
+        payload["mtime"] = os.path.getmtime(os.path.abspath(binary))
+    except OSError:
+        pass
     payload.update(extra)
     try:
         with open(export_meta_path(directory), "w", encoding="utf-8") as handle:
@@ -310,21 +317,57 @@ def export_state(directory: str) -> Optional[Dict[str, Any]]:
         "failed": len([record for record in records if record.get("error")]),
         "binary": meta.get("binary") or readme_binary(directory),
         "created": meta.get("created"),
+        "mtime": meta.get("mtime"),
+        # Whether the export was made with a filter: a subset export holds
+        # only the functions it was asked for, so it is not a full export of
+        # the binary.
+        "filtered": bool(meta.get("functions")),
         "names": {record.get("name") for record in records},
     }
+
+
+def export_matches(state: Dict[str, Any], binary: str) -> bool:
+    """Does this export come from this binary, as it is now?
+
+    The digest directory is keyed by the path and the mtime, so its
+    provenance is implied by its name. A directory the caller named does
+    not carry that guarantee, so the sidecar has to say so: the binary it
+    came from and the mtime it had. A binary rebuilt at the same path is a
+    different binary, and its old export must not be reused for it.
+    """
+    recorded = state.get("binary")
+    if not recorded:
+        return False
+    if os.path.normcase(os.path.abspath(str(recorded))) != os.path.normcase(
+            os.path.abspath(binary)
+    ):
+        return False
+    recorded_mtime = state.get("mtime")
+    if recorded_mtime is None:
+        # An export made before the sidecar carried the mtime: there is no
+        # way to tell whether the binary is still the same one.
+        return False
+    try:
+        current = os.path.getmtime(binary)
+    except OSError:
+        return False
+    try:
+        return abs(float(current) - float(recorded_mtime)) < 1e-6
+    except (TypeError, ValueError):
+        return False
 
 
 def export_covers(state: Dict[str, Any], functions: Optional[str]) -> bool:
     """Does this export already hold everything the caller asked for?
 
     A full export covers every request. A subset export covers a request for
-    one of its own functions, and nothing else.
+    one of its own functions, and nothing else - and an unfiltered request
+    needs an export that was itself unfiltered, or the whole binary is
+    analysed again.
     """
-    if not functions:
-        return True
-    wanted = {name.strip() for name in functions.split(",") if name.strip()}
+    wanted = {name.strip() for name in (functions or "").split(",") if name.strip()}
     if not wanted:
-        return True
+        return not state.get("filtered")
     return wanted.issubset(state.get("names") or set())
 
 
@@ -517,8 +560,14 @@ def export(binary: str, output: Optional[str] = None,
     # Reuse a complete export instead of paying the analysis again. Kuna loads
     # and analyses the whole image on every invocation, so a second export of
     # the same binary is the most expensive no-op there is.
+    #
+    # A directory the caller named has no provenance of its own, so the
+    # export in it is only reused when its sidecar says it came from this
+    # binary, as it is now. The digest directory carries the provenance in its
+    # name, so it does not need the check.
     state = export_state(directory)
-    if state and export_covers(state, functions):
+    provenance_ok = state is None or not output or export_matches(state, target)
+    if state and provenance_ok and export_covers(state, functions):
         if not read_export_meta(directory):
             write_export_meta(directory, target)
         return {

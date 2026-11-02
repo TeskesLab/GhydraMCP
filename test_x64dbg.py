@@ -247,6 +247,20 @@ class X64dbgClientTests(unittest.TestCase):
                 client.call_tool("NoSession", {})
             self.assertEqual(caught.exception.code, "X64DBG_NO_SESSION")
 
+    def test_a_number_that_came_as_text_is_put_back(self):
+        """A "--arg count=3" reaches the plugin as the string "3".
+
+        The plugin ignores a parameter it cannot read and answers with its
+        default, so the count has to be the number the caller asked for.
+        """
+        with FakeX64dbg() as fake:
+            client = x64dbg_helper.Client("127.0.0.1", fake.port, "test-token")
+            client.call_tool("Disassemble", {"address": "0x7FF7A1234000", "count": "3"})
+            self.assertIn(
+                ("Disassemble", {"address": "0x7FF7A1234000", "count": 3}),
+                fake.calls,
+            )
+
 
 class X64dbgRetryTests(unittest.TestCase):
     """What happens when the connection dies in the middle of a call.
@@ -330,6 +344,22 @@ class X64dbgCliTests(unittest.TestCase):
                 result, output = self._run(["x64dbg", "status"])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("X64DBG_MISSING", output)
+
+    def test_the_plugin_text_keeps_its_state_marker(self):
+        """Rich reads a bracketed word as a style.
+
+        The plugin writes a "[state]" line with every answer, and without the
+        escape the formatter swallows it as an unknown style: the agent loses
+        the line that says what the debugger is doing.
+        """
+        from ghydra.formatters.table_formatter import TableFormatter
+        formatter = TableFormatter(use_colors=False)
+        text = formatter.format_x64dbg({
+            "kind": "call",
+            "data": {"tool": "Disassemble",
+                     "text": "0x1000: sub rsp, 0x28\n[state] PAUSED at 0x2000"},
+        })
+        self.assertIn("[state] PAUSED at 0x2000", text)
 
     def test_a_missing_token_is_reported_with_its_code(self):
         with mock.patch.object(x64dbg_helper, "resolve_config", return_value={
@@ -450,6 +480,42 @@ class X64dbgConfigTests(unittest.TestCase):
             settings = x64dbg_helper.resolve_config({"path": "C:/from-file"})
         self.assertEqual(settings["path"], "C:/from-file")
 
+    def test_the_environment_host_and_port_beat_the_plugin_file(self):
+        """The plugin file fills the blanks; a host or a port the user set is
+        not a blank.
+
+        The plugin's own file says which address it listens on, but a host or
+        a port that came from the config file or from the environment is a
+        decision the user made, and the file does not get to overrule it.
+        """
+        root = os.path.join(self.tmp.name, "x64dbg")
+        folder = os.path.join(root, "release", "x64")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "mcp_config.json"), "w", encoding="utf-8") as handle:
+            json.dump({"IpAddress": "10.9.9.9", "Port": 9999,
+                       "AuthToken": "plugin-token"}, handle)
+
+        with mock.patch.dict(os.environ, {
+            "GHYDRA_X64DBG_HOST": "127.0.0.2",
+            "GHYDRA_X64DBG_PORT": "1234",
+            "GHYDRA_X64DBG_PATH": root,
+        }):
+            settings = x64dbg_helper.resolve_config({})
+        self.assertEqual(settings["host"], "127.0.0.2")
+        self.assertEqual(settings["port"], 1234)
+        self.assertEqual(settings["token"], "plugin-token")
+
+    def test_the_walk_starts_from_the_configured_port(self):
+        """The fixed plugin walks up from the port it was told to use, so the
+        walk has to start there too."""
+        likely, others = x64dbg_helper.candidate_ports(9200)
+        self.assertIn(9200, likely)
+        self.assertIn(9201, others)
+
+        bridge_likely, bridge_others = bridge._x64dbg_candidate_ports(9200)
+        self.assertIn(9200, bridge_likely)
+        self.assertIn(9201, bridge_others)
+
     def test_the_token_is_read_from_the_plugin_configuration(self):
         """Pointing at the installation is enough: the plugin wrote the token."""
         plugins = os.path.join(self.tmp.name, "x64", "plugins")
@@ -543,6 +609,20 @@ class X64dbgBridgeTests(unittest.TestCase):
         result = bridge.x64dbg_call.__wrapped__(tool="ListModules")
         self.assertTrue(result["success"], result)
         self.assertIn("0x7FF7A1230000", result["result"]["text"])
+
+    def test_without_a_token_the_bridge_says_it_is_disabled(self):
+        """There is no way to talk to the server without a token.
+
+        That is not the same thing as the server being gone, and an agent
+        that cannot tell the two apart ends up retrying a call that can
+        never work.
+        """
+        with mock.patch.object(bridge, "_x64dbg_settings", return_value={
+                "host": "127.0.0.1", "port": self.fake.port,
+                "token": "", "path": ""}):
+            result = bridge.x64dbg_status.__wrapped__()
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["code"], "X64DBG_DISABLED")
 
     def test_the_arguments_reach_the_plugin_through_the_mcp_binding(self):
         """The arguments have to survive the protocol, not just the call.

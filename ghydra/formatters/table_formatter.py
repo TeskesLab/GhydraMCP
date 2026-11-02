@@ -733,9 +733,12 @@ class TableFormatter(BaseFormatter):
             return self._capture("\n".join(lines))
 
         if kind == "call":
+            # The plugin's own text carries a "[state]" marker, and Rich reads
+            # a bracketed word as a style: without the escape the marker is
+            # swallowed and the agent loses the line it needs.
             return self._capture(
                 f"[cyan]{escape(str(payload.get('tool')))}[/cyan]\n\n"
-                f"{payload.get('text', '')}"
+                f"{escape(str(payload.get('text', '')))}"
             )
 
         if kind == "target":
@@ -762,7 +765,8 @@ class TableFormatter(BaseFormatter):
             text = payload.get("text")
             if text:
                 lines.append("")
-                lines.append(text)
+                # The plugin's own text, escaped for the same reason as above.
+                lines.append(escape(str(text)))
             return self._capture("\n".join(lines))
 
         return self._capture(str(payload))
