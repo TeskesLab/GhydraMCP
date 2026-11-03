@@ -63,6 +63,17 @@ GhydraMCP started as a fork of [GhidraMCP by Laurie Wired](https://github.com/La
 
 ## What's new
 
+### The headless GhydraMCP
+
+The API can run without a window. `ghydra headless start <binary>` imports and analyses the binary
+in a headless Ghidra run and serves the same REST API from it — the same twenty-one resources, the
+same decompiler service, the same middleware. `ghydra report build <binary>` puts Ghidra and Kuna
+side by side in one report and writes the annotations for the debugger, so a human opens it and
+finds the interesting functions already marked. Full reference:
+[GHYDRA_HEADLESS.md](GHYDRA_HEADLESS.md).
+
+
+
 ### The x64dbg integration
 
 The assistant can now drive a live debugger, with the static analysis and the dynamic one sharing
@@ -132,6 +143,60 @@ from function and symbol responses.
 - `ghydra functions update-variable`, a duplicate of `functions set-variable` with different
   flags. Use `set-variable`; the `functions_update_variable` MCP tool and the underlying
   `PATCH /functions/{address}/variables/{variable_name}` endpoint are unchanged.
+
+## The headless GhydraMCP
+
+The plugin serves the REST API from a window a human is looking at. A headless Ghidra run serves
+the very same API with nobody watching: the binary is imported, analysed, and the API answers for
+that analysis.
+
+It is not a second implementation. The headless run starts the same server, registers the same
+twenty-one resources and uses the same decompiler service. What is behind them is what differs:
+one fixed program and one fixed project, instead of a ProgramManager, a tool and a UI.
+
+```
+ghydra headless start C:\bin\cmd.exe      # analyse and serve, on port 8192
+ghydra headless status                    # what is running
+ghydra headless stop                      # end it; the analysis is saved first
+```
+
+The run outlives the command that started it — the state lives under `~/.ghidra`, so the MCP
+bridge finds it on its own, exactly like a CodeBrowser instance.
+
+### The report, and the annotations for the debugger
+
+```
+ghydra report build C:\bin\cmd.exe --output out
+```
+
+Three files come out: the report to read (`cmd-report.md`), the report to read with a program
+(`cmd-report.json`) and the annotations for the debugger (`cmd-x64dbg.json`).
+
+Ghidra and Kuna are put side by side — the program, its functions, its imports, its strings and its
+segments, next to the C that Kuna recovered — and the two are matched **by address**, because both
+tools read the same binary at the same addresses.
+
+```
+ghydra x64dbg annotate out\cmd-x64dbg.json --bookmarks
+```
+
+Every interesting function becomes a comment — the signature, the size, what Kuna called it — and a
+bookmark. The human opens the debugger and finds them marked.
+
+![The debugger at an annotated function](images/x64dbg-annotated-function.png)
+
+The dynamic half is `ghydra x64dbg report`: the state, the registers, the modules with their bases,
+the breakpoints, the disassembly at the instruction pointer, the call stack and the memory map.
+
+### The limits of a headless run
+
+The endpoints that need the GUI's cursor — `/address` and `/function` — answer `503` in a headless
+run. There is no cursor without a window. Every other endpoint behaves the same in both.
+
+The debugger is a different matter: the x64dbg plugin drives it without a human, but the debugger
+is a program with a window, and there is no build of it that runs without one.
+
+
 
 # The x64dbg integration
 
