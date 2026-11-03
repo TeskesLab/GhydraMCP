@@ -43,7 +43,13 @@ project, the log and the pid.
 ### `ghydra headless stop`
 
 Ends the run. The program is saved first, so the project holds the analysis and the program can be
-opened in Ghidra later.
+opened in Ghidra later. The answer says whether the save happened: a save the server refused is not
+reported as a save.
+
+The state of the run is erased only while it is still that run's state. A start that was refused
+before the analyzer was launched has no process of its own, and the state on disk belongs to a run
+that is still there — erasing it would leave that run untracked, and the next start would walk past
+the guard that remembers it.
 
 ---
 
@@ -71,6 +77,17 @@ of the first. `--project-name` names the project yourself.
 
 **The state.** `~/.ghidra/headless-<port>.json` remembers the run, and `~/.ghidra/headless-<port>.log`
 holds its output. The log is where the reasons a run failed are.
+
+The state carries two things besides the run itself. The port is **claimed** before the analyzer
+is launched, so two starts that arrive together cannot both find the port free and launch an
+analyzer each — the one that binds the API first would answer both waits, and the report could
+combine the Ghidra data of one binary with the Kuna data of another. The claim carries a **token**
+that says which launcher made it, and a claim that no run took up is given back after a minute, so
+a launcher that died does not hold the port forever. A start that finds the port claimed says so.
+
+The PID that the state remembers is checked against the port as well as against the marker of the
+script: the PID of a run that crashed is reused by another run of the same script — on another
+port, with another project — and stopping that one would kill a live analysis.
 
 ---
 
