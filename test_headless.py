@@ -306,6 +306,114 @@ class HeadlessStopTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "HEADLESS_ALREADY_RUNNING")
 
 
+class HeadlessSaveTests(unittest.TestCase):
+    """Whether the analysis ended up in the project.
+
+    In a headless run the API save is refused: the program is inside the
+    transaction of the script that serves the API, and the analyzer saves
+    the program when the script returns. The answer is about the analysis,
+    not about the call - and the project is what answers it.
+    """
+
+    def _runner(self, tmp, port=65434):
+        binary = os.path.join(tmp, "cmd.exe")
+        with open(binary, "w", encoding="utf-8") as handle:
+            handle.write("MZ")
+        runner = headless.HeadlessRunner(
+            binary=binary, port=port, project_dir=tmp, project_name="cmd",
+            ghidra_home=tmp)
+        runner.instance.log = os.path.join(tmp, "run.log")
+        return runner
+
+    def _content(self, tmp, name="db.1.gbf"):
+        """The file that holds the content of the program in the project."""
+        directory = os.path.join(tmp, "cmd.rep", "idata", "00", "~00000001.db")
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("content")
+        return path
+
+    def test_the_project_says_whether_the_content_was_written(self):
+        """The content of the program in the project is the witness."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self._content(tmp)
+            self.assertTrue(
+                headless.project_content_written_since(tmp, "cmd", time.time() - 60))
+            self.assertFalse(
+                headless.project_content_written_since(tmp, "cmd", time.time() + 60))
+
+    def test_a_save_that_is_in_progress_is_not_a_save(self):
+        """The file that a save writes while it is in progress does not count.
+
+        It is there whether the save finished or not, and its name says so.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = os.path.join(tmp, "cmd.rep", "idata", "00", "~00000001.db")
+            os.makedirs(directory, exist_ok=True)
+            with open(os.path.join(directory, "tmp14189909769944492164.ps"), "w",
+                      encoding="utf-8") as handle:
+                handle.write("")
+            self.assertFalse(
+                headless.project_content_written_since(tmp, "cmd", time.time() - 60))
+
+    def test_a_refused_api_save_still_reports_the_save_the_analyzer_made(self):
+        """The answer is about the analysis, not about the API call.
+
+        The API save is refused, the stop is polite, the script returns, and
+        the analyzer writes the content of the program: the analysis is in
+        the project, and the answer says so.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            runner.save = lambda: False
+            runner.instance.pid = 4242
+
+            def wait_and_save(pid, timeout):
+                self._content(tmp)
+                return True
+
+            with mock.patch.dict(os.environ, {"GHYDRA_STATE_DIR": tmp}), \
+                    mock.patch.object(headless, "process_is_ours", return_value=True), \
+                    mock.patch.object(runner, "_wait_for_exit",
+                                      side_effect=wait_and_save):
+                saved = runner.stop(timeout=1)
+            self.assertTrue(saved,
+                            "the analysis was saved and the answer said it was not")
+
+    def test_a_refused_api_save_without_a_write_is_not_a_save(self):
+        """A run that was killed did not save the analysis."""
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            runner.save = lambda: False
+            runner.instance.pid = 4242
+            with mock.patch.dict(os.environ, {"GHYDRA_STATE_DIR": tmp}), \
+                    mock.patch.object(headless, "process_is_ours", return_value=True), \
+                    mock.patch.object(runner, "_wait_for_exit", return_value=True):
+                saved = runner.stop(timeout=1)
+            self.assertFalse(saved)
+
+    def test_the_script_stops_the_server_before_it_returns(self):
+        """A headless run has to be able to end.
+
+        The threads of the server are not daemons, and a JVM with a live
+        Jetty does not exit: the run stayed alive after the analyzer had
+        saved the program, and the launcher had to kill it - the polite stop
+        turned into the blunt one, and the analysis of a program that was
+        being saved was lost.
+        """
+        script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "src", "main", "resources", "ghidra_scripts",
+            "GhidraHeadlessServer.java")
+        with open(script, "r", encoding="utf-8") as handle:
+            body = handle.read()
+        self.assertIn("handle.stop()", body,
+                      "the script does not stop the server it started")
+        self.assertLess(body.index("handle.stop()"), body.index("HEADLESS STOPPED"),
+                        "the server is stopped after the script announced that it stopped")
+
+
 class HeadlessOwnershipTests(unittest.TestCase):
     """Who owns the port, the state and the lock.
 

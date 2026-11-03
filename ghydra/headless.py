@@ -297,6 +297,32 @@ def project_has_program(project_dir: str, project_name: str, program: str) -> bo
     return f":{name}:" in index
 
 
+def project_content_written_since(project_dir: str, project_name: str,
+                                  since: float) -> bool:
+    """Whether the content of the program in the project was written after a moment.
+
+    The answer to "is the analysis in the project?" is the project itself.
+    Ghidra keeps the content of a program under `<project>.rep/idata/`, in a
+    file whose name starts with "db." - a new one for every save - and the
+    headless analyzer writes it when the script returns.
+
+    The files that a save writes while it is in progress do not count: their
+    name starts with "tmp", and they are there whether the save finished or
+    not.
+    """
+    root = os.path.join(project_dir, f"{project_name}.rep", "idata")
+    for base, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.startswith("db."):
+                continue
+            try:
+                if os.path.getmtime(os.path.join(base, name)) >= since:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 def provenance_path(project_dir: str, project_name: str) -> str:
     """The file that remembers which binary a project was built from."""
     return os.path.join(project_dir, f"{project_name}.ghydra.json")
@@ -865,18 +891,29 @@ class HeadlessRunner:
             return saved
 
         flag = stop_file_path(self.port)
+        asked = time.time()
         try:
             os.makedirs(os.path.dirname(flag), exist_ok=True)
             with open(flag, "w", encoding="utf-8") as handle:
-                handle.write(str(time.time()))
+                handle.write(str(asked))
         except OSError:
             flag = ""
 
         if flag and self._wait_for_exit(pid, timeout):
             self._clear_own_state()
-            # The save was asked for and answered before the run was told to
-            # stop: a save that the server refused is not a save, and the
-            # caller is told the truth.
+            if not saved:
+                # The API save was refused, and in a headless run that is
+                # what the analyzer does: the program is inside the
+                # transaction of the script that serves the API, and the
+                # analyzer saves it when the script returns - which is what
+                # the polite stop is for. The project says whether it did:
+                # the content of the program was written after the stop was
+                # asked for.
+                saved = project_content_written_since(
+                    self.project_dir, self.project_name, asked)
+                if saved:
+                    self._note("the api save was refused; the analyzer saved "
+                               "the program when the script returned")
             return saved
 
         if os.name == "nt":

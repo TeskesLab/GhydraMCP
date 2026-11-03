@@ -544,6 +544,17 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
   the script returns when it sees it; the headless analyzer then saves the program and closes the
   project, and the project is left unlocked. Killing the process instead leaves the lock file
   behind, and the next run refuses to open the project.
+- **A headless run has to stop the server it started.** The threads of a Jetty are not daemons, and
+  a JVM with a live Jetty does not exit: the run stayed alive after the analyzer had saved the
+  program, and the launcher had to kill it - the polite stop turned into the blunt one, and the
+  analysis of a program that was being saved was lost. The script stops the server before it
+  returns.
+- **The save of a headless run is the analyzer's, not the API's.** The program is inside the
+  transaction of the script that serves the API, so `POST /program/save` is refused with "Unable to
+  lock due to active transaction"; the analyzer saves the program when the script returns. The
+  answer is built from the project instead: Ghidra writes the content of the program under
+  `<project>.rep/idata/` in a file whose name starts with `db.`, and that is the witness of the
+  save.
 - **The launcher is cross-platform**: `support/analyzeHeadless` on POSIX,
   `support/analyzeHeadless.bat` on Windows. The JDK comes from `JAVA_HOME`, and Ghidra 12 needs a
   JDK 21 or newer - the machine's default is often an older one.
