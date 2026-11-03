@@ -4,37 +4,91 @@
 [![GitHub stars](https://img.shields.io/github/stars/starsong-consulting/GhydraMCP)](https://github.com/starsong-consulting/GhydraMCP/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/starsong-consulting/GhydraMCP)](https://github.com/starsong-consulting/GhydraMCP/network/members)
 [![GitHub contributors](https://img.shields.io/github/contributors/starsong-consulting/GhydraMCP)](https://github.com/starsong-consulting/GhydraMCP/graphs/contributors)
-[![Build Status](https://github.com/starsong-consulting/GhydraMCP/actions/workflows/build.yml/badge.svg)](https://github.com/starsong-consulting/GhydraMCP/actions/workflows/build.yml)
+[![Build Status](https://img.shields.io/github/starsong-consulting/GhydraMCP/actions/workflows/build.yml/badge.svg)](https://github.com/starsong-consulting/GhydraMCP/actions/workflows/build.yml)
 
 # GhydraMCP
 
-GhydraMCP connects [Ghidra](https://ghidra-sre.org/) to AI assistants for reverse engineering, over the [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol/mcp) or a command-line tool.
+**Static analysis in Ghidra, dynamic analysis in x64dbg, and a second opinion from the Kuna
+decompiler — over MCP or from the command line.**
 
 ![GhydraMCP logo](images/logo/ghydramcp-logo.png)
 
-
 ## Overview
 
-> **Note:** The MCP bridge (`bridge_mcp_hydra.py`) is being deprecated in favor of the CLI tool (`ghydra`). The CLI provides the same capabilities with better output formatting, `--json` mode for scripting and AI tool use, and doesn't require an MCP-capable client. The bridge will continue to work but is no longer the recommended integration path.
+Three surfaces, one assistant:
 
-GhydraMCP has four components:
+| | What it is | What it gives the assistant |
+| --- | --- | --- |
+| **Ghidra** | The plugin, inside the CodeBrowser | 72 tools over the program: functions, data, structures, xrefs, the CFG, the decompiler |
+| **x64dbg** | A plugin that lives inside the debugger | The debugger's own 80 tools over the live process: registers, memory, breakpoints, stepping |
+| **Kuna** | A separate decompiler CLI | A second opinion on the same binary, and the recovered C as MCP resources |
 
-1. **Ghidra plugin**: exposes Ghidra over a HATEOAS REST API
-2. **CLI tool (`ghydra`)**: a standalone terminal client; human-readable tables, plus `--json` for scripting and AI tool use
-3. **MCP bridge** *(deprecated)*: a Python script that translates MCP requests into API calls
-4. **Multiple instances**: connect several Ghidra windows to work on different binaries at once
+The bridge exposes **91 tools** in total: the 72 above, 6 over x64dbg (the pass-through that reaches
+the debugger's own 80), and 13 for the Kuna exports.
+
+The two debugger sides share one model of addresses, so a static address from Ghidra can be turned
+into a live one for x64dbg — and a breakpoint the assistant sets lands on the instruction the
+static analysis was talking about.
+
+Neither of the two new integrations changes the Ghidra REST API: `API_VERSION` is still **3000**,
+and the plugin gains no endpoint. They are local — a plugin on this machine, and a CLI on this
+machine — and they work with any Ghidra version.
+
+The components:
+
+1. **Ghidra plugin** — exposes Ghidra over a HATEOAS REST API
+2. **CLI tool (`ghydra`)** — a standalone terminal client; human-readable tables, plus `--json`
+   for scripting and AI tool use
+3. **MCP bridge** — a Python script that translates MCP requests into API calls
+4. **Multiple instances** — connect several Ghidra windows to work on different binaries at once
+
+> **Note:** The MCP bridge (`bridge_mcp_hydra.py`) is being deprecated in favor of the CLI tool
+> (`ghydra`). The CLI provides the same capabilities with better output formatting, `--json` mode
+> for scripting and AI tool use, and doesn't require an MCP-capable client. The bridge will
+> continue to work but is no longer the recommended integration path. The two local integrations
+> below are available through both, and the MCP resources are MCP-only by nature.
 
 Through it, an assistant can:
+
 - Decompile and analyze binary code, with a few output formats
 - Map program structure, function relationships, and data types
 - Run binary analysis (cross-references, call graphs, data flow)
 - Edit the analysis (rename, annotate, create/delete/modify data)
 - Read and write memory
 - Follow HATEOAS links between resources
+- Set breakpoints in a live debugger, from an address Ghidra found
+- Read the recovered C of a whole binary as MCP resources
 
 GhydraMCP started as a fork of [GhidraMCP by Laurie Wired](https://github.com/LaurieWired/GhidraMCP/) and added multi-instance support, data manipulation, and a HATEOAS REST API.
 
-## What's new in 3.0.0
+## What's new
+
+### The x64dbg integration
+
+The assistant can now drive a live debugger, with the static analysis and the dynamic one sharing
+one address model. Six tools, an address translation that works on a real process, and a failure
+taxonomy that tells an agent whether the debugger already acted. Full reference:
+[GHYDRA_X64DBG.md](GHYDRA_X64DBG.md).
+
+### The Kuna exports are MCP resources
+
+A Kuna export — the recovered C, the disassembly and an index of every function — used to be
+reachable only through an in-memory job id that died with the bridge. It is now exposed as MCP
+resources, addressed by a digest that outlives the process:
+
+```
+kuna://exports                              the manifest of every export on disk
+kuna://export/{digest}/index.jsonl          the function index
+kuna://export/{digest}/{function}.c         one function, as C
+kuna://export/{digest}/{function}.asm       one function, as assembly
+kuna://export/{digest}/README.md            what the export is
+```
+
+That is the retrieval loop with **exact** addressing: list the exports, read the index, read one
+function. A corpus with an exact index does not need embeddings — they would retrieve the wrong
+function more often than the right one. Full reference: [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
+
+### 3.0.0
 
 `API_VERSION` is **3000** — see [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) for the full reference
 and [CHANGELOG.md](CHANGELOG.md) for the full list.
@@ -79,23 +133,229 @@ from function and symbol responses.
   flags. Use `set-variable`; the `functions_update_variable` MCP tool and the underlying
   `PATCH /functions/{address}/variables/{variable_name}` endpoint are unchanged.
 
-# Features
+# The x64dbg integration
+
+The [x64dbg MCP server](https://github.com/duty1g/x64dbg-mcp-server) is a plugin that lives inside
+the debugger. It answers JSON-RPC 2.0 requests POSTed to `/` with a bearer token, and it exposes
+80 tools over the running debuggee.
+
+## How the two sides line up
+
+Ghidra works on the image as it sits in the file, at the image base. x64dbg works on the live
+process, where the loader put the module. The difference is a constant:
+
+```
+runtime = static − image_base + module_base
+```
+
+The image base comes from Ghidra's `/program` endpoint, the module base from the plugin's
+`ListModules`. The two binaries are matched by full path first and by file name second, because
+the two sides can disagree about the directory without disagreeing about the file.
+
+`x64dbg_breakpoint_at` takes the **static** address — the one Ghidra shows — and translates it.
+The static address on its own is not mapped in the live process: it does not disassemble there.
+
+## The tools
+
+Six, not eighty. Exposing all of them would put 165 tools in one agent's tool list, which
+measurably degrades tool selection. What is exposed is the catalogue, a pass-through, and four
+workflow tools that carry the address model:
+
+| Tool | What it does |
+| --- | --- |
+| `x64dbg_status` | Whether the server answered, what it has, and which modules are loaded |
+| `x64dbg_tools` | The catalogue: name, description, input schema, and the read-only hint |
+| `x64dbg_call` | Any plugin tool by name |
+| `x64dbg_target` | The two sides of the address model: the image base and the module base |
+| `x64dbg_breakpoint_at` | A Ghidra address becomes a live breakpoint |
+| `x64dbg_go_to` | A Ghidra address becomes the instruction pointer |
+
+The same six exist on the command line:
+
+```bash
+# Is the debugger there, and what is it looking at
+ghydra x64dbg status
+
+# The plugin's catalogue: eighty tools, with their schemas
+ghydra x64dbg tools
+
+# Call any of them by name
+ghydra x64dbg call GetAllRegisters
+ghydra x64dbg call SetBreakpoint --arg target=0x7FF7A1234000
+ghydra x64dbg call ReadMemory --json-args '{"address": "0x7FF7A1234000", "size": 64}'
+
+# The tools that block need more time than the default 30 seconds
+ghydra x64dbg call WaitForEvent --json-args '{"timeoutMs": 60000}' --timeout 90
+
+# How the Ghidra program and the x64dbg session line up
+ghydra x64dbg target
+
+# A breakpoint on a Ghidra address, translated into the runtime address
+ghydra x64dbg breakpoint 0x140001234
+
+# Move the instruction pointer there
+ghydra x64dbg go-to 0x140001234
+```
+
+## The arguments travel as one piece of text
+
+`x64dbg_call` takes the plugin's arguments in `tool_arguments`, as **JSON text**:
+
+```json
+{"tool": "Disassemble", "tool_arguments": "{\"address\": \"0x7FF7A1234000\", \"count\": 3}"}
+```
+
+That is deliberate. A client that re-encodes the container the MCP protocol uses for a tool's
+parameters flattens what is nested in it: every value of a nested object arrives as a string.
+Measured on this desktop, where an integer `count` arrived as `"3"` — and the plugin, which
+ignores a parameter it cannot read, answered with its default count instead of the one that was
+asked for, and the call looked like it had worked. The text is the form nothing gets in the way
+of. An object is still accepted, and its types are put back from the plugin's own input schema
+before the call.
+
+## Failures carry a code
+
+The bridge and the CLI carry the same ten codes, so an agent can branch on the reason instead of
+reading prose:
+
+| Code | What it means |
+| --- | --- |
+| `X64DBG_ERROR` | The generic fallback |
+| `X64DBG_DISABLED` | No token, so there is no way to talk to the server: the scan is not even tried |
+| `X64DBG_MISSING` | Nothing answered on the port, and the request never left |
+| `X64DBG_TIMEOUT` | The server did not answer in time |
+| `X64DBG_UNCERTAIN` | The request was sent but the answer was lost: the debugger may already have acted |
+| `X64DBG_UNAUTHORIZED` | The bearer token did not match |
+| `X64DBG_NO_SESSION` | No debug session in x64dbg |
+| `X64DBG_NO_TOOL` | The plugin has no tool with that name |
+| `X64DBG_BAD_ARGS` | The tool rejected the arguments |
+| `X64DBG_NO_MATCH` | The binary does not match any loaded module |
+
+`X64DBG_UNCERTAIN` exists because "the request never left" and "the answer was lost on the way
+back" are not the same failure, and an agent that cannot tell them apart retries a call that
+may already have changed the debuggee. A request is only sent again when it is safe to send
+again, and the plugin marks every tool with `annotations.readOnlyHint`.
+
+## Configuring it
+
+The token is the one thing that has to be found somewhere: the plugin writes it to its own
+`mcp_config.json`, next to `x64dbg.exe`. Point at the installation and it is read from there.
+
+```json
+{
+  "x64dbg": {
+    "path": "C:/tools/x64dbg"
+  }
+}
+```
+
+The environment carries the same, and the path too: `GHYDRA_X64DBG_HOST`, `GHYDRA_X64DBG_PORT`,
+`GHYDRA_X64DBG_TOKEN` and `GHYDRA_X64DBG_PATH`. The config file wins over the environment, as
+everywhere else. The path is worth having in the environment because the token is the one thing
+that cannot be guessed: `GHYDRA_X64DBG_PATH` is enough to make the integration work without
+editing a configuration file at all.
+
+The plugin's own file fills the blanks and only the blanks. It says which address the plugin
+listens on, and that is what is used when nothing else says so — but a host or a port that came
+from the config file or from the environment is a decision the user made, and the plugin's file
+does not get to overrule it.
+
+## Verified against the real plugin
+
+Not only against the fake one the test suite uses. With `cmd.exe` loaded under the debugger, the
+token and the port were read from the plugin's own `mcp_config.json`, the server reported its 80
+tools and the five loaded modules, the static entry point of `cmd.exe` translated to the address
+the loader had given the module and disassembled to the real entry stub (the static address on
+its own is not mapped in the live process), and the breakpoint set at that translated address was
+listed by the debugger as `cmd.exe!entry breakpoint` — resolved by name.
+
+## The limits
+
+- The plugin has to be loaded and the debugger has to be running.
+- The tools that block (`run`, `WaitForEvent`, `WaitForPause`) need a `timeout` longer than their
+  own, since the default read timeout is 30 seconds.
+- `x64dbg_go_to` moves the instruction pointer, so the debuggee has to be paused.
+
+# The Kuna decompiler
+
+[Kuna](https://github.com/Noelo-Lab/kuna) is a standalone decompiler CLI. The bridge and the CLI
+drive it as a subprocess, so it touches neither the REST API nor `API_VERSION`, and it works with
+any Ghidra version.
+
+It is **opt-in**, because it is an elevation of privilege: the bridge normally only speaks HTTP,
+and this lets it run a program on the host. Enable it with `GHYDRA_KUNA=1` or with
+`"kuna": {"enabled": true}` in `~/.ghydra/config.json`. The config file wins: an explicit
+`enabled: false` keeps it off even with the environment variable set.
+
+```bash
+# Size up a binary: function count, entry point, reachability
+ghydra kuna summary ./challenge.exe
+
+# Decompile one function
+ghydra kuna decompile ./challenge.exe main
+
+# Find crypto constants and the functions that use them
+ghydra kuna crypto ./challenge.exe --algorithm AES
+
+# Analyse once, write the recovered C, the disassembly and an index to disk
+ghydra kuna export ./challenge.exe -o ./challenge.kuna
+
+# Then read from the export
+ghydra kuna export-read ./challenge.kuna main
+ghydra kuna export-read ./challenge.kuna main --artifact asm
+```
+
+## The export, and the cost of it
+
+Kuna loads and analyses the whole image on every invocation — measured with Kuna 1.988: 20 s for
+a 44 MB binary, 0.5 s for a 332 KB one. The cost is the analysis, not the command, so the export
+flow is the main path: analyse once into `~/.ghydra/kuna/<digest of path+mtime>/`, then read the
+C, the disassembly and `index.jsonl` from disk.
+
+A complete export is reused rather than re-analysed. Measured: re-reading the export of a 332 KB
+binary takes 21 ms against the 2 750 ms of the export itself; for a 44 MB binary it is 152 ms
+against the 154 s of the export. The re-read is not quite free either — it reads the index, which
+holds one record per function.
+
+The export is addressed by its digest, not by the job. The digest is 12 hex characters, survives a
+restart of the bridge, and is what `kuna_export_read`, the `kuna://export/<digest>/` resources and
+`ghydra kuna status` all use. The job registry lives in the bridge process, so a job started by
+one bridge is invisible to another and does not survive a restart — which is why the digest
+exists.
+
+Two rules keep a stale export from answering for the wrong thing:
+
+- **A subset is not the whole binary.** The digest is keyed by the path and the modification time,
+  *not* by the filter, so the same directory serves a filtered export and an unfiltered one. The
+  sidecar records the filter, and an unfiltered request against a filtered export is analysed
+  again.
+- **A directory the caller named has no provenance of its own.** The digest directory carries the
+  provenance in its name; a directory given with `-o` does not. The sidecar records the
+  modification time as well as the binary, so another binary — or the same path rebuilt — is
+  analysed again instead of answered with stale artifacts.
+
+Full reference, including the fourteen error codes and the export readers:
+[GHYDRA_KUNA.md](GHYDRA_KUNA.md).
+
+# The Ghidra plugin
 
 ## Program analysis
 
 - **Decompilation**:
-  - Convert binary functions to readable C code 
-  - Toggle between clean C-like pseudocode and raw decompiler output
-  - Show/hide syntax trees for detailed analysis
-  - Multiple simplification styles for different analysis approaches
-  
-- **Static analysis**: 
+  - Convert binary functions to readable C code — Ghidra's C-like pseudocode, produced with the
+    decompiler options of the program being analyzed (there is no target-language selector: the
+    plugin returns the decompiler's C directly)
+
+- **Static analysis**:
   - Cross-reference analysis (find callers and callees)
   - Call graph generation and traversal
   - Data flow analysis with variable tracking
   - Type propagation and reconstruction
   - Function relationship mapping
-  
+  - Control-flow graph: the basic blocks of a function and the edges between them
+  - P-code: the decompiler's own intermediate representation
+  - Scalar search: the constant values in the instructions
+
 - **Memory**:
   - Direct memory reading with hex and raw byte representation
   - Address space navigation and mapping
@@ -115,12 +375,17 @@ from function and symbol responses.
   - Analyze data structures and complex types
   - View disassembly with linking to decompiled code
   - Examine function prototypes and signatures
-  
+
 - **Annotation**:
-  - Rename functions, variables, and data 
+  - Rename functions, variables, and data
   - Add multiple comment types (EOL, plate, pre/post)
   - Create and modify data types
   - Set and update function signatures and prototypes
+
+- **In the live debugger**:
+  - Set a breakpoint on an address Ghidra found, translated to where the loader put the module
+  - Read registers, memory and stack frames from the running process
+  - Move the instruction pointer to a Ghidra address
 
 ## Data manipulation
 
@@ -164,161 +429,88 @@ from function and symbol responses.
 - Pagination for handling large result sets
 - Filtering capabilities across all resources
 
-## Kuna decompiler (optional)
-
-[Kuna](https://github.com/Noelo-Lab/kuna) is a standalone decompiler CLI. GhydraMCP can drive it directly — no Ghidra instance involved — which is useful for a file that is not open in Ghidra, a packed sample, or a second opinion on a function.
-
-The integration is **opt-in**, because it lets the bridge run a program on the host. Enable it with the environment variable:
-
-```bash
-export GHYDRA_KUNA=1
-```
-
-or in the CLI config file, which also accepts the path to the executable:
-
-```json
-{
-  "kuna": {
-    "enabled": true,
-    "path": "/usr/local/bin/kuna"
-  }
-}
-```
-
-The config file wins when both are set: `"enabled": false` keeps the integration off even with `GHYDRA_KUNA=1`. `ghydra kuna status` reports which one decided.
-
-Kuna loads and analyses the whole image on every invocation, so a large binary costs seconds per call. For a file of any size, export it once and read the result from disk:
-
-```bash
-ghydra kuna export ./challenge.exe -o ./challenge.kuna   # analyse once
-ghydra kuna export-read ./challenge.kuna main              # then read it
-```
-
-Exporting the same binary again reuses the export that is already on disk instead of analysing it again. The export is named after a digest of the path and the modification time, so it can be read without knowing where the directory is:
-
-```bash
-ghydra kuna status                                      # lists the exports and their digests
-ghydra kuna export-read 9f2c1a4b7e03 main                # by digest
-```
-
-The MCP bridge exposes the same operations as `kuna_*` tools, including `kuna_export_start` / `kuna_export_status` / `kuna_export_read` for the export flow. The exports are also exposed as **MCP resources** addressed by that digest — `kuna://exports` lists them, and `kuna://export/{digest}/index.jsonl` and `kuna://export/{digest}/{function}.c` serve the files. Those URIs outlive the bridge process, so an export made by the CLI is readable by the agent too.
-
-**[GHYDRA_KUNA.md](GHYDRA_KUNA.md) is the full reference** — the opt-in, every tool and command, the export layout, the measured performance and the limits. [GHYDRA_CLI.md](GHYDRA_CLI.md#kuna-commands) has the command summary.
-
-## x64dbg debugger (optional)
-
-The [x64dbg MCP server](https://github.com/duty1g/x64dbg-mcp-server) is a plugin that lives inside the debugger and answers JSON-RPC over HTTP. GhydraMCP can drive it, so the static image (Ghidra) and the live process (x64dbg) can be worked on in the same session — with the addresses of one side usable on the other.
-
-The plugin writes the bearer token it wants to its own `mcp_config.json`, so pointing at the installation is enough:
-
-```json
-{
-  "x64dbg": {
-    "path": "C:/tools/x64dbg"
-  }
-}
-```
-
-```bash
-ghydra x64dbg status                       # is the debugger there
-ghydra x64dbg tools                        # the plugin's catalogue
-ghydra x64dbg target                       # how Ghidra and x64dbg line up
-ghydra x64dbg breakpoint 0x140001234       # a breakpoint on a Ghidra address
-ghydra x64dbg call GetAllRegisters         # any of the plugin's eighty tools
-```
-
-The address model is the point: Ghidra shows an address in the file, x64dbg works in the process, and the two are related by the image base and the module base. The tools that take an address take the **Ghidra** one and translate it.
-
-The plugin's eighty tools are not exposed one by one — that would drown the agent's tool list — so the bridge exposes the catalogue (`x64dbg_tools`), a generic pass-through (`x64dbg_call`) and four workflow tools that carry the address model.
-
-**[GHYDRA_X64DBG.md](GHYDRA_X64DBG.md) is the full reference** — the contract, the configuration, the address model, every tool and command, the failure codes and the limits.
-
 # Installation
 
 ## Prerequisites
-- [Ghidra](https://ghidra-sre.org) 11.x or 12.x. Releases ship a separate build per Ghidra version; the extension's `ghidraVersion` must match your Ghidra version exactly.
-- Java 21 (Temurin 21 recommended) for building the plugin
-- Python3
-- MCP [SDK](https://github.com/modelcontextprotocol/python-sdk)
+
+- **Ghidra** 11.x or 12.x (the plugin is built against both)
+- **Python** 3.11 or later
+- **uv** (recommended) or pip
+- **Java** 21 or later, to build the plugin from source
 
 ## Ghidra
-First, download the latest [release](https://github.com/starsong-consulting/GhydraMCP/releases) from this repository. The "Complete" artifact contains the zipped Ghidra plugin and the Python MCP bridge. Unpack the outer archive, then, add the plugin to Ghidra:
 
-1. Run Ghidra
-2. Select `File` -> `Install Extensions`
-3. Click the `+` button
-4. Select the `Ghydra-*-ghidra<version>.zip` that matches your Ghidra version (e.g. `...-ghidra12.1.2.zip` for Ghidra 12.1.2)
-5. Restart Ghidra
-6. Make sure the Ghydra plugin is enabled in `File` -> `Configure` -> `Developer`
+1. Download the latest release from the releases page. Each release ships an artifact per Ghidra
+   series — `Ghydra-v3.0.0-...-ghidra12.2.zip` for Ghidra 12.2 and `...-ghidra11.4.3.zip` for
+   Ghidra 11.4.3 (plus a `Ghydra-Complete-...` variant that also carries the bridge script). The
+   `ghidra<version>` suffix must match your install **exactly**: it is the `ghidraVersion` the
+   extension declares, and Ghidra refuses to load an extension whose version does not match the
+   running install — a mismatch is a failed install, not a warning.
+2. Extract it
+3. In Ghidra: `File` → `Install Extensions` → the `+` icon → select the zip → `OK`
+4. Restart Ghidra
+5. In Ghidra: `File` → `Configure` → `Developer` → tick **Ghidra** → `OK`
 
-> **Note:** By default, the first CodeBrowser opened in Ghidra gets port 8192, the second gets 8193, and so on. You can check which ports are being used by looking at the Console in the Ghidra main (project) window - click the computer icon in the bottom right to "Open Console". Look for log entries like:
-> ```
-> (GhydraPlugin) GhydraMCP loaded on port 8193
-> (GhydraServer) GhydraMCP HTTP server started on port 8193
-> ```
->
-> GhydraMCP now includes auto-discovery of running Ghidra instances, so manually registering each instance is typically not necessary. The MCP bridge will automatically discover and register instances on startup and periodically check for new ones.
+The plugin is declared in Ghidra's `Developer` package, so the install makes Ghidra *discover* it,
+not enable it. Without step 5 `GhydraPlugin` is never constructed, no HTTP port binds, and
+neither the CLI nor the bridge can reach the program.
 
-Video Installation Guide:
+The first CodeBrowser binds port 8192; a second one binds 8193, and so on.
 
-https://github.com/user-attachments/assets/75f0c176-6da1-48dc-ad96-c182eb4648c3
+For a later update, swap `lib/Ghydra.jar` in the installed extension and restart Ghidra — there
+is no need to reinstall the whole thing.
 
 ## CLI Tool
-
-GhydraMCP includes `ghydra`, a command-line tool for interacting with Ghidra directly from the terminal. It works standalone, no MCP client needed.
 
 ```bash
 # Install
 pip install -e .
 
+# or, with uv — it does not create an environment on its own, so make one first
+uv venv && uv pip install -e .
+```
+
+```bash
 # List running Ghidra instances
 ghydra instances list
 
 # Decompile a function
 ghydra functions decompile --name main
 
-# List strings matching a pattern
-ghydra data list-strings --filter "password"
+# List the strings in the program
+ghydra data list-strings
 
-# Read memory as hex dump
+# Read memory as a hex dump
 ghydra memory read --address 0x401000 --length 64
 
 # JSON output for scripting and piping
-ghydra --json functions list | jq '.result[].name'
+ghydra --json functions decompile --name main
 ```
 
-All commands accept `--host`, `--port`, `--json`, and `--no-color`, but these are defined on the root command and must come **before** the subcommand: `ghydra --json functions list`. See [GHYDRA_CLI.md](GHYDRA_CLI.md) for the full reference.
+The `--json` flag goes **before** the subcommand. The config precedence is CLI flag >
+`GHYDRA_HOST`/`GHYDRA_PORT` > `~/.ghydra/config.json` > defaults (`localhost:8192`, timeout 900).
 
 ### Installing on Linux and NixOS
 
-`pip install -e .` needs a Python environment you own. On a distribution that manages
-Python centrally (Debian, Fedora, and **NixOS**) the system interpreter refuses the
-install with `error: externally-managed-environment`, so use one of:
-
 ```bash
 # uv, with its own environment (recommended)
-uv tool install --editable .
-uv venv && uv pip install --editable .
+uv tool install .
 
 # a plain virtualenv
-python3 -m venv .venv && .venv/bin/pip install -e .
-
-# NixOS, inside a nix-shell with the interpreter and the tools
-nix-shell -p python3 python311Packages.pip --run 'python3 -m pip install -e .'
+python3 -m venv .venv && . .venv/bin/activate && pip install -e .
 ```
 
-The MCP bridge is a single script with inline dependencies, so it needs no install at
-all — `uv run` resolves them:
+On NixOS, `uv` has no interpreter of its own inside a `nix-shell`, so point it at the shell's
+`python3`:
 
 ```bash
-uv run bridge_mcp_hydra.py
+nix-shell -p python3 -p uv
 ```
 
-On NixOS, point `uv` at the interpreter that nix provides. Inside a `nix-shell`, `uv`
-cannot install its own managed Python and fails with `Python interpreter not found`:
+...and inside that shell:
 
 ```bash
-nix-shell -p uv python3 --run 'uv run --script --python python3 bridge_mcp_hydra.py'
+uv tool install --python python3 .
 ```
 
 `--python python3` tells `uv` to use the nix-provided interpreter instead of
@@ -339,316 +531,111 @@ response then arrives as one JSON document, with the same fields the text is bui
 
 ## MCP Clients
 
-GhydraMCP works with any MCP-compatible client using **stdio transport**. It has been tested and confirmed working with:
+Any MCP client works. The bridge is a stdio server:
 
-- **Claude Desktop** - Anthropic's official desktop application
-- **Claude Code** - Anthropic's VS Code extension and CLI tool
-- **Cline** - Popular VS Code extension for AI-assisted coding
+```json
+{
+  "mcpServers": {
+    "ghydra": {
+      "command": "uv",
+      "args": ["run", "/ABSOLUTE_PATH_TO/bridge_mcp_hydra.py"],
+      "env": {"GHIDRA_HYDRA_HOST": "localhost"}
+    }
+  }
+}
+```
 
-See the [Client Setup](#client-setup) section below for detailed configuration instructions for each client.
+The bridge exposes **91 tools in 23 namespaces**. The namespaces are:
+
+`analysis_*` · `classes_*` · `comments_*` · `data_*` · `datatypes_*` · `functions_*` ·
+`instances_*` · `kuna_*` · `memory_*` · `namespaces_*` · `programs_*` · `project_*` ·
+`projects_*` · `raw_image_*` · `scalars_*` · `scripts_*` · `segments_*` · `structs_*` ·
+`symbols_*` · `ui_*` · `variables_*` · `x64dbg_*` · `xrefs_*`
+
+The MCP client setup for Claude Desktop, Claude Code, Cline and 5ire is in
+[Client Setup](#client-setup) below.
 
 ## API Reference
 
 ### Available Tools
 
-Tools are grouped into namespaces:
-
-**Instance Management** (`instances_*`):
-- `instances_list`: List active Ghidra instances (auto-discovers on default host) - **use this first**
-- `instances_discover`: Discover instances on a specific host (params: host [optional]) - **only use for non-default hosts**
-- `instances_register`: Register new instance (params: port, url [optional])
-- `instances_unregister`: Remove instance (params: port)
-- `instances_use`: Set current working instance (params: port)
-- `instances_current`: Get current working instance info
-
-**Function Analysis** (`functions_*`):
-- `functions_list`: List all functions (params: offset, limit, port [optional])
-- `functions_get`: Get function details (params: name or address, port [optional]); `name` is the fully-qualified name (e.g. `MyClass::method`), a bare name resolves in the global namespace only
-- `functions_decompile`: Get decompiled C code (params: name or address, syntax_tree, style, timeout, port [optional]); incomplete results return retry metadata and suggested timeout
-- `functions_disassemble`: Get disassembled instructions (params: name or address, port [optional])
-- `functions_create`: Create function at address (params: address, port [optional])
-- `functions_rename`: Rename a function (params: old_name or address, new_name, port [optional]); a `new_name` containing `::` moves the function into that namespace (created if absent), a leading `::` moves it to the global namespace
-- `functions_set_signature`: Update function prototype (params: name or address, signature, port [optional])
-- `functions_delete`: Delete a function (params: name or address, port [optional])
-- `functions_get_variables`: Get function variables (params: name or address, port [optional])
-- `functions_update_variable`: Update a function variable (params: address, variable_name, new_name [optional], new_data_type [optional], port [optional])
-- `functions_set_comment`: Set function comment (params: address, comment, port [optional])
-
-**Data Manipulation** (`data_*`):
-- `data_list`: List data items (params: offset, limit, addr, name, name_contains, port [optional]); address lookups return defined data first, then label symbols if no defined data exists
-- `data_list_strings`: List all defined strings (params: offset, limit, filter, port [optional])
-- `data_create`: Create data at address (params: address, data_type, size [optional], port [optional])
-- `data_rename`: Rename data item (params: address, name, port [optional]); auto-defines a byte at the address if data is undefined
-- `data_delete`: Delete data item (params: address, port [optional])
-- `data_set_type`: Change data type (params: address, data_type, port [optional]); supports array syntax (e.g. `uint64_t[8]`) and auto-defines data when undefined
-
-**Struct Management** (`structs_*`):
-- `structs_list`: List all struct data types (params: offset, limit, category [optional], port [optional])
-- `structs_get`: Get detailed struct information (params: name, port [optional])
-- `structs_create`: Create new struct (params: name, category [optional], size [optional], description [optional], port [optional])
-- `structs_add_field`: Add field to struct (params: struct_name, field_name, field_type, offset [optional], comment [optional], port [optional])
-- `structs_update_field`: Update struct field (params: struct_name, field_name or field_offset, new_name [optional], new_type [optional], new_comment [optional], port [optional])
-- `structs_delete`: Delete struct (params: name, port [optional])
-
-**Memory Operations** (`memory_*`):
-- `memory_read`: Read bytes from memory (params: address, length, format, port [optional]); overlay-aware (`runtime::145e29b10` and plain offsets that map to overlays)
-- `memory_write`: Write bytes to memory (params: address, bytes_data, format, port [optional])
-
-**Cross-References** (`xrefs_*`):
-- `xrefs_list`: List cross-references (params: to_addr [optional], from_addr [optional], type [optional], offset, limit, port [optional])
-
-**Analysis** (`analysis_*`):
-- `analysis_run`: Trigger program analysis (params: analysis_options [optional], background [optional], port [optional])
-- `analysis_status`: Check analysis status (params: port [optional])
-- `analysis_get_callgraph`: Get function call graph (params: name or address, max_depth, port [optional])
-- `analysis_get_dataflow`: Perform reference-flow traversal from an address (params: address, direction, max_steps, port [optional])
-
-**Project Management** (`project_*`):
-- `project_info`: Get current project information (params: port [optional])
-- `project_list_files`: List files in project (params: folder, recursive, offset, limit, port [optional])
-- `project_open_file`: Open project file in CodeBrowser (params: path, port [optional])
-- `projects_list`: List projects (params: port [optional])
-- `projects_get`: Get project details by name (params: name, port [optional])
-- `programs_list`: List programs (params: project [optional], offset, limit, port [optional])
-- `programs_get`: Get program by ID or `current` (params: program_id [optional], port [optional])
-- `programs_delete`: Delete/close program by ID or `current` (params: program_id [optional], port [optional])
-
-> `programs_delete` and program import routes are currently exposed but may return `NOT_IMPLEMENTED` depending on plugin-side support.
-
-**Datatype Management** (`datatypes_*`):
-- `datatypes_list`: List data types (params: offset, limit, category [optional], kind [optional], port [optional])
-- `datatypes_search`: Search data types by name (params: name, offset, limit, port [optional])
-- `datatypes_create_struct`: Create struct datatype (params: name, category [optional], fields_json [optional], port [optional]); supports JSON field definitions
-- `datatypes_create_enum`: Create enum datatype (params: name, size [optional], category [optional], values_json [optional], port [optional]); supports JSON value definitions
-- `datatypes_create_union`: Create union datatype (params: name, category [optional], fields_json [optional], port [optional]); supports JSON field definitions
-
-**Comment Management** (`comments_*`):
-- `comments_set`: Set memory comment (params: address, comment [optional], comment_type [optional], port [optional])
-- `comments_get`: Get memory comment (params: address, comment_type [optional], port [optional])
-
-**UI Helpers** (`ui_*`):
-- `ui_get_current_address`: Get currently selected UI address (params: port [optional])
-- `ui_get_current_function`: Get currently selected UI function (params: port [optional])
-
-**Program Metadata** (`classes_*`, `symbols_*`, `segments_*`, `namespaces_*`, `variables_*`):
-- `classes_list`: List classes/namespaces (params: offset, limit, port [optional])
-- `symbols_list` / `symbols_imports` / `symbols_exports`: Enumerate symbols (params: offset, limit, port [optional])
-- `segments_list`: List memory blocks (params: offset, limit, name [optional], port [optional])
-- `namespaces_list`: List namespaces (params: offset, limit, port [optional])
-- `variables_list`: List variables (params: offset, limit, search [optional], global_only [optional], port [optional])
-
-**Kuna Decompiler** (`kuna_*`): local tools that drive the Kuna CLI; no Ghidra instance and no `port` parameter. Opt-in: `GHYDRA_KUNA=1` or `"kuna": {"enabled": true}` in `~/.ghydra/config.json`. See [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
-- `kuna_status`: Report whether the integration is enabled, which binary it resolved and which opt-in decided
-- `kuna_summary`: Summarize a binary (params: binary_path, mode [optional])
-- `kuna_functions`: List the functions Kuna recovered (params: binary_path, name_filter [optional], offset, limit)
-- `kuna_decompile`: Decompile one function (params: binary_path, function, addr [optional], mode [optional], max_lines [optional])
-- `kuna_disassemble`: Disassemble a function or range (params: binary_path, target, count [optional], bytes [optional], addr [optional])
-- `kuna_read`: Read raw bytes as a hex dump (params: binary_path, target, bytes, addr [optional])
-- `kuna_strings`: Search strings; the pattern is required (params: binary_path, pattern, limit, min_length, encoding, section [optional])
-- `kuna_crypto`: Find crypto constants and the functions using them (params: binary_path, algorithm [optional], section [optional])
-- `kuna_xrefs`: Cross-references of a symbol (params: binary_path, target, direction, kind [optional])
-- `kuna_unpack`: Unpack a UPX image (params: binary_path, output [optional])
-- `kuna_export_start`: Export a binary to disk in the background, or reuse the export that is already there (params: binary_path, functions [optional], jobs, job_id [optional])
-- `kuna_export_status`: Progress of an export job (params: job_id)
-- `kuna_export_read`: Read a function out of an export, addressed by job id or by directory/digest (params: job_id [optional], function [optional], artifact, max_bytes, directory [optional])
-
-**x64dbg debugger** (`x64dbg_*`): local tools that drive the x64dbg MCP server plugin; the debugger is local, so no `port` for it. The `port` on the workflow tools is the Ghidra instance. See [GHYDRA_X64DBG.md](GHYDRA_X64DBG.md).
-- `x64dbg_status`: Whether the server answered, where it is, how many tools it has and which modules are loaded
-- `x64dbg_tools`: The plugin's catalogue: name, description, input schema and whether the tool is read-only
-- `x64dbg_call`: Call any plugin tool by name (params: tool, tool_arguments [optional, the arguments as one piece of JSON text], timeout [optional])
-- `x64dbg_target`: How the Ghidra program and the x64dbg session line up: both bases and the distance between them (params: port [optional])
-- `x64dbg_breakpoint_at`: Set a breakpoint on a Ghidra address, translated into the runtime address (params: address, port [optional])
-- `x64dbg_go_to`: Move the instruction pointer to a Ghidra address, translated the same way (params: address, port [optional])
-
-**Example Usage**:
-```python
-# Instance Management - Always start here
-client.use_tool("ghydra", "instances_list")  # Auto-discovers instances on localhost
-client.use_tool("ghydra", "instances_use", {"port": 8192})  # Set working instance
-client.use_tool("ghydra", "instances_current")  # Check current instance
-
-# Function Analysis
-client.use_tool("ghydra", "functions_list", {"offset": 0, "limit": 100})
-client.use_tool("ghydra", "functions_get", {"name": "main"})
-client.use_tool("ghydra", "functions_decompile", {"address": "0x00401000"})
-client.use_tool("ghydra", "functions_disassemble", {"name": "main"})
-client.use_tool("ghydra", "functions_rename", {"address": "0x00401000", "new_name": "process_data"})
-client.use_tool("ghydra", "functions_set_signature", {"address": "0x00401000", "signature": "int process_data(char* buf, int len)"})
-client.use_tool("ghydra", "functions_set_comment", {"address": "0x00401000", "comment": "Main processing function"})
-
-# Data Manipulation
-client.use_tool("ghydra", "data_list_strings", {"filter": "password"})  # Find strings containing "password"
-client.use_tool("ghydra", "data_list", {"offset": 0, "limit": 50})
-client.use_tool("ghydra", "data_create", {"address": "0x00401234", "data_type": "int"})
-client.use_tool("ghydra", "data_rename", {"address": "0x00401234", "name": "counter"})
-client.use_tool("ghydra", "data_set_type", {"address": "0x00401238", "data_type": "uint64_t[8]"})
-client.use_tool("ghydra", "data_delete", {"address": "0x0040123C"})
-
-# Struct Management
-client.use_tool("ghydra", "structs_create", {"name": "NetworkPacket", "category": "/network"})
-client.use_tool("ghydra", "structs_add_field", {
-    "struct_name": "NetworkPacket",
-    "field_name": "header",
-    "field_type": "dword",
-    "comment": "Packet header"
-})
-client.use_tool("ghydra", "structs_add_field", {
-    "struct_name": "NetworkPacket",
-    "field_name": "data_ptr",
-    "field_type": "pointer"
-})
-client.use_tool("ghydra", "structs_update_field", {
-    "struct_name": "NetworkPacket",
-    "field_name": "header",
-    "new_name": "packet_header",
-    "new_comment": "Updated header field"
-})
-client.use_tool("ghydra", "structs_get", {"name": "NetworkPacket"})
-client.use_tool("ghydra", "structs_list", {"category": "/network"})
-
-# Memory Operations
-client.use_tool("ghydra", "memory_read", {"address": "runtime::145e29b10", "length": 16, "format": "hex"})
-client.use_tool("ghydra", "memory_write", {"address": "0x00401000", "bytes_data": "90909090", "format": "hex"})
-
-# Cross-References
-client.use_tool("ghydra", "xrefs_list", {"to_addr": "0x00401000"})  # Find callers
-client.use_tool("ghydra", "xrefs_list", {"from_addr": "0x00401000"})  # Find callees
-
-# Analysis
-client.use_tool("ghydra", "analysis_status")  # Check if analysis is running
-client.use_tool("ghydra", "analysis_run", {"background": True})  # Trigger analysis in background
-client.use_tool("ghydra", "analysis_get_callgraph", {"name": "main", "max_depth": 5})
-client.use_tool("ghydra", "analysis_get_dataflow", {"address": "0x00401050", "direction": "forward"})
-
-# Project Management
-client.use_tool("ghydra", "project_info")  # Get current project info
-client.use_tool("ghydra", "project_list_files", {"folder": "/", "recursive": True})
-client.use_tool("ghydra", "project_open_file", {"path": "/malware_samples/sample2.exe"})
-```
-
-#### CFG and pcode
-
-```python
-# Control-flow graph: basic blocks and the edges between them
-client.use_tool("ghydra", "functions_get_cfg", {"name": "main"})
-
-# Decompiled p-code operations (?timeout defaults to 60s)
-client.use_tool("ghydra", "functions_get_pcode", {"address": "0x00401000"})
-```
-
-The same data is on the CLI as `ghydra functions get-cfg` / `get-pcode`, and reachable over
-REST at `GET /functions/{address}/cfg` and `/pcode`.
-
-#### Raw images
-
-Mark a region of memory as image data so a captured framebuffer renders inline in the
-Listing instead of as an opaque byte blob.
-
-```python
-# RGB565 is the default; 9 formats plus little/big endian are supported
-client.use_tool("ghydra", "raw_image_define",
-                {"address": "0x00401000", "width": 320, "height": 240, "format": "ARGB8888"})
-
-# Remove one, or sweep every RawImage in the program
-client.use_tool("ghydra", "raw_image_cleanup", {"address": "0x00401000"})
-client.use_tool("ghydra", "raw_image_cleanup", {"all": True})
-```
+Every Ghidra-backed tool is also a REST endpoint, and the bridge is a thin layer over them. The
+local integrations are not: the 13 `kuna_*` tools drive the Kuna CLI as a subprocess and the 6
+`x64dbg_*` tools talk to the debugger plugin, so neither has an HTTP route and neither appears in
+[GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md). The full list of the REST surface is there; what
+follows is the shape of it.
 
 ```bash
-ghydra raw-image define -a 0x401000 --width 320 --height 240 --format ARGB8888
-ghydra raw-image cleanup --address 0x401000
-ghydra raw-image cleanup --all
-```
+# Instance Management - Always start here
+ghydra instances list
+ghydra instances use --port 8192
+ghydra instances discover
+ghydra instances register --port 9000
 
-Cleanup runs collection and clearing in one transaction, so a whole-program sweep is atomic
-and rolls back if anything fails. It is idempotent (nothing to clear is not an error) and
-refuses to clear a data item that isn't a RawImage, so a mistyped address can't quietly
-destroy real data. REST equivalents: `POST /raw-image/define` and `POST /raw-image/cleanup`.
+# Function Analysis
+ghydra functions list --limit 50
+ghydra functions get --name main
+ghydra functions decompile --name main
+ghydra functions disassemble --address 0x401000
+ghydra functions get-cfg --address 0x401000
+ghydra functions get-pcode --address 0x401000
+ghydra functions set-variable --name main --variable counter --new-name hits --data-type int
+ghydra analysis get-callgraph --name main --max-depth 3
+
+# Data Manipulation
+ghydra data list --limit 50
+ghydra data create --address 0x401000 --data-type dword
+ghydra data delete --address 0x401000
+ghydra data list-strings
+
+# Struct Management
+ghydra structs list
+ghydra structs create --name "NetworkPacket" --category "/network"
+ghydra structs add-field --struct-name "NetworkPacket" --field-name header --field-type dword
+ghydra structs delete --name "NetworkPacket"
+
+# Memory Operations
+ghydra memory read --address 0x401000 --length 64
+ghydra memory write --address 0x401000 --bytes-data "4883EC10"
+
+# Cross-References
+ghydra xrefs to 0x401000 --type CALL
+ghydra xrefs from 0x401000
+
+# Project Management
+ghydra project list-projects
+ghydra project info
+ghydra project list-files --folder "/malware"
+
+# Control-flow graph: basic blocks and the edges between them
+ghydra functions get-cfg --address 0x401000
+
+# Decompiled p-code operations
+ghydra functions get-pcode --address 0x401000
+
+# Raw image rendering: 9 formats plus little/big endian
+ghydra raw-image define --address 0x401000 --width 320 --height 200 --format RGB565
+ghydra raw-image cleanup --address 0x401000
+
+# The local integrations
+ghydra x64dbg status
+ghydra x64dbg call ListModules
+ghydra x64dbg breakpoint 0x140001234
+ghydra kuna status
+ghydra kuna export ./challenge.exe
+```
 
 ## Client Setup
 
-GhydraMCP works with any MCP-compatible client. Below are configuration examples for popular AI coding assistants.
-
 ### Installation Methods
 
-#### Recommended: Local Installation from Release
-
-Download the latest [release](https://github.com/starsong-consulting/GhydraMCP/releases) to ensure the bridge and plugin versions are in sync.
-
-```json
-{
-  "mcpServers": {
-    "ghydra": {
-      "command": "uv",
-      "args": [
-        "run",
-        "python",
-        "/ABSOLUTE_PATH_TO/bridge_mcp_hydra.py"
-      ],
-      "env": {
-        "GHYDRA_HYDRA_HOST": "localhost"
-      }
-    }
-  }
-}
-```
-
-Replace `/ABSOLUTE_PATH_TO/` with the actual path to your `bridge_mcp_hydra.py` file.
-
-> The `python` in the args is required. `uv run script.py` runs the file in a *script-scoped*
-> environment that ignores this project's `pyproject.toml`, so it will not pick up the pinned
-> dependencies and currently fails to import `mcp`. `uv run python script.py` uses the project
-> environment instead.
-
-> **Note:** You can also use plain `python` instead of `uv run python`, but then you'll need to
-> install the requirements yourself first — `pip install -e .` (recommended, it also installs the
-> `ghydra` CLI) or `pip install mcp requests`.
-
-#### Alternative: Direct from Repository with uvx
-
-If you want to use the latest development version, you can run directly from the GitHub repository:
-
-```json
-{
-  "mcpServers": {
-    "ghydra": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/starsong-consulting/GhydraMCP",
-        "ghydramcp"
-      ],
-      "env": {
-        "GHIDRA_HYDRA_HOST": "localhost"
-      }
-    }
-  }
-}
-```
-
-> **Warning:** This method may pull a bridge version that's out of sync with your installed plugin. Only use this if you're tracking the latest development branch.
+1. Clone this repository
+2. Install the dependencies: `uv sync` (or `pip install -e .`)
+3. Point the client at `bridge_mcp_hydra.py`
 
 ### Claude Desktop Configuration
 
-Add your chosen configuration method to your Claude Desktop configuration file:
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-### Claude Code Configuration
-
-Claude Code automatically discovers MCP servers configured in Claude Desktop. If you've set up the configuration above, Claude Code will have access to GhydraMCP tools immediately.
-
-Alternatively, you can configure Claude Code separately by adding the same configuration to the MCP settings in Claude Code's configuration.
-
-### Cline Configuration
-
-Cline (VS Code extension) uses a separate configuration file. To set up GhydraMCP with Cline:
-
-1. Open VS Code with Cline installed
-2. Click the "MCP Servers" icon in Cline's interface
-3. Select the "Configure" tab
-4. Click "Configure MCP Servers" to edit `cline_mcp_settings.json`
-5. Add the following configuration:
+Add to `claude_desktop_config.json`:
 
 ```json
 {
@@ -657,10 +644,59 @@ Cline (VS Code extension) uses a separate configuration file. To set up GhydraMC
       "command": "uv",
       "args": [
         "run",
-        "/ABSOLUTE_PATH_TO/bridge_mcp_hydra.py"
+        "--directory",
+        "/ABSOLUTE_PATH_TO/GhydraMCP",
+        "bridge_mcp_hydra.py"
       ],
       "env": {
         "GHIDRA_HYDRA_HOST": "localhost"
+      }
+    }
+  }
+}
+```
+
+If you prefer to use `python` directly instead of `uv`, point it at the interpreter of the
+environment you installed into — a GUI client does not inherit an activated virtualenv, so a bare
+`python` from the PATH usually has no `mcp` and no `requests`:
+
+```json
+{
+  "mcpServers": {
+    "ghydra": {
+      "command": "/ABSOLUTE_PATH_TO/GhydraMCP/.venv/bin/python",
+      "args": ["/ABSOLUTE_PATH_TO/GhydraMCP/bridge_mcp_hydra.py"],
+      "env": {
+        "GHIDRA_HYDRA_HOST": "localhost"
+      }
+    }
+  }
+}
+```
+
+On Windows the interpreter is `.venv\Scripts\python.exe`.
+
+> **Important:** Replace `/ABSOLUTE_PATH_TO/` with the actual absolute path to your
+> `bridge_mcp_hydra.py` file. For example:
+> - **Linux/macOS**: `/home/username/GhydraMCP/bridge_mcp_hydra.py`
+> - **Windows**: `C:\\Users\\username\\GhydraMCP\\bridge_mcp_hydra.py`
+
+### Claude Code Configuration
+
+```bash
+claude mcp add ghydra -- uv run /ABSOLUTE_PATH_TO/bridge_mcp_hydra.py
+```
+
+Or add it to `.mcp.json` in your project:
+
+```json
+{
+  "mcpServers": {
+    "ghydra": {
+      "command": "uv",
+      "args": ["run", "/ABSOLUTE_PATH_TO/bridge_mcp_hydra.py"],
+      "env": {
+        "GHYDRA_HYDRA_HOST": "localhost"
       },
       "disabled": false
     }
@@ -668,18 +704,44 @@ Cline (VS Code extension) uses a separate configuration file. To set up GhydraMC
 }
 ```
 
-If you prefer to use `python` directly instead of `uv`:
+### Cline Configuration
+
+1. Open Cline
+2. Click the MCP Servers icon
+3. Click "Configure MCP Servers" to edit `cline_mcp_settings.json`
+4. Add the following configuration:
 
 ```json
 {
   "mcpServers": {
     "ghydra": {
-      "command": "python",
+      "command": "uv",
+      "args": [
+        "run",
+        "/ABSOLUTE_PATH_TO/bridge_mcp_hydra.py"
+      ],
+      "env": {
+        "GHYDRA_HYDRA_HOST": "localhost"
+      },
+      "disabled": false
+    }
+  }
+}
+```
+
+If you prefer to use `python` directly instead of `uv`, use the interpreter of the environment you
+installed into (`.venv/bin/python`, or `.venv\Scripts\python.exe` on Windows):
+
+```json
+{
+  "mcpServers": {
+    "ghydra": {
+      "command": "/ABSOLUTE_PATH_TO/GhydraMCP/.venv/bin/python",
       "args": [
         "/ABSOLUTE_PATH_TO/bridge_mcp_hydra.py"
       ],
       "env": {
-        "GHIDRA_HYDRA_HOST": "localhost"
+        "GHYDRA_HYDRA_HOST": "localhost"
       },
       "disabled": false
     }
@@ -817,6 +879,35 @@ process_packet (0x401100)
 This shows process_packet coordinates validation, parsing, and response transmission.
 ```
 
+**User:**
+```
+Now set a breakpoint in the debugger on the entry point, and tell me what the
+loader put it at.
+```
+
+**Assistant:**
+```
+The entry point is at 0x140027B90 in the image. Let me find where the loader put
+that module in the live process.
+
+[Uses x64dbg_status]
+The x64dbg MCP server is reachable at 127.0.0.1:9094, with 80 tools and 5 modules
+loaded: cmd.exe at 0x7ff78c2a0000, and ntdll, kernel32, kernelbase and ucrtbase.
+
+[Uses x64dbg_target]
+The Ghidra image base is 0x140000000 and the loaded module base is 0x7ff78c2a0000,
+so 0x140027B90 is 0x7FF78C2C7B90 at runtime.
+
+[Uses x64dbg_breakpoint_at with address 0x140027B90]
+Breakpoint set at 0x7FF78C2C7B90.
+
+[Uses x64dbg_call with tool "ListBreakpoints"]
+[Normal] 0x7FF78C2C7B90 cmd.exe!entry breakpoint (enabled)
+```
+
+The debugger resolved the address to a name on its own. The static address alone
+does not work here: it is not mapped in the live process.
+
 # JSON Communication
 
 GhydraMCP uses JSON for all communication between the bridge or CLI and the Java plugin.
@@ -898,6 +989,14 @@ The links let a client discover related resources without hardcoding URLs.
 
 GhydraMCP has test suites for the HTTP API and the MCP bridge. See [TESTING.md](TESTING.md) for how to run them.
 
+```bash
+python run_tests.py                       # all suites
+python run_tests.py --http --mcp --data --comments --port --kuna --x64dbg
+```
+
+Every suite skips itself when Ghidra is not running, so a green run against no Ghidra means
+nothing — confirm the tests actually executed before trusting it.
+
 ## HTTP API Tests
 
 Tests the HTTP endpoints exposed by the Java plugin:
@@ -913,6 +1012,14 @@ Tests the MCP bridge functionality:
 - Tool availability and structure
 - Response format and structure
 - JSON structure consistency
+
+## The local integrations
+
+`--x64dbg` and `--kuna` need neither Ghidra nor the program they talk to, so they always run and
+always give a signal. `test_x64dbg.py` starts a fake plugin that answers like the real one —
+JSON-RPC over HTTP, a bearer token, the catalogue with `annotations.readOnlyHint` — and covers the
+client, the configuration precedence, the address model, the bridge tools and the error taxonomy.
+`test_kuna.py` covers the Kuna opt-in precedence, the bridge/CLI contract and the export readers.
 
 # Building from Source
 
@@ -962,3 +1069,22 @@ The Ghidra plugin includes these files required for Ghidra to recognize the exte
 - lib/Ghydra.jar
 - extension.properties
 - Module.manifest
+
+# Related work
+
+Separate projects that cover different ground. None of them is a drop-in replacement for
+anything here, and none of them needs this one.
+
+- **[x64dbg MCP server](https://github.com/duty1g/x64dbg-mcp-server)** — the plugin that lives
+  inside the x64dbg debugger and answers JSON-RPC over HTTP. The `x64dbg_*` tools drive it; they
+  do not reimplement it.
+- **[Kuna](https://github.com/Noelo-Lab/kuna)** — the standalone decompiler CLI that the
+  `kuna_*` tools drive, and whose exports are exposed as MCP resources.
+- **[REA](https://github.com/morluto/rea)** — a multi-format reverse engineering server: native
+  binaries, .NET, JavaScript/Electron, Android, iOS and firmware, with a bring-your-own-engine
+  model (Hopper, Ghidra or IDA) and an evidence ledger that ties every claim to a digest and a
+  location. Its native route drives Ghidra headlessly, one investigation at a time. GhydraMCP is
+  the opposite shape: it is the Ghidra integration itself, with a live session a human can keep
+  working in, a live debugger attached, and a second decompiler for a second opinion. REA reaches
+  the formats Ghidra does not read; GhydraMCP reaches the live process that a headless analysis
+  cannot.
