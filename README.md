@@ -19,9 +19,12 @@ Three surfaces, one assistant:
 
 | | What it is | What it gives the assistant |
 | --- | --- | --- |
-| **Ghidra** | The plugin, inside the CodeBrowser | 91 tools over the program: functions, data, structures, xrefs, the CFG, the decompiler |
-| **x64dbg** | A plugin that lives inside the debugger | 80 tools over the live process: registers, memory, breakpoints, stepping |
+| **Ghidra** | The plugin, inside the CodeBrowser | 72 tools over the program: functions, data, structures, xrefs, the CFG, the decompiler |
+| **x64dbg** | A plugin that lives inside the debugger | The debugger's own 80 tools over the live process: registers, memory, breakpoints, stepping |
 | **Kuna** | A separate decompiler CLI | A second opinion on the same binary, and the recovered C as MCP resources |
+
+The bridge exposes **91 tools** in total: the 72 above, 6 over x64dbg (the pass-through that reaches
+the debugger's own 80), and 13 for the Kuna exports.
 
 The two debugger sides share one model of addresses, so a static address from Ghidra can be turned
 into a live one for x64dbg — and a breakpoint the assistant sets lands on the instruction the
@@ -339,11 +342,9 @@ Full reference, including the fourteen error codes and the export readers:
 ## Program analysis
 
 - **Decompilation**:
-  - Convert binary functions to readable C code
-  - Toggle between clean C-like pseudocode and raw decompiler output
-  - Show/hide syntax trees for detailed analysis
-  - Multiple simplification styles for different analysis approaches
-  - Several output formats: Java, C, Python, Golang, Rust, and the original Ghidra syntax
+  - Convert binary functions to readable C code — Ghidra's C-like pseudocode, produced with the
+    decompiler options of the program being analyzed (there is no target-language selector: the
+    plugin returns the decompiler's C directly)
 
 - **Static analysis**:
   - Cross-reference analysis (find callers and callees)
@@ -439,13 +440,22 @@ Full reference, including the fourteen error codes and the export readers:
 
 ## Ghidra
 
-1. Download the latest release, `Ghydra-<version>-ghidra<version>.zip`, from the releases page
+1. Download the latest release from the releases page. Each release ships an artifact per Ghidra
+   series — `Ghydra-v3.0.0-...-ghidra12.2.zip` for Ghidra 12.2 and `...-ghidra11.4.3.zip` for
+   Ghidra 11.4.3 (plus a `Ghydra-Complete-...` variant that also carries the bridge script). The
+   `ghidra<version>` suffix must match your install **exactly**: it is the `ghidraVersion` the
+   extension declares, and Ghidra refuses to load an extension whose version does not match the
+   running install — a mismatch is a failed install, not a warning.
 2. Extract it
 3. In Ghidra: `File` → `Install Extensions` → the `+` icon → select the zip → `OK`
 4. Restart Ghidra
+5. In Ghidra: `File` → `Configure` → `Developer` → tick **Ghidra** → `OK`
 
-The extension registers itself and the plugin starts with the CodeBrowser. The first window binds
-port 8192; a second one binds 8193, and so on.
+The plugin is declared in Ghidra's `Developer` package, so the install makes Ghidra *discover* it,
+not enable it. Without step 5 `GhydraPlugin` is never constructed, no HTTP port binds, and
+neither the CLI nor the bridge can reach the program.
+
+The first CodeBrowser binds port 8192; a second one binds 8193, and so on.
 
 For a later update, swap `lib/Ghydra.jar` in the installed extension and restart Ghidra — there
 is no need to reinstall the whole thing.
@@ -455,8 +465,9 @@ is no need to reinstall the whole thing.
 ```bash
 # Install
 pip install -e .
-# or
-uv pip install -e .
+
+# or, with uv — it does not create an environment on its own, so make one first
+uv venv && uv pip install -e .
 ```
 
 ```bash
@@ -487,9 +498,19 @@ uv tool install .
 
 # a plain virtualenv
 python3 -m venv .venv && . .venv/bin/activate && pip install -e .
+```
 
-# NixOS, inside a nix-shell with the interpreter and the tools
+On NixOS, `uv` has no interpreter of its own inside a `nix-shell`, so point it at the shell's
+`python3`:
+
+```bash
 nix-shell -p python3 -p uv
+```
+
+...and inside that shell:
+
+```bash
+uv tool install --python python3 .
 ```
 
 ## MCP Clients
@@ -522,8 +543,11 @@ The MCP client setup for Claude Desktop, Claude Code, Cline and 5ire is in
 
 ### Available Tools
 
-Every tool is also a REST endpoint, and the bridge is a thin layer over them. The full list is in
-[GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md); what follows is the shape of it.
+Every Ghidra-backed tool is also a REST endpoint, and the bridge is a thin layer over them. The
+local integrations are not: the 13 `kuna_*` tools drive the Kuna CLI as a subprocess and the 6
+`x64dbg_*` tools talk to the debugger plugin, so neither has an HTTP route and neither appears in
+[GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md). The full list of the REST surface is there; what
+follows is the shape of it.
 
 ```bash
 # Instance Management - Always start here
@@ -616,13 +640,15 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-If you prefer to use `python` directly instead of `uv`:
+If you prefer to use `python` directly instead of `uv`, point it at the interpreter of the
+environment you installed into — a GUI client does not inherit an activated virtualenv, so a bare
+`python` from the PATH usually has no `mcp` and no `requests`:
 
 ```json
 {
   "mcpServers": {
     "ghydra": {
-      "command": "python",
+      "command": "/ABSOLUTE_PATH_TO/GhydraMCP/.venv/bin/python",
       "args": ["/ABSOLUTE_PATH_TO/GhydraMCP/bridge_mcp_hydra.py"],
       "env": {
         "GHIDRA_HYDRA_HOST": "localhost"
@@ -631,6 +657,8 @@ If you prefer to use `python` directly instead of `uv`:
   }
 }
 ```
+
+On Windows the interpreter is `.venv\Scripts\python.exe`.
 
 > **Important:** Replace `/ABSOLUTE_PATH_TO/` with the actual absolute path to your
 > `bridge_mcp_hydra.py` file. For example:
@@ -685,13 +713,14 @@ Or add it to `.mcp.json` in your project:
 }
 ```
 
-If you prefer to use `python` directly instead of `uv`:
+If you prefer to use `python` directly instead of `uv`, use the interpreter of the environment you
+installed into (`.venv/bin/python`, or `.venv\Scripts\python.exe` on Windows):
 
 ```json
 {
   "mcpServers": {
     "ghydra": {
-      "command": "python",
+      "command": "/ABSOLUTE_PATH_TO/GhydraMCP/.venv/bin/python",
       "args": [
         "/ABSOLUTE_PATH_TO/bridge_mcp_hydra.py"
       ],
