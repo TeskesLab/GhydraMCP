@@ -552,6 +552,16 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
 - **The report goes to the instance the CLI chose.** The command takes the host and the port from
   the client the root command built - the configuration, the environment or `--host/--port` - and
   not from a request of its own.
+- **A headless run serves this machine.** The run is started here, so a report pointed at another
+  machine that is not serving the API is refused (`REPORT_NO_INSTANCE`) instead of starting a run
+  that cannot answer it - and a run that does not come up is stopped, not left behind.
+- **The port is checked before anything is started.** The script falls back to 8192 for a port it
+  cannot use, so a port of 0, a negative one or one above 65535 is refused with
+  `HEADLESS_BAD_PORT` instead of waiting on a port that was never bound.
+- **The backslash is a separator everywhere.** On POSIX, `os.path.basename()` takes the whole
+  `C:\bin\cmd.exe` as the name - so the name of the file comes from `binary_name()`, which knows
+  both separators, and the lookup in the index of the project finds the program that is already
+  there instead of importing it again.
 - **The extension's jar is shaded.** Javalin, Jetty, SLF4J and Kotlin are inside `Ghydra.jar`, so
   the script's bundle finds them; a jar with only the compiled classes fails at runtime with
   `NoClassDefFoundError: io/javalin/http/Handler`. `scripts/make_uberjar.py` does the merge
