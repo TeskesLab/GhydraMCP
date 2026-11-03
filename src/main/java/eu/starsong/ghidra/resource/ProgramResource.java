@@ -120,6 +120,11 @@ public class ProgramResource implements Resource {
             return d;
         });
 
+        // A headless instance has no window: the endpoints that read the
+        // cursor answer 503, and a client has to be able to tell that from a
+        // fault. The flag is what says it.
+        data.put("headless", ctx.isHeadless());
+
         ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
             .self("/program")
             .link("functions", "/functions")
