@@ -27,11 +27,13 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-from typing import Dict, List, Optional, Union, Any
-from urllib.parse import quote, urlencode, urlparse
+from typing import Annotated, Dict, List, Optional, Union, Any
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 import requests
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.resources import FunctionResource
+from pydantic import AnyUrl, BeforeValidator
 
 # ================= Core Infrastructure =================
 
@@ -120,6 +122,25 @@ KUNA_DEFAULT_TIMEOUT = int(os.environ.get("GHYDRA_KUNA_TIMEOUT", str(DEFAULT_TIM
 # above a full function listing and well below the payload that stalls an
 # MCP client.
 KUNA_MAX_OUTPUT = 8 * 1024 * 1024
+
+# The machine-readable reasons a Kuna call can fail. The CLI carries the same
+# list, so an agent sees one taxonomy whichever side it drives.
+KUNA_ERROR_CODES = (
+    "KUNA_ERROR",         # the generic fallback
+    "KUNA_DISABLED",      # the opt-in did not reach this process
+    "KUNA_MISSING",       # the kuna binary is not installed
+    "KUNA_TIMEOUT",       # kuna ran past its timeout
+    "KUNA_LAUNCH",        # kuna could not be started at all
+    "KUNA_FAILED",        # kuna ran and failed
+    "KUNA_NO_JSON",       # kuna printed something that is not JSON
+    "KUNA_TOO_LARGE",     # the answer is above the output cap
+    "KUNA_NO_FILE",       # a file the call named does not exist
+    "KUNA_IO",            # reading or writing a file failed
+    "KUNA_NO_DIR",        # the export directory does not exist
+    "KUNA_NO_INDEX",      # the export has no index yet
+    "KUNA_BAD_ARTIFACT",  # the artifact name is not one of the four
+    "KUNA_NO_FUNCTION",   # the function is not in the export index
+)
 
 # Export jobs started by kuna_export_start, keyed by job id. The registry
 # lives in the bridge process: a job started by one bridge is invisible to
@@ -220,10 +241,10 @@ def _kuna_target(binary_path: str) -> Union[str, dict]:
     or names no file.
     """
     if not binary_path:
-        return _kuna_error("binary_path is required")
+        return _kuna_error("binary_path is required", code="KUNA_NO_FILE")
     path = os.path.abspath(os.path.expanduser(binary_path))
     if not os.path.isfile(path):
-        return _kuna_error(f"no such file: {binary_path}")
+        return _kuna_error(f"no such file: {binary_path}", code="KUNA_NO_FILE")
     return path
 
 
@@ -231,11 +252,13 @@ def _kuna_run(args: List[str], timeout: Optional[int] = None) -> dict:
     """Run the kuna binary with args.
 
     Returns {"code": int, "stdout": str, "stderr": str}. A missing binary is
-    reported as 127 and a timeout as 124, the conventional shell codes.
+    reported as 127 and a timeout as 124, the conventional shell codes, and
+    "error_code" carries the matching machine-readable reason.
     """
     executable = _kuna_binary()
     if not executable:
-        return {"code": 127, "stdout": "", "stderr": "the kuna binary was not found"}
+        return {"code": 127, "stdout": "", "stderr": "the kuna binary was not found",
+                "error_code": "KUNA_MISSING"}
     limit = timeout if timeout is not None else KUNA_DEFAULT_TIMEOUT
     try:
         completed = subprocess.run(
@@ -250,9 +273,11 @@ def _kuna_run(args: List[str], timeout: Optional[int] = None) -> dict:
             timeout=limit,
         )
     except subprocess.TimeoutExpired:
-        return {"code": 124, "stdout": "", "stderr": f"kuna timed out after {limit}s"}
+        return {"code": 124, "stdout": "", "stderr": f"kuna timed out after {limit}s",
+                "error_code": "KUNA_TIMEOUT"}
     except OSError as exc:
-        return {"code": 126, "stdout": "", "stderr": f"could not launch kuna: {exc}"}
+        return {"code": 126, "stdout": "", "stderr": f"could not launch kuna: {exc}",
+                "error_code": "KUNA_LAUNCH"}
     return {
         "code": completed.returncode,
         "stdout": completed.stdout or "",
@@ -264,7 +289,8 @@ def _kuna_json(args: List[str], timeout: Optional[int] = None) -> dict:
     """Run kuna and parse its JSON output.
 
     Returns the bridge envelope: {"success": True, "result": <parsed>} or
-    {"success": False, "error": {...}}.
+    {"success": False, "error": {...}}. The error carries one of the
+    KUNA_ERROR_CODES, so an agent can branch on the reason.
     """
     command = " ".join(args[:1])
     outcome = _kuna_run(args, timeout=timeout)
@@ -280,19 +306,23 @@ def _kuna_json(args: List[str], timeout: Optional[int] = None) -> dict:
         detail = outcome["stderr"].strip() or stdout or "no output"
         if isinstance(parsed, dict) and parsed.get("error"):
             detail = str(parsed["error"])
-        return _kuna_error(f"kuna {command} failed (exit {outcome['code']}): {detail}")
+        return _kuna_error(
+            f"kuna {command} failed (exit {outcome['code']}): {detail}",
+            code=outcome.get("error_code", "KUNA_FAILED"),
+        )
 
     if parsed is None:
-        return _kuna_error(f"kuna {command} did not return JSON")
+        return _kuna_error(f"kuna {command} did not return JSON", code="KUNA_NO_JSON")
 
     if len(stdout) > KUNA_MAX_OUTPUT:
         return _kuna_error(
             f"kuna {command} returned {len(stdout)} bytes of JSON, above the "
-            f"{KUNA_MAX_OUTPUT} byte cap; narrow the request"
+            f"{KUNA_MAX_OUTPUT} byte cap; narrow the request",
+            code="KUNA_TOO_LARGE",
         )
 
     if isinstance(parsed, dict) and parsed.get("error"):
-        return _kuna_error(f"kuna {command}: {parsed['error']}")
+        return _kuna_error(f"kuna {command}: {parsed['error']}", code="KUNA_FAILED")
 
     return {"success": True, "result": parsed}
 
@@ -322,7 +352,11 @@ def _kuna_job_view(job: dict) -> dict:
         "finished_at": job.get("finished_at"),
         "returncode": job.get("returncode"),
         "error": job.get("error"),
+        "reused": bool(job.get("reused")),
     }
+    if job.get("functions") is not None:
+        view["functions"] = job["functions"]
+        view["failed"] = job.get("failed", 0)
     streaming = os.path.join(job["dir"], ".streaming")
     if os.path.isfile(streaming):
         try:
@@ -372,6 +406,23 @@ def _kuna_export_file(work_dir: str, suffix: str) -> Optional[str]:
     for entry in entries:
         if entry.endswith(suffix) and os.path.isfile(os.path.join(work_dir, entry)):
             return os.path.join(work_dir, entry)
+    return None
+
+
+def _kuna_find_record(records: List[dict], function: str) -> Optional[dict]:
+    """The index record of a function, by name.
+
+    The exact name wins; a case-insensitive match is the fallback, because a
+    decompiler's names differ in case between runs more often than one would
+    like.
+    """
+    for candidate in records:
+        if candidate.get("name") == function:
+            return candidate
+    lowered = str(function).lower()
+    for candidate in records:
+        if str(candidate.get("name", "")).lower() == lowered:
+            return candidate
     return None
 
 
@@ -428,6 +479,172 @@ def _kuna_extract_asm(work_dir: str, name: str, max_bytes: int) -> Optional[str]
     if max_bytes and len(text) > max_bytes:
         text = text[:max_bytes] + f"\n... truncated at {max_bytes} bytes"
     return text
+
+
+# The sidecar the bridge and the CLI write next to an export. The digest is a
+# hash, not a reversible pointer, so without it an export cannot say which
+# binary it came from - and the listing of exports needs that.
+KUNA_EXPORT_META = ".ghydra.json"
+
+# An export directory is named after a 12 hex character digest.
+KUNA_DIGEST_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _kuna_export_meta_path(directory: str) -> str:
+    """Where the sidecar of an export lives."""
+    return os.path.join(directory, KUNA_EXPORT_META)
+
+
+def _kuna_write_export_meta(directory: str, binary: str, **extra: Any) -> None:
+    """Record which binary an export came from.
+
+    Best effort: the export is already on disk and perfectly usable without
+    the sidecar, so a failure here must not fail the export.
+    """
+    payload: Dict[str, Any] = {
+        "binary": os.path.abspath(binary),
+        "created": time.time(),
+    }
+    # The mtime is the other half of the provenance: the digest is keyed by
+    # the path and the mtime, so a binary rebuilt at the same path is a
+    # different binary and an export of the old one must not be reused.
+    try:
+        payload["mtime"] = os.path.getmtime(os.path.abspath(binary))
+    except OSError:
+        pass
+    payload.update(extra)
+    try:
+        with open(_kuna_export_meta_path(directory), "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+    except OSError:
+        pass
+
+
+def _kuna_read_export_meta(directory: str) -> Dict[str, Any]:
+    """The sidecar of an export, or an empty dict when there is none."""
+    try:
+        with open(_kuna_export_meta_path(directory), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _kuna_readme_binary(directory: str) -> Optional[str]:
+    """The binary an export came from, read from Kuna's own report.
+
+    The sidecar is the primary source, but an export made before the
+    sidecar existed still names its binary in the report Kuna writes.
+    """
+    path = os.path.join(directory, "README.md")
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                match = re.match(r"\|\s*Path\s*\|\s*`(.+?)`\s*\|", line)
+                if match:
+                    raw = match.group(1).strip()
+                    # Kuna writes the Win32 extended-length prefix.
+                    if raw.startswith("\\\\?\\"):
+                        raw = raw[4:]
+                    return raw
+    except OSError:
+        return None
+    return None
+
+
+def _kuna_export_binary(directory: str) -> Optional[str]:
+    """Which binary an export came from, by sidecar or by report."""
+    meta_binary = _kuna_read_export_meta(directory).get("binary")
+    if meta_binary:
+        return meta_binary
+    return _kuna_readme_binary(directory)
+
+
+def _kuna_export_state(directory: str) -> Optional[dict]:
+    """The state of an export directory, or None when it holds no export.
+
+    An export is complete when it has an index and is not still streaming: a
+    streamed export appends a record only after that function's C block is
+    done, so an index without the streaming marker is a finished one.
+    """
+    if not os.path.isdir(directory):
+        return None
+    if os.path.isfile(os.path.join(directory, ".streaming")):
+        return None
+    records = _kuna_index_records(directory)
+    if not records:
+        return None
+    meta = _kuna_read_export_meta(directory)
+    return {
+        "dir": directory,
+        "functions": len(records),
+        "failed": len([record for record in records if record.get("error")]),
+        "binary": meta.get("binary") or _kuna_readme_binary(directory),
+        "created": meta.get("created"),
+        # Whether the export was made with a filter: a subset export holds
+        # only the functions it was asked for, so it is not a full export of
+        # the binary.
+        "filtered": bool(meta.get("functions")),
+        "names": {record.get("name") for record in records},
+    }
+
+
+def _kuna_export_covers(state: dict, functions: Optional[str]) -> bool:
+    """Does this export already hold everything the caller asked for?
+
+    A full export covers every request. A subset export covers a request for
+    one of its own functions, and nothing else - and an unfiltered request
+    needs an export that was itself unfiltered, or the whole binary is
+    analysed again.
+    """
+    wanted = {name.strip() for name in (functions or "").split(",") if name.strip()}
+    if not wanted:
+        return not state.get("filtered")
+    return wanted.issubset(state.get("names") or set())
+
+
+def _kuna_list_exports() -> List[dict]:
+    """Every export on this machine, newest first.
+
+    The listing is read from disk, so it survives a restart and is the same
+    list the MCP resources expose.
+    """
+    exports: List[dict] = []
+    try:
+        entries = sorted(os.listdir(KUNA_WORK_DIR))
+    except OSError:
+        return []
+    for entry in entries:
+        directory = os.path.join(KUNA_WORK_DIR, entry)
+        if not os.path.isdir(directory):
+            continue
+        records = _kuna_index_records(directory)
+        meta = _kuna_read_export_meta(directory)
+        exports.append({
+            "digest": entry,
+            "dir": directory,
+            "binary": meta.get("binary") or _kuna_readme_binary(directory),
+            "functions": len(records),
+            "failed": len([record for record in records if record.get("error")]),
+            "created": meta.get("created"),
+            "streaming": os.path.isfile(os.path.join(directory, ".streaming")),
+        })
+    exports.sort(key=lambda item: item.get("created") or 0, reverse=True)
+    return exports
+
+
+def _kuna_resolve_export_dir(reference: str) -> str:
+    """Turn an export reference into a directory.
+
+    A bare digest - the 12 hex characters an export is named after - resolves
+    inside the work directory; anything else is a path.
+    """
+    candidate = str(reference or "").strip()
+    if not candidate:
+        raise ValueError("an export directory or digest is required")
+    if KUNA_DIGEST_RE.match(candidate):
+        return os.path.join(KUNA_WORK_DIR, candidate)
+    return os.path.abspath(os.path.expanduser(candidate))
 
 
 instructions = """
@@ -702,11 +919,20 @@ def safe_delete(port: int, endpoint: str) -> dict:
 # Format API responses as plain text for efficient LLM consumption
 
 def format_error(response: dict) -> str:
-    """Format an error response as plain text"""
+    """Format an error response as plain text
+
+    A machine-readable code, when the error carries one, is kept in the text:
+    the Kuna failures have a code an agent can branch on, and dropping it
+    here would leave only the prose.
+    """
     if isinstance(response, dict) and "error" in response:
         err = response["error"]
         if isinstance(err, dict):
-            return f"Error: {err.get('message', 'Unknown error')}"
+            message = err.get("message", "Unknown error")
+            code = err.get("code")
+            if code:
+                return f"Error [{code}]: {message}"
+            return f"Error: {message}"
         return f"Error: {err}"
     return "Error: Unknown error"
 
@@ -1585,9 +1811,22 @@ def format_kuna_status(response: dict, **kwargs) -> str:
     if jobs:
         lines.append(f"Export jobs ({len(jobs)}):")
         for job in jobs:
-            lines.append(f"  {job.get('id')}  {job.get('status')}  {job.get('binary')}")
+            reused = "  (reused)" if job.get("reused") else ""
+            lines.append(f"  {job.get('id')}  {job.get('status')}  {job.get('binary')}{reused}")
     else:
         lines.append("Export jobs: none")
+
+    exports = result.get("exports") or []
+    if exports:
+        lines.append("")
+        lines.append(f"Exports on disk ({len(exports)}):")
+        for export in exports:
+            name = export.get("binary") or "unknown binary"
+            streaming = "  (streaming)" if export.get("streaming") else ""
+            lines.append(
+                f"  {export.get('digest')}  {export.get('functions', 0)} functions  {name}{streaming}"
+            )
+            lines.append(f"    kuna://export/{export.get('digest')}/index.jsonl")
 
     return "\n".join(lines)
 
@@ -1824,6 +2063,19 @@ def format_kuna_export_start(response: dict, **kwargs) -> str:
 
     result = response.get("result", {})
     job_id = result.get("id", "?")
+    if result.get("reused"):
+        return "\n".join([
+            f"Export reused (job {job_id})",
+            f"  Binary: {result.get('binary')}",
+            f"  Dir:    {result.get('dir')}",
+            f"  Status: {result.get('status')}",
+            f"  Functions: {result.get('functions', 0)} ({result.get('failed', 0)} failed)",
+            "",
+            "The export was already there, so the binary was not analysed again.",
+            f"Read it with kuna_export_read(job_id='{job_id}', function='<name>'),",
+            "or as the resources kuna://export/{digest}/index.jsonl and",
+            "kuna://export/{digest}/{function}.c.",
+        ])
     return "\n".join([
         f"Export job {job_id} started",
         f"  Binary: {result.get('binary')}",
@@ -1890,6 +2142,114 @@ def format_kuna_export_read(response: dict, **kwargs) -> str:
     return f"{header}\n\n{result.get('text', '')}"
 
 
+# ================= x64dbg formatters =================
+
+def format_x64dbg_status(response: dict, **kwargs) -> str:
+    """Format the state of the x64dbg MCP server"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    lines = [
+        f"x64dbg MCP server: reachable at {result.get('host')}:{result.get('port')}",
+        f"  Tools: {result.get('tools', 0)}",
+    ]
+    modules = result.get("modules") or []
+    if modules:
+        lines.append(f"  Modules ({len(modules)}):")
+        for module in modules:
+            lines.append(
+                f"    {hex(module.get('base', 0))}  {hex(module.get('size', 0))}  "
+                f"{module.get('path')}"
+            )
+    else:
+        lines.append("  Modules: none loaded (no debug session?)")
+    if result.get("debug_state"):
+        lines.append(f"  State: {result['debug_state']}")
+    return "\n".join(lines)
+
+
+def format_x64dbg_tools(response: dict, **kwargs) -> str:
+    """Format the x64dbg tool catalogue"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    tools = result.get("tools") or []
+    lines = [f"x64dbg tools ({result.get('count', len(tools))}):", ""]
+    for tool in tools:
+        description = str(tool.get("description") or "").split("\n")[0]
+        if len(description) > 110:
+            description = description[:107] + "..."
+        lines.append(f"  {tool.get('name')}")
+        if description:
+            lines.append(f"    {description}")
+    lines.append("")
+    lines.append("Call one with x64dbg_call(tool='<name>', tool_arguments='{\"param\": \"value\"}').")
+    lines.append("The arguments go as one piece of JSON text: a client that flattens a nested")
+    lines.append("object turns every value into a string.")
+    return "\n".join(lines)
+
+
+def format_x64dbg_call(response: dict, **kwargs) -> str:
+    """Format the result of a call to an x64dbg tool"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    return f"{result.get('tool')}\n\n{result.get('text', '')}"
+
+
+def format_x64dbg_target(response: dict, **kwargs) -> str:
+    """Format the correlation between the Ghidra program and the x64dbg session"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    return "\n".join([
+        "Ghidra and x64dbg agree on this binary:",
+        f"  Binary:     {result.get('binary')}",
+        f"  Image base: {result.get('image_base') and hex(result['image_base'])}  (Ghidra, in the file)",
+        f"  Module base:{result.get('module_base') and hex(result['module_base'])}  (x64dbg, in the process)",
+        f"  Delta:      {result.get('delta') and hex(result['delta'])}",
+        "",
+        "A static address becomes a runtime one with:",
+        "  runtime = static - image_base + module_base",
+    ])
+
+
+def format_x64dbg_breakpoint_at(response: dict, **kwargs) -> str:
+    """Format the result of setting a breakpoint on a static address"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    return "\n".join([
+        f"Breakpoint set at {result.get('runtime_address')} "
+        f"(static {result.get('static_address')})",
+        f"  Binary:     {result.get('binary')}",
+        f"  Image base: {result.get('image_base')}",
+        f"  Module base:{result.get('module_base')}",
+        "",
+        result.get("text", ""),
+    ])
+
+
+def format_x64dbg_go_to(response: dict, **kwargs) -> str:
+    """Format the result of moving the instruction pointer to a static address"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    return "\n".join([
+        f"Runtime address {result.get('runtime_address')} "
+        f"(static {result.get('static_address')})",
+        f"  Binary: {result.get('binary')}",
+        "",
+        result.get("text", ""),
+    ])
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -1948,6 +2308,12 @@ FORMATTERS = {
     "kuna_export_start": format_kuna_export_start,
     "kuna_export_status": format_kuna_export_status,
     "kuna_export_read": format_kuna_export_read,
+    "x64dbg_status": format_x64dbg_status,
+    "x64dbg_tools": format_x64dbg_tools,
+    "x64dbg_call": format_x64dbg_call,
+    "x64dbg_target": format_x64dbg_target,
+    "x64dbg_breakpoint_at": format_x64dbg_breakpoint_at,
+    "x64dbg_go_to": format_x64dbg_go_to,
 }
 
 
@@ -4484,9 +4850,14 @@ def kuna_status() -> dict:
     "kuna": {"enabled": true} in ~/.ghydra/config.json. The config file wins
     when both are set.
 
+    The report carries two lists: the export jobs this bridge process knows
+    about, and the exports on disk. The second one outlives the bridge, and
+    is what the kuna://export/ resources are addressed by.
+
     Returns:
         dict: 'enabled', the resolved binary path and version, where the
-              opt-in came from, and the export jobs known to this bridge
+              opt-in came from, the export jobs known to this bridge and the
+              exports on disk
     """
     config = _kuna_config()
     if config.get("enabled") is not None:
@@ -4516,6 +4887,7 @@ def kuna_status() -> dict:
             "config_file": KUNA_CONFIG_FILE,
             "work_dir": KUNA_WORK_DIR,
             "jobs": jobs,
+            "exports": _kuna_list_exports(),
         },
     }
 
@@ -4846,6 +5218,17 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
     then read from the files on disk instead of paying the analysis cost
     again on each call.
 
+    A complete export that already covers the request is reused instead of
+    re-analysed, and the job record says so with "reused": true. The export
+    directory is named after a digest of the path and the mtime, so the files
+    on disk belong to this binary.
+
+    The export can also be read as MCP resources, addressed by that digest:
+    kuna://exports lists them, and kuna://export/{digest}/index.jsonl,
+    kuna://export/{digest}/{function}.c and kuna://export/{digest}/{function}.asm
+    serve the files themselves. Those URIs survive a restart of this bridge,
+    which a job id does not.
+
     Args:
         binary_path: Path to the executable to export
         functions: Optional comma-separated function names to export
@@ -4879,7 +5262,39 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
     try:
         os.makedirs(work_dir, exist_ok=True)
     except OSError as exc:
-        return _kuna_error(f"could not create the export directory {work_dir}: {exc}")
+        return _kuna_error(
+            f"could not create the export directory {work_dir}: {exc}", code="KUNA_IO"
+        )
+
+    # Reuse a complete export instead of paying the analysis again. Kuna loads
+    # and analyses the whole image on every invocation, so a second export of
+    # the same binary is the most expensive no-op there is. The digest covers
+    # the path and the mtime, so the files on disk belong to this binary.
+    state = _kuna_export_state(work_dir)
+    if state and _kuna_export_covers(state, functions):
+        if not _kuna_read_export_meta(work_dir):
+            _kuna_write_export_meta(work_dir, target)
+        _kuna_sync_resources()
+        identifier = job_id or ("kuna-" + hashlib.sha256(
+            f"{target}|{time.time()}".encode("utf-8")).hexdigest()[:8])
+        now = time.time()
+        job = {
+            "id": identifier,
+            "binary": target,
+            "dir": work_dir,
+            "status": "done",
+            "started_at": now,
+            "finished_at": now,
+            "returncode": 0,
+            "error": None,
+            "pid": None,
+            "reused": True,
+            "functions": state["functions"],
+            "failed": state["failed"],
+        }
+        with _kuna_jobs_lock:
+            _kuna_jobs[identifier] = job
+        return {"success": True, "result": _kuna_job_view(job)}
 
     args = ["decompile-project", target, "-o", work_dir, "--stream", "--jobs", str(jobs)]
     if functions:
@@ -4894,7 +5309,7 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
         log_handle = open(log_path, "w", encoding="utf-8")
         err_handle = open(err_path, "w", encoding="utf-8")
     except OSError as exc:
-        return _kuna_error(f"could not open the export logs: {exc}")
+        return _kuna_error(f"could not open the export logs: {exc}", code="KUNA_IO")
 
     try:
         process = subprocess.Popen(
@@ -4906,7 +5321,7 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
     except OSError as exc:
         log_handle.close()
         err_handle.close()
-        return _kuna_error(f"could not launch kuna: {exc}")
+        return _kuna_error(f"could not launch kuna: {exc}", code="KUNA_LAUNCH")
 
     job = {
         "id": identifier,
@@ -4918,6 +5333,7 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
         "returncode": None,
         "error": None,
         "pid": process.pid,
+        "reused": False,
     }
     with _kuna_jobs_lock:
         _kuna_jobs[identifier] = job
@@ -4933,6 +5349,9 @@ def kuna_export_start(binary_path: str, functions: str | None = None,
                     detail = handle.read().strip()[-2000:] or None
             except OSError:
                 detail = None
+        if returncode == 0:
+            _kuna_write_export_meta(work_dir, target, functions=functions)
+            _kuna_sync_resources()
         with _kuna_jobs_lock:
             job["status"] = "failed" if returncode != 0 else "done"
             job["returncode"] = returncode
@@ -4971,9 +5390,16 @@ def kuna_export_status(job_id: str) -> dict:
 
 @mcp.tool()
 @text_output
-def kuna_export_read(job_id: str, function: str | None = None,
-                     artifact: str = "c", max_bytes: int = 40000) -> dict:
+def kuna_export_read(job_id: str | None = None, function: str | None = None,
+                     artifact: str = "c", max_bytes: int = 40000,
+                     directory: str | None = None) -> dict:
     """Read a function out of a kuna export.
+
+    The export is addressed either by the job that made it, or by its
+    directory. The directory may be a path or the 12-character digest the
+    export is named after, which is what the kuna://export/ resources use.
+    A digest outlives the bridge process that made the export, so an export
+    written by the CLI is readable here too.
 
     Args:
         job_id: The id returned by kuna_export_start
@@ -4982,6 +5408,8 @@ def kuna_export_read(job_id: str, function: str | None = None,
         artifact: "c" (recovered C), "asm" (disassembly), "index" (the
                   function index) or "readme" (the export report)
         max_bytes: Maximum bytes of text to return
+        directory: The export directory, or its digest. Used when job_id is
+                   not given.
 
     Returns:
         dict: The requested text, or the list of exported functions
@@ -4990,30 +5418,57 @@ def kuna_export_read(job_id: str, function: str | None = None,
     if guard:
         return guard
 
-    with _kuna_jobs_lock:
-        job = _kuna_jobs.get(job_id)
-    if job is None:
+    work_dir = None
+    binary = None
+    status = "unknown"
+    if directory:
+        try:
+            work_dir = _kuna_resolve_export_dir(directory)
+        except ValueError as exc:
+            return _kuna_error(str(exc), code="KUNA_NO_DIR")
+    elif job_id:
+        with _kuna_jobs_lock:
+            job = _kuna_jobs.get(job_id)
+        if job is None:
+            return _kuna_error(
+                f"unknown job id '{job_id}'; jobs live in the bridge process that "
+                f"started them, so address the export by its directory or digest",
+                code="KUNA_NO_DIR",
+            )
+        work_dir = job["dir"]
+        binary = job["binary"]
+        status = job["status"]
+    else:
         return _kuna_error(
-            f"unknown job id '{job_id}'; jobs live in the bridge process that started them"
+            "either job_id or directory is required", code="KUNA_NO_DIR"
         )
 
-    work_dir = job["dir"]
+    if not work_dir or not os.path.isdir(work_dir):
+        return _kuna_error(f"no such export directory: {work_dir}", code="KUNA_NO_DIR")
+
+    if not binary:
+        binary = _kuna_export_binary(work_dir)
+
     records = _kuna_index_records(work_dir)
 
     if artifact == "readme":
         path = os.path.join(work_dir, "README.md")
         if not os.path.isfile(path):
-            return _kuna_error("the export has no README.md")
+            return _kuna_error("the export has no README.md", code="KUNA_NO_FILE")
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as handle:
                 text = handle.read(max_bytes if max_bytes else -1)
         except OSError as exc:
-            return _kuna_error(f"could not read the export README: {exc}")
+            return _kuna_error(
+                f"could not read the export README: {exc}", code="KUNA_IO"
+            )
         return {"success": True, "result": {"artifact": "readme", "text": text}}
 
     if not records:
         return _kuna_error(
-            f"the export for {job['binary']} has no index yet (job status: {job['status']})"
+            f"the export for {binary or work_dir} has no index yet "
+            f"(job status: {status})",
+            code="KUNA_NO_INDEX",
         )
 
     if artifact == "index":
@@ -5021,7 +5476,7 @@ def kuna_export_read(job_id: str, function: str | None = None,
             "success": True,
             "result": {
                 "artifact": "index",
-                "binary": job["binary"],
+                "binary": binary,
                 "total": len(records),
                 "functions": [
                     {
@@ -5036,14 +5491,16 @@ def kuna_export_read(job_id: str, function: str | None = None,
         }
 
     if artifact not in ("c", "asm"):
-        return _kuna_error("artifact must be one of: c, asm, index, readme")
+        return _kuna_error(
+            "artifact must be one of: c, asm, index, readme", code="KUNA_BAD_ARTIFACT"
+        )
 
     if not function:
         return {
             "success": True,
             "result": {
                 "artifact": artifact,
-                "binary": job["binary"],
+                "binary": binary,
                 "total": len(records),
                 "functions": [
                     {
@@ -5057,19 +5514,11 @@ def kuna_export_read(job_id: str, function: str | None = None,
             },
         }
 
-    record = None
-    for candidate in records:
-        if candidate.get("name") == function:
-            record = candidate
-            break
+    record = _kuna_find_record(records, function)
     if record is None:
-        lowered = function.lower()
-        for candidate in records:
-            if str(candidate.get("name", "")).lower() == lowered:
-                record = candidate
-                break
-    if record is None:
-        return _kuna_error(f"function '{function}' is not in the export index")
+        return _kuna_error(
+            f"function '{function}' is not in the export index", code="KUNA_NO_FUNCTION"
+        )
 
     if artifact == "c":
         text = _kuna_extract_c(work_dir, record, max_bytes)
@@ -5077,7 +5526,10 @@ def kuna_export_read(job_id: str, function: str | None = None,
         text = _kuna_extract_asm(work_dir, record.get("name", function), max_bytes)
 
     if text is None:
-        return _kuna_error(f"could not read the {artifact} of '{function}' from the export")
+        return _kuna_error(
+            f"could not read the {artifact} of '{function}' from the export",
+            code="KUNA_IO",
+        )
 
     return {
         "success": True,
@@ -5086,6 +5538,1211 @@ def kuna_export_read(job_id: str, function: str | None = None,
             "function": record.get("name"),
             "addr": record.get("addr"),
             "size": record.get("size"),
+            "text": text,
+        },
+    }
+
+
+# ================= Kuna resources =================
+#
+# The export is the durable artifact: the analysis is expensive and the files
+# on disk are the cheap way to read it. The job registry is not durable - it
+# lives in this process - so the export is also exposed as MCP resources,
+# addressed by the digest it is named after. A digest outlives the bridge, so
+# an export written by the CLI is readable here too.
+#
+# The retrieval loop is the RAG loop with exact addressing:
+#   1. read kuna://exports                   - which binaries have been exported
+#   2. read kuna://export/<digest>/index.jsonl - the function list
+#   3. read kuna://export/<digest>/<function>.c - that one function
+#
+# A function name goes into the URI percent-encoded, because a name may hold
+# a slash and the URI may not.
+
+KUNA_RESOURCE_ROOT = "kuna://export"
+
+# The URIs already registered as concrete resources, so a rescan does not
+# register the same export twice.
+_kuna_registered_resources: set = set()
+
+
+def _kuna_export_dir_for(digest: str) -> str:
+    """The export directory a digest names.
+
+    A digest is 12 hex characters. Anything else could name a path outside
+    the work directory, so it is refused rather than resolved.
+    """
+    if not KUNA_DIGEST_RE.match(str(digest or "")):
+        raise ValueError(
+            f"'{digest}' is not an export digest; it is 12 hex characters"
+        )
+    return os.path.join(KUNA_WORK_DIR, digest)
+
+
+def _kuna_resource_text(directory: str, relative: str) -> str:
+    """Read a file out of an export directory."""
+    path = os.path.join(directory, relative)
+    if not os.path.isfile(path):
+        raise ValueError(f"the export has no {relative}")
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        return handle.read()
+
+
+def _kuna_resource_function(digest: str, function: str, artifact: str) -> str:
+    """Read one function's artifact out of an export."""
+    directory = _kuna_export_dir_for(digest)
+    name = unquote(function)
+    records = _kuna_index_records(directory)
+    record = _kuna_find_record(records, name)
+    if record is None:
+        raise ValueError(f"function '{name}' is not in the export index")
+    if artifact == "c":
+        text = _kuna_extract_c(directory, record, 0)
+    else:
+        text = _kuna_extract_asm(directory, record.get("name", name), 0)
+    if text is None:
+        raise ValueError(f"could not read the {artifact} of '{name}' from the export")
+    return text
+
+
+@mcp.resource("kuna://exports", name="kuna-exports", mime_type="application/json")
+def kuna_exports_resource() -> str:
+    """Every Kuna export on this machine, as a JSON manifest.
+
+    Each entry carries the digest the export is named after, the binary it
+    came from, how many functions it holds and whether it is still being
+    written. The digest is what the kuna://export/ resources are addressed
+    by, and it is the only identifier that survives a restart of the bridge.
+    """
+    exports = _kuna_list_exports()
+    return json.dumps({"count": len(exports), "exports": exports}, indent=2)
+
+
+@mcp.resource("kuna://export/{digest}/index.jsonl", name="kuna-export-index",
+              mime_type="application/x-ndjson")
+def kuna_export_index_resource(digest: str) -> str:
+    """The function index of one export: one JSON record per line.
+
+    Each record names a function, its address and its size, and points at the
+    block of recovered C that belongs to it.
+    """
+    return _kuna_resource_text(_kuna_export_dir_for(digest), "index.jsonl")
+
+
+@mcp.resource("kuna://export/{digest}/README.md", name="kuna-export-readme",
+              mime_type="text/markdown")
+def kuna_export_readme_resource(digest: str) -> str:
+    """The report Kuna wrote next to an export."""
+    return _kuna_resource_text(_kuna_export_dir_for(digest), "README.md")
+
+
+@mcp.resource("kuna://export/{digest}/{function}.c", name="kuna-export-c",
+              mime_type="text/x-c")
+def kuna_export_c_resource(digest: str, function: str) -> str:
+    """The recovered C of one function in one export.
+
+    The function name is percent-encoded in the URI.
+    """
+    return _kuna_resource_function(digest, function, "c")
+
+
+@mcp.resource("kuna://export/{digest}/{function}.asm", name="kuna-export-asm",
+              mime_type="text/plain")
+def kuna_export_asm_resource(digest: str, function: str) -> str:
+    """The disassembly of one function in one export.
+
+    The function name is percent-encoded in the URI.
+    """
+    return _kuna_resource_function(digest, function, "asm")
+
+
+def _kuna_sync_resources() -> None:
+    """Register the exports on disk as concrete resources.
+
+    The templates above serve any export by digest, but a client that only
+    reads resources/list would not see them. This puts the index and the
+    report of every export on disk into that listing.
+    """
+    for export in _kuna_list_exports():
+        digest = export["digest"]
+        directory = export["dir"]
+        for relative, mime in (("index.jsonl", "application/x-ndjson"),
+                               ("README.md", "text/markdown")):
+            uri = f"{KUNA_RESOURCE_ROOT}/{digest}/{relative}"
+            if uri in _kuna_registered_resources:
+                continue
+            if not os.path.isfile(os.path.join(directory, relative)):
+                continue
+            _kuna_registered_resources.add(uri)
+            mcp.add_resource(FunctionResource(
+                uri=AnyUrl(uri),
+                name=f"kuna-export-{digest}-{relative}",
+                description=f"The {relative} of the Kuna export {digest}.",
+                mime_type=mime,
+                fn=(lambda d=directory, r=relative: _kuna_resource_text(d, r)),
+            ))
+
+
+# The exports that already exist on disk are worth showing before the first
+# export of this session.
+_kuna_sync_resources()
+
+
+# ================= x64dbg integration =================
+# The x64dbg plugin (https://github.com/duty1g/x64dbg-mcp-server) is an MCP
+# server that lives inside the debugger: it answers JSON-RPC 2.0 POSTed to "/"
+# with a bearer token, and every request stands alone - there is no session
+# and no handshake to keep alive.
+#
+# These tools drive it from the bridge, so an agent gets the static side
+# (Ghidra) and the dynamic side (x64dbg) in one place. The two disagree
+# about addresses: Ghidra works on the image as it sits in the file, x64dbg on
+# the loaded process. The translation between them is what makes the pair
+# worth having, and it is what x64dbg_target and x64dbg_breakpoint_at do.
+#
+# The plugin's own tools are not proxied one by one - eighty of them would
+# drown the agent's tool list. The catalogue is exposed instead, and
+# x64dbg_call invokes any of them by name.
+
+X64DBG_DEFAULT_PORT = 9094        # the plugin's default for a 64-bit debuggee
+X64DBG_X32_PORT = 9095            # and for a 32-bit one
+X64DBG_PORT_SCAN = 32             # ports to try when looking for an instance
+X64DBG_ENV_HOST = "GHYDRA_X64DBG_HOST"
+X64DBG_ENV_PORT = "GHYDRA_X64DBG_PORT"
+X64DBG_ENV_TOKEN = "GHYDRA_X64DBG_TOKEN"
+# The installation, where the plugin's own mcp_config.json - and with it the
+# token - is found. The token is the one thing that cannot be guessed, so
+# this is what makes the integration usable without editing a config file.
+X64DBG_ENV_PATH = "GHYDRA_X64DBG_PATH"
+# The plugin asks the OS for the path of the *process*, so the file lands
+# next to x64dbg.exe and not next to the plugin DLL.
+X64DBG_PLUGIN_CONFIG_NAME = "mcp_config.json"
+X64DBG_PROTOCOL_VERSION = "2024-11-05"
+
+# How many times a connection error is retried. The plugin hangs up after
+# every response, and a local TCP connection is reset every now and then on
+# Windows - measured at 7% of the connections on this machine, with curl and
+# with plain sockets alike, so it is the network stack and not this client.
+X64DBG_CONNECT_ATTEMPTS = 3
+
+# How many times a request that is safe to repeat is sent in all. A reset is
+# 7% of the connections, so two in a row - what a read-only request has to
+# survive - happens about once in every two hundred calls. Three attempts,
+# two re-sends, make that rare enough not to be a test flake.
+X64DBG_DELIVERED_ATTEMPTS = 3
+
+# How long a connection may take to come up, and how long the server may
+# take to answer. The two are separate because they mean different things: a
+# closed local port does not refuse straight away on Windows - the SYN hangs
+# and is only refused about two seconds later - so a probe must not wait for
+# that, while a tool that blocks (WaitForEvent, run) must be allowed to take
+# its time.
+X64DBG_CONNECT_TIMEOUT = 2.0
+X64DBG_READ_TIMEOUT = 30.0
+X64DBG_PROBE_CONNECT_TIMEOUT = 0.35
+X64DBG_PROBE_READ_TIMEOUT = 2.0
+
+# Which plugin tools may be repeated when the transport fails. The plugin
+# marks every tool as read-only or not, and the hint is in its catalogue.
+_X64DBG_READ_ONLY: Dict[str, bool] = {}
+
+# The input schema of each plugin tool, from the same catalogue. It says what
+# type every parameter is, which is what puts back the types a client
+# flattened into text.
+_X64DBG_SCHEMAS: Dict[str, dict] = {}
+
+# The machine-readable reasons a call can fail. The CLI carries the same list,
+# so an agent sees one taxonomy whichever side it drives.
+X64DBG_ERROR_CODES = (
+    "X64DBG_ERROR",         # the generic fallback
+    "X64DBG_DISABLED",      # no token, so no way to talk to the server
+    "X64DBG_MISSING",       # nothing answered on the port
+    "X64DBG_TIMEOUT",       # the server did not answer in time
+    "X64DBG_UNCERTAIN",     # the request was sent but the answer was lost
+    "X64DBG_UNAUTHORIZED",  # the bearer token did not match
+    "X64DBG_NO_SESSION",    # no debug session in x64dbg
+    "X64DBG_NO_TOOL",       # the plugin has no tool with that name
+    "X64DBG_BAD_ARGS",      # the tool rejected the arguments
+    "X64DBG_NO_MATCH",      # the binary does not match any loaded module
+)
+
+
+def _x64dbg_error(message: str, code: str = "X64DBG_ERROR") -> dict:
+    """The error envelope, with a code the agent can branch on."""
+    return {"success": False, "error": {"code": code, "message": message}}
+
+
+def _x64dbg_config() -> dict:
+    """Read the "x64dbg" section of ~/.ghydra/config.json.
+
+    Never raises: a missing or malformed config simply means "not configured".
+    """
+    try:
+        # The same file the Kuna integration reads: ~/.ghydra/config.json.
+        with open(KUNA_CONFIG_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    section = data.get("x64dbg")
+    return section if isinstance(section, dict) else {}
+
+
+def _x64dbg_plugin_config(install: str) -> dict:
+    """The plugin's own settings, from the mcp_config.json next to x64dbg.exe.
+
+    The file sits next to the executable, or in one of the plugin folders;
+    which one depends on how x64dbg was unpacked.
+    """
+    root = os.path.abspath(os.path.expanduser(str(install or "")))
+    candidates = [
+        os.path.join(root, X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "x64", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "x32", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "release", "x64", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "release", "x32", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "x64", "plugins", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "x32", "plugins", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "release", "x64", "plugins", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "release", "x32", "plugins", X64DBG_PLUGIN_CONFIG_NAME),
+        os.path.join(root, "plugins", X64DBG_PLUGIN_CONFIG_NAME),
+    ]
+    for candidate in candidates:
+        try:
+            with open(candidate, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def _x64dbg_settings() -> dict:
+    """Where the x64dbg MCP server is, and the token to talk to it.
+
+    The configuration file wins over the environment. The token cannot be
+    guessed: the plugin writes it to "mcp_config.json" next to x64dbg.exe, so
+    pointing at an installed x64dbg with "path" - or GHYDRA_X64DBG_PATH - is
+    enough to find it.
+    """
+    section = _x64dbg_config()
+    host = section.get("host") or os.environ.get(X64DBG_ENV_HOST) or "127.0.0.1"
+    port = section.get("port") or os.environ.get(X64DBG_ENV_PORT) or X64DBG_DEFAULT_PORT
+    token = section.get("token") or os.environ.get(X64DBG_ENV_TOKEN) or ""
+    install = section.get("path") or os.environ.get(X64DBG_ENV_PATH) or ""
+
+    plugin = _x64dbg_plugin_config(install) if install else {}
+    if not token:
+        token = plugin.get("AuthToken") or ""
+    # The plugin file fills the blanks and only the blanks: a host or a port
+    # that came from the config file or from the environment is a decision
+    # the user made, and the plugin file does not get to overrule it.
+    if (not section.get("host") and not os.environ.get(X64DBG_ENV_HOST)
+            and plugin.get("IpAddress")):
+        host = plugin["IpAddress"]
+    if (not section.get("port") and not os.environ.get(X64DBG_ENV_PORT)
+            and plugin.get("Port")):
+        port = plugin["Port"]
+
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        port = X64DBG_DEFAULT_PORT
+
+    return {"host": str(host), "port": port, "token": str(token), "path": str(install)}
+
+
+def _x64dbg_classify(message: str) -> str:
+    """The code that matches an error message from the plugin.
+
+    The plugin answers with prose - "Error: No active debug session." - so
+    the reason has to be read out of it.
+    """
+    text = str(message or "").lower()
+    if "no active debug session" in text or "tool requires an active" in text:
+        return "X64DBG_NO_SESSION"
+    if "no such tool" in text or "unknown tool" in text or "not found" in text:
+        return "X64DBG_NO_TOOL"
+    if "required" in text or "invalid" in text or "missing" in text:
+        return "X64DBG_BAD_ARGS"
+    return "X64DBG_ERROR"
+
+
+def _x64dbg_never_sent(exc: BaseException) -> bool:
+    """Whether the request was never handed to the server.
+
+    A connection that could not be established is one thing: the request
+    never left, so trying again is safe. A connection that died while the
+    answer was coming is another - there the server may already have acted
+    on the request, and only a request that is safe to repeat may be tried
+    again.
+
+    urllib3 names the two cases "NewConnectionError" and "ProtocolError".
+    The name is checked instead of the class, so this file does not have to
+    depend on urllib3 directly: it comes with requests, but the bridge is a
+    standalone script with its own dependency list.
+    """
+    cause: Optional[BaseException] = exc
+    while cause is not None:
+        if type(cause).__name__ == "NewConnectionError":
+            return True
+        cause = cause.__cause__ or cause.__context__
+    return False
+
+
+def _x64dbg_uncertain(reason: str) -> str:
+    """The failure when a request was delivered and its answer was lost.
+
+    The local network stack resets a loopback connection every now and then,
+    so a request can reach the debugger and still lose its answer on the way
+    back. The debugger may then have acted on it - and a request that changes
+    the debuggee is never sent twice, because the second one would act on an
+    unknown state. The caller has to be told that the state is unknown
+    instead of being told that the server is gone.
+    """
+    return ("the x64dbg MCP server took the request but the answer was lost "
+            f"({reason}). The request was not repeated, so the debugger may "
+            "already have acted on it.")
+
+
+def _x64dbg_repeatable(reason: str) -> str:
+    """The failure when a request that may be sent again did not get through."""
+    return f"{reason}. The request is safe to repeat."
+
+
+def _x64dbg_post(host: str, port: int, token: str, method: str,
+                 params: Optional[dict] = None, timeout: Optional[float] = None,
+                 connect_timeout: Optional[float] = None,
+                 idempotent: bool = False,
+                 connect_attempts: int = X64DBG_CONNECT_ATTEMPTS) -> Any:
+    """One JSON-RPC request to the x64dbg MCP server, and its result.
+
+    Raises _X64dbgFailure with a machine-readable code.
+
+    The request does not go through the shared session: the plugin closes the
+    connection after every response, and a pooled connection would be reused
+    after the server had already hung up on it.
+
+    idempotent says the request may be sent again when the transport fails:
+    a handshake, the catalogue, or a tool the plugin marks as read-only. A
+    tool that changes the debuggee is never repeated that way, because the
+    first attempt may already have reached it.
+
+    connect_attempts is how many times to try when the connection never
+    came up. The request was never sent in that case, so trying again is
+    safe - but a closed port stays closed, so the port scan asks for one
+    attempt only.
+    """
+    payload: Dict[str, Any] = {
+        "jsonrpc": "2.0",
+        "id": int(time.time() * 1000) % 1000000,
+        "method": method,
+    }
+    if params is not None:
+        payload["params"] = params
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    url = f"http://{host}:{int(port)}/"
+    connect_limit = connect_timeout if connect_timeout is not None else X64DBG_CONNECT_TIMEOUT
+    read_limit = timeout if timeout is not None else X64DBG_READ_TIMEOUT
+    connect_left = max(1, int(connect_attempts))
+    delivered_left = X64DBG_DELIVERED_ATTEMPTS if idempotent else 1
+
+    while True:
+        try:
+            response = requests.post(
+                url, json=payload, headers=headers,
+                timeout=(connect_limit, read_limit),
+            )
+            break
+        except requests.ConnectTimeout as exc:
+            # The connection never came up: the request was never sent.
+            connect_left -= 1
+            if connect_left > 0:
+                continue
+            raise _X64dbgFailure(
+                f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"
+            ) from None
+        except requests.ReadTimeout as exc:
+            # The request was delivered and the answer did not come back.
+            # Only a request that is safe to repeat may be tried again.
+            delivered_left -= 1
+            if delivered_left > 0:
+                continue
+            reason = f"the x64dbg MCP server did not answer within {read_limit}s"
+            if idempotent:
+                raise _X64dbgFailure(_x64dbg_repeatable(reason), "X64DBG_TIMEOUT") from None
+            raise _X64dbgFailure(_x64dbg_uncertain(reason), "X64DBG_UNCERTAIN") from None
+        except requests.Timeout as exc:
+            raise _X64dbgFailure(
+                f"the x64dbg MCP server did not answer within {read_limit}s",
+                "X64DBG_TIMEOUT",
+            ) from None
+        except requests.ConnectionError as exc:
+            if _x64dbg_never_sent(exc):
+                # The connection was never established, so the request never
+                # left: trying again is safe for any request.
+                connect_left -= 1
+                if connect_left > 0:
+                    continue
+                raise _X64dbgFailure(
+                    f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"
+                ) from None
+            # The connection died while the answer was coming. The plugin
+            # hangs up after every response, and the local network stack
+            # resets a connection every now and then, but the server may
+            # already have acted on the request - so only a request that is
+            # safe to repeat is tried again.
+            delivered_left -= 1
+            if delivered_left > 0:
+                continue
+            reason = (f"the connection to {url} died while the answer was coming: {exc}")
+            if idempotent:
+                raise _X64dbgFailure(_x64dbg_repeatable(reason), "X64DBG_MISSING") from None
+            raise _X64dbgFailure(_x64dbg_uncertain(reason), "X64DBG_UNCERTAIN") from None
+        except requests.RequestException as exc:
+            raise _X64dbgFailure(
+                f"could not reach the x64dbg MCP server at {url}: {exc}", "X64DBG_MISSING"
+            ) from None
+
+    if response.status_code == 401:
+        raise _X64dbgFailure(
+            "the x64dbg MCP server rejected the bearer token", "X64DBG_UNAUTHORIZED"
+        )
+    if response.status_code >= 400:
+        raise _X64dbgFailure(
+            f"the x64dbg MCP server answered {response.status_code}", "X64DBG_ERROR"
+        )
+
+    body = (response.text or "").strip()
+    if not body:
+        raise _X64dbgFailure(
+            "the x64dbg MCP server answered with an empty body", "X64DBG_ERROR"
+        )
+    try:
+        data = json.loads(body)
+    except ValueError:
+        raise _X64dbgFailure(
+            f"the x64dbg MCP server did not answer JSON: {body[:200]}", "X64DBG_ERROR"
+        ) from None
+
+    if isinstance(data, dict) and data.get("error"):
+        error = data["error"]
+        message = error.get("message", "") if isinstance(error, dict) else str(error)
+        raise _X64dbgFailure(message or "the call failed", _x64dbg_classify(message))
+    if isinstance(data, dict):
+        return data.get("result")
+    return data
+
+
+class _X64dbgFailure(Exception):
+    """A failure from the x64dbg side, with a machine-readable code."""
+
+    def __init__(self, message: str, code: str = "X64DBG_ERROR") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _x64dbg_candidate_ports(port: int) -> tuple:
+    """The ports to try: the likely ones first, then the walk.
+
+    The walk starts from the configured port as well as from the two
+    defaults: the fixed plugin walks up from the port it was told to use, so
+    a server on the configured port plus one has to be reachable.
+    """
+    likely = list(dict.fromkeys([port, X64DBG_DEFAULT_PORT, X64DBG_X32_PORT]))
+    bases = tuple(dict.fromkeys((port, X64DBG_DEFAULT_PORT, X64DBG_X32_PORT)))
+    others = [
+        candidate + offset
+        for offset in range(1, X64DBG_PORT_SCAN)
+        for candidate in bases
+        if (candidate + offset) not in likely
+    ]
+    return likely, others
+
+
+def _x64dbg_instance() -> dict:
+    """Find an x64dbg MCP server.
+
+    The plugin binds 9094 for a 64-bit debuggee and 9095 for a 32-bit one,
+    and the ports around them are tried too. A server that answers 401 is
+    still a server: it means the token is wrong, which is worth saying.
+
+    The ports are probed concurrently, and the probe timeout is short. A
+    closed local port does not refuse straight away on Windows - it hangs on
+    the first SYN and is only refused about two seconds later - so probing
+    them one at a time with a long timeout would cost a couple of seconds per
+    port. A live instance answers in milliseconds, so a third of a second is
+    plenty to tell it from a closed port.
+    """
+    settings = _x64dbg_settings()
+    if not settings["token"]:
+        # A token is the one thing that cannot be guessed. Without one there
+        # is no way to talk to the server, and probing the ports would only
+        # report a missing server or a rejected token - neither of which says
+        # what is actually wrong.
+        raise _X64dbgFailure(
+            "no bearer token for the x64dbg MCP server. Set "
+            '"x64dbg": {"token": "..."} in ~/.ghydra/config.json, or point '
+            '"x64dbg": {"path": "C:/tools/x64dbg"} - or GHYDRA_X64DBG_PATH - '
+            "to read it from the plugin's own mcp_config.json.",
+            "X64DBG_DISABLED",
+        )
+
+    def _probe(port: int) -> Optional[str]:
+        """The port that answered, or None."""
+        try:
+            _x64dbg_post(settings["host"], port, settings["token"], "initialize", {
+                "protocolVersion": X64DBG_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "ghydramcp", "version": BRIDGE_VERSION},
+            }, timeout=X64DBG_PROBE_READ_TIMEOUT,
+                connect_timeout=X64DBG_PROBE_CONNECT_TIMEOUT, idempotent=True,
+                connect_attempts=1)
+        except _X64dbgFailure as exc:
+            return "unauthorized" if exc.code == "X64DBG_UNAUTHORIZED" else None
+        return str(port)
+
+    # The configured port and the two defaults are where the server almost
+    # always is, so they are probed first, and the wider walk only happens
+    # when none of them answered.
+    likely, others = _x64dbg_candidate_ports(settings["port"])
+
+    unauthorized = False
+    for group in (likely, others):
+        if not group:
+            continue
+        with ThreadPoolExecutor(max_workers=min(16, len(group))) as pool:
+            answers = list(pool.map(_probe, group))
+        for port, answer in zip(group, answers):
+            if answer and answer != "unauthorized":
+                return {
+                    "host": settings["host"], "port": port, "token": settings["token"],
+                    "path": settings["path"], "unauthorized": False,
+                }
+        if any(answer == "unauthorized" for answer in answers):
+            unauthorized = True
+            break
+
+    if unauthorized:
+        raise _X64dbgFailure(
+            "an x64dbg MCP server answered but rejected the bearer token; set "
+            '"x64dbg": {"token": ...} in ~/.ghydra/config.json, or point '
+            '"x64dbg": {"path": ...} at the x64dbg installation',
+            "X64DBG_UNAUTHORIZED",
+        )
+    raise _X64dbgFailure(
+        "no x64dbg MCP server answered on the ports around 9094; is x64dbg running "
+        "with the plugin loaded?",
+        "X64DBG_MISSING",
+    )
+
+
+def _x64dbg_is_read_only(instance: dict, name: str) -> bool:
+    """Whether the plugin marks a tool as read-only.
+
+    The catalogue carries the hint, and it is fetched once and kept: the tool
+    set does not change while the debugger runs.
+    """
+    key = f"{instance['host']}:{instance['port']}:{name}"
+    if key not in _X64DBG_READ_ONLY:
+        try:
+            result = _x64dbg_post(
+                instance["host"], instance["port"], instance["token"], "tools/list",
+                timeout=X64DBG_READ_TIMEOUT, idempotent=True,
+            )
+        except _X64dbgFailure:
+            return False
+        tools = result.get("tools") if isinstance(result, dict) else None
+        for tool in tools or []:
+            if not isinstance(tool, dict):
+                continue
+            annotations = tool.get("annotations") or {}
+            tool_key = f"{instance['host']}:{instance['port']}:{tool.get('name')}"
+            _X64DBG_READ_ONLY[tool_key] = bool(annotations.get("readOnlyHint"))
+            schema = tool.get("inputSchema")
+            _X64DBG_SCHEMAS[tool_key] = schema if isinstance(schema, dict) else {}
+    return _X64DBG_READ_ONLY.get(key, False)
+
+
+def _x64dbg_restore_types(instance: dict, name: str, arguments: dict) -> dict:
+    """Put back the types a client flattened into text.
+
+    A client that re-encodes the container the protocol uses for a tool's
+    parameters turns what is nested in it into text: measured on this
+    desktop, where an integer count arrived as the string "3". The plugin
+    ignores a parameter it cannot read and does something else instead of
+    failing - the call came back with the default count rather than the
+    one that was asked for.
+
+    The plugin's own schema says what every parameter is, so the type is
+    restored here, from the schema, rather than left to the plugin. A value
+    the schema does not describe is left alone.
+    """
+    key = f"{instance['host']}:{instance['port']}:{name}"
+    schema = _X64DBG_SCHEMAS.get(key)
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(properties, dict) or not arguments:
+        return arguments
+    restored = dict(arguments)
+    for field, value in arguments.items():
+        if not isinstance(value, str):
+            continue
+        declared = properties.get(field)
+        if not isinstance(declared, dict):
+            continue
+        kind = declared.get("type")
+        if kind == "integer":
+            try:
+                restored[field] = int(value, 0)
+            except ValueError:
+                pass
+        elif kind == "number":
+            try:
+                restored[field] = float(value)
+            except ValueError:
+                pass
+        elif kind == "boolean":
+            if value.lower() in ("true", "false"):
+                restored[field] = value.lower() == "true"
+        elif kind in ("array", "object"):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                continue
+            if kind == "array" and isinstance(parsed, list):
+                restored[field] = parsed
+            elif kind == "object" and isinstance(parsed, dict):
+                restored[field] = parsed
+    return restored
+
+
+def _x64dbg_call_tool(instance: dict, name: str, arguments: Optional[dict] = None,
+                      timeout: Optional[float] = None) -> str:
+    """Call one plugin tool and return its text.
+
+    A read-only tool may be called again when the transport fails; a tool
+    that changes the debuggee may not, because the first attempt may already
+    have reached it.
+    """
+    # The catalogue is read first: it carries the read-only hint and the
+    # input schema, and the schema is what says what type a parameter is.
+    read_only = _x64dbg_is_read_only(instance, name)
+    payload = {
+        "name": name,
+        "arguments": _x64dbg_restore_types(instance, name, arguments or {}),
+    }
+    result = _x64dbg_post(
+        instance["host"], instance["port"], instance["token"], "tools/call",
+        payload, timeout=timeout, idempotent=read_only,
+    )
+    if isinstance(result, dict):
+        content = result.get("content")
+        if isinstance(content, list):
+            parts = [
+                str(item.get("text", ""))
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            ]
+            if parts:
+                return "\n".join(parts)
+        if result.get("isError"):
+            raise _X64dbgFailure("the tool reported an error", "X64DBG_ERROR")
+        if "text" in result:
+            return str(result["text"])
+    return ""
+
+
+def _x64dbg_normalize_path(path: str) -> str:
+    """A path that the two sides can be compared on.
+
+    The x64dbg side reports the module path with the Win32 extended-length
+    prefix and in its own case; Ghidra reports the executable path as the
+    file system gave it.
+    """
+    text = str(path or "").strip().strip('"')
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    if not text:
+        return ""
+    try:
+        return os.path.normcase(os.path.abspath(text))
+    except (OSError, ValueError):
+        return os.path.normcase(text)
+
+
+def _x64dbg_parse_modules(text: str) -> List[dict]:
+    """The modules out of the ListModules text.
+
+    The tool answers one module per line, "0xBASE | 0xSIZE | PATH".
+    """
+    modules: List[dict] = []
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) < 3:
+            continue
+        try:
+            base = int(parts[0], 16)
+            size = int(parts[1], 16)
+        except ValueError:
+            continue
+        modules.append({"base": base, "size": size, "path": "|".join(parts[2:]).strip()})
+    return modules
+
+
+def _x64dbg_find_module(modules: List[dict], binary_path: str) -> Optional[dict]:
+    """The module that is the given binary.
+
+    The paths are compared first as full paths and then by file name: the two
+    sides can disagree about the directory - a copy, a symlink, a different
+    drive letter - but not about the file.
+    """
+    wanted = _x64dbg_normalize_path(binary_path)
+    if not wanted:
+        return None
+    for module in modules:
+        if _x64dbg_normalize_path(module.get("path", "")) == wanted:
+            return module
+    wanted_name = os.path.basename(wanted).lower()
+    for module in modules:
+        candidate = _x64dbg_normalize_path(module.get("path", ""))
+        if candidate and os.path.basename(candidate).lower() == wanted_name:
+            return module
+    return None
+
+
+def _x64dbg_parse_int(value: Any) -> Optional[int]:
+    """An address, however it was written: "0x140001000", "140001000" or 0."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        if text.lower().startswith("0x"):
+            return int(text, 16)
+        return int(text, 16) if all(char in "0123456789abcdefABCDEF" for char in text) \
+            else int(text, 10)
+    except ValueError:
+        return None
+
+
+def _x64dbg_program_info(port: int) -> dict:
+    """The Ghidra program's image base and executable path."""
+    response = safe_get(port, "/program")
+    if not response.get("success", False):
+        error = response.get("error") or {}
+        raise _X64dbgFailure(
+            error.get("message", "the Ghidra instance did not answer /program"),
+            "X64DBG_ERROR",
+        )
+    result = response.get("result") or {}
+    return {
+        "path": result.get("path") or result.get("executable") or "",
+        "image_base": _x64dbg_parse_int(result.get("imageBase", result.get("image_base"))),
+        "name": result.get("name") or "",
+    }
+
+
+def _x64dbg_target_descriptor(port: int | None = None) -> dict:
+    """Correlate the Ghidra program with the x64dbg session.
+
+    The two sides disagree about addresses by a constant, and this is what
+    works out that constant: the image base Ghidra loads the file at, and the
+    base the loader gave the module in the process.
+    """
+    ghidra_port = _get_instance_port(port)
+    program = _x64dbg_program_info(ghidra_port)
+    instance = _x64dbg_instance()
+    text = _x64dbg_call_tool(instance, "ListModules")
+    modules = _x64dbg_parse_modules(text)
+
+    binary_path = program.get("path") or ""
+    module = _x64dbg_find_module(modules, binary_path)
+    if module is None:
+        raise _X64dbgFailure(
+            f"no loaded module matches the binary Ghidra has open ({binary_path or 'unknown'}); "
+            f"the loaded modules are: " + ", ".join(item["path"] for item in modules),
+            "X64DBG_NO_MATCH",
+        )
+
+    image_base = program.get("image_base")
+    if image_base is None:
+        raise _X64dbgFailure(
+            "the Ghidra instance did not report an image base for this program",
+            "X64DBG_ERROR",
+        )
+
+    module_base = module["base"]
+    return {
+        "ghidra_port": ghidra_port,
+        "binary": binary_path,
+        "image_base": image_base,
+        "module_base": module_base,
+        "module_size": module.get("size"),
+        "module_path": module.get("path"),
+        "delta": module_base - image_base,
+        "x64dbg_host": instance["host"],
+        "x64dbg_port": instance["port"],
+    }
+
+
+@mcp.tool()
+@text_output
+def x64dbg_status() -> dict:
+    """Whether the x64dbg MCP server is reachable, and what it is doing.
+
+    The x64dbg plugin is an MCP server that lives inside the debugger. It
+    answers on 127.0.0.1:9094 for a 64-bit debuggee and :9095 for a 32-bit
+    one, and it wants a bearer token. Point at it with "x64dbg": {"port": ...,
+    "token": ...} in ~/.ghydra/config.json, or with "path" - or
+    GHYDRA_X64DBG_PATH - pointing at the x64dbg installation, and the token is
+    read from the plugin's own mcp_config.json.
+
+    Returns:
+        dict: Whether the server answered, where it is, how many tools it
+              has and the modules it has loaded
+    """
+    try:
+        instance = _x64dbg_instance()
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    try:
+        tools = _x64dbg_post(
+            instance["host"], instance["port"], instance["token"], "tools/list",
+            timeout=X64DBG_READ_TIMEOUT, idempotent=True,
+        )
+        tool_list = tools.get("tools") if isinstance(tools, dict) else None
+        tool_list = tool_list if isinstance(tool_list, list) else []
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    modules: List[dict] = []
+    debug_state = None
+    try:
+        text = _x64dbg_call_tool(instance, "ListModules")
+        modules = _x64dbg_parse_modules(text)
+    except _X64dbgFailure:
+        modules = []
+    try:
+        debug_state = _x64dbg_call_tool(instance, "GetDebugState").strip()
+    except _X64dbgFailure:
+        debug_state = None
+
+    return {
+        "success": True,
+        "result": {
+            "reachable": True,
+            "host": instance["host"],
+            "port": instance["port"],
+            "tools": len(tool_list),
+            "modules": modules,
+            "debug_state": debug_state,
+        },
+    }
+
+
+@mcp.tool()
+@text_output
+def x64dbg_tools() -> dict:
+    """The x64dbg plugin's tool catalogue, with the schema of each tool.
+
+    The plugin carries eighty tools. They are not exposed one by one here -
+    that would drown the agent's tool list - so the catalogue is exposed
+    instead, and x64dbg_call invokes any of them by name.
+
+    Returns:
+        dict: The tools: name, description and input schema
+    """
+    try:
+        instance = _x64dbg_instance()
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    try:
+        result = _x64dbg_post(
+            instance["host"], instance["port"], instance["token"], "tools/list",
+            timeout=X64DBG_READ_TIMEOUT, idempotent=True,
+        )
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    tools = result.get("tools") if isinstance(result, dict) else None
+    tools = tools if isinstance(tools, list) else []
+    return {
+        "success": True,
+        "result": {
+            "count": len(tools),
+            "tools": [
+                {
+                    "name": tool.get("name"),
+                    "description": tool.get("description"),
+                    "input_schema": tool.get("inputSchema"),
+                    "read_only": bool(
+                        (tool.get("annotations") or {}).get("readOnlyHint")),
+                }
+                for tool in tools if isinstance(tool, dict)
+            ],
+        },
+    }
+
+
+def _x64dbg_arguments_text(value: Any) -> Any:
+    """Take the plugin's arguments as one piece of text.
+
+    A client that re-encodes the container the protocol uses for a tool's
+    parameters flattens what is nested in it, and every value of a nested
+    object arrives as a string - measured on this desktop, where an integer
+    count arrived as "3" and the plugin, ignoring what it could not read,
+    did something else instead of failing.
+
+    The text is the form nothing gets in the way of, so it is the form the
+    schema asks for. An object is still accepted, for the clients that
+    deliver one, and its types are restored from the plugin's own schema.
+    """
+    if isinstance(value, dict):
+        return json.dumps(value)
+    return value
+
+
+# The arguments of a plugin tool, as JSON text. The schema says string on
+# purpose: a client that hands over a nested object flattens it.
+X64dbgArguments = Annotated[str, BeforeValidator(_x64dbg_arguments_text)]
+
+
+def _x64dbg_parse_arguments(value: Any) -> dict:
+    """The plugin's arguments, from their JSON text or from an object.
+
+    Some MCP clients re-encode the container the protocol uses for a tool's
+    parameters, and a nested object does not always survive that. The text
+    is parsed here, so the caller may pass either and the bridge does not
+    rely on the client to get it right.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    text = str(value).strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        raise _X64dbgFailure(
+            "the arguments are not JSON", "X64DBG_BAD_ARGS") from None
+    if not isinstance(parsed, dict):
+        raise _X64dbgFailure(
+            "the arguments are not a JSON object", "X64DBG_BAD_ARGS") from None
+    return parsed
+
+
+@mcp.tool()
+@text_output
+def x64dbg_call(tool: str, tool_arguments: X64dbgArguments | None = None,
+                timeout: int | None = None) -> dict:
+    """Call one of the x64dbg plugin's tools by name.
+
+    The name and the arguments are the ones x64dbg_tools reports. Every
+    response carries a "[state]" line and any debugger events that fired
+    since the last call, so read them.
+
+    A tool the plugin marks as read-only may be called again when the
+    transport fails; one that changes the debuggee is never repeated, because
+    the first attempt may already have reached it.
+
+    Send the arguments as one piece of JSON text - '{"target": "0x140001234"}' -
+    rather than as a nested object. A client that re-encodes the container
+    the protocol uses for a tool's parameters flattens what is nested in it:
+    every value of the object arrives as a string, and the plugin ignores a
+    parameter it cannot read and does something else instead of failing.
+    Measured here - an integer count arrived as "3" and the call came back
+    with the default count. The text is parsed here. An object is still
+    accepted, and its types are restored from the plugin's own schema.
+
+    The parameter is not called "arguments" for a reason of its own: that is
+    the name of the container the protocol itself uses for a tool's
+    parameters, and the two get confused easily.
+
+    Args:
+        tool: The plugin tool to call, for example "SetBreakpoint"
+        tool_arguments: The arguments for that tool, as JSON text
+        timeout: How long to wait, in seconds (30 by default). The tools that
+            block - run, WaitForEvent, WaitForPause - need more than that.
+
+    Returns:
+        dict: The tool's text
+    """
+    if not tool:
+        return _x64dbg_error("tool is required", code="X64DBG_BAD_ARGS")
+    try:
+        instance = _x64dbg_instance()
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+    try:
+        text = _x64dbg_call_tool(
+            instance, tool, _x64dbg_parse_arguments(tool_arguments),
+            timeout=float(timeout) if timeout else None,
+        )
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+    return {"success": True, "result": {"tool": tool, "text": text}}
+
+
+@mcp.tool()
+@text_output
+def x64dbg_target(port: int | None = None) -> dict:
+    """Correlate the Ghidra program with the x64dbg session.
+
+    Ghidra works on the image as it sits in the file, at the image base.
+    x64dbg works on the live process, where the loader put the module
+    somewhere else. The two differ by a constant, and this is what works it
+    out: the image base of the program Ghidra has open, and the base of the
+    module x64dbg has loaded.
+
+    The result carries both bases and the delta between them, so a static
+    address can be turned into a runtime one and back.
+
+    Args:
+        port: The Ghidra instance (the current one by default)
+
+    Returns:
+        dict: The image base, the module base, the delta and the binary
+    """
+    try:
+        descriptor = _x64dbg_target_descriptor(port)
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+    except ValueError as exc:
+        return _x64dbg_error(str(exc), code="X64DBG_ERROR")
+    return {"success": True, "result": descriptor}
+
+
+@mcp.tool()
+@text_output
+def x64dbg_breakpoint_at(address: str, port: int | None = None) -> dict:
+    """Set a breakpoint on a Ghidra address.
+
+    The address is the static one - the one Ghidra shows, the one static
+    analysis just found - and it is translated into the runtime address
+    before the breakpoint is set. This is the step that turns a function
+    recovered by decompilation into a place the debugger actually stops.
+
+    Args:
+        address: The static address, as Ghidra shows it ("0x140001234")
+        port: The Ghidra instance (the current one by default)
+
+    Returns:
+        dict: The static and the runtime address, and what the plugin said
+    """
+    static_address = _x64dbg_parse_int(address)
+    if static_address is None:
+        return _x64dbg_error(
+            f"'{address}' is not an address", code="X64DBG_BAD_ARGS"
+        )
+    try:
+        descriptor = _x64dbg_target_descriptor(port)
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+    except ValueError as exc:
+        return _x64dbg_error(str(exc), code="X64DBG_ERROR")
+
+    runtime = static_address - descriptor["image_base"] + descriptor["module_base"]
+    try:
+        # The descriptor already found the server; looking for it again
+        # would probe the ports a second time. The token comes from the
+        # settings, not from the descriptor: the descriptor is returned to
+        # the agent as it is.
+        settings = _x64dbg_settings()
+        instance = {
+            "host": descriptor["x64dbg_host"], "port": descriptor["x64dbg_port"],
+            "token": settings["token"], "path": settings["path"],
+        }
+        text = _x64dbg_call_tool(instance, "SetBreakpoint", {"target": hex(runtime)})
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    return {
+        "success": True,
+        "result": {
+            "static_address": hex(static_address),
+            "runtime_address": hex(runtime),
+            "image_base": hex(descriptor["image_base"]),
+            "module_base": hex(descriptor["module_base"]),
+            "binary": descriptor["binary"],
+            "text": text,
+        },
+    }
+
+
+@mcp.tool()
+@text_output
+def x64dbg_go_to(address: str, port: int | None = None) -> dict:
+    """Move the instruction pointer to a Ghidra address.
+
+    The address is translated from the static one into the runtime one, the
+    same way x64dbg_breakpoint_at does it. The debuggee has to be paused: a
+    running target has no instruction pointer to move.
+
+    Args:
+        address: The static address, as Ghidra shows it ("0x140001234")
+        port: The Ghidra instance (the current one by default)
+
+    Returns:
+        dict: The static and the runtime address, and what the plugin said
+    """
+    static_address = _x64dbg_parse_int(address)
+    if static_address is None:
+        return _x64dbg_error(
+            f"'{address}' is not an address", code="X64DBG_BAD_ARGS"
+        )
+    try:
+        descriptor = _x64dbg_target_descriptor(port)
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+    except ValueError as exc:
+        return _x64dbg_error(str(exc), code="X64DBG_ERROR")
+
+    runtime = static_address - descriptor["image_base"] + descriptor["module_base"]
+    try:
+        # The descriptor already found the server; looking for it again
+        # would probe the ports a second time. The token comes from the
+        # settings, not from the descriptor: the descriptor is returned to
+        # the agent as it is.
+        settings = _x64dbg_settings()
+        instance = {
+            "host": descriptor["x64dbg_host"], "port": descriptor["x64dbg_port"],
+            "token": settings["token"], "path": settings["path"],
+        }
+        # "cip" is the x64dbg name for the instruction pointer, in a 64-bit
+        # debuggee and in a 32-bit one alike; the plugin turns it into
+        # "mov cip, <address>".
+        text = _x64dbg_call_tool(
+            instance, "SetRegister",
+            {"register": "cip", "value": hex(runtime)},
+        )
+    except _X64dbgFailure as exc:
+        return _x64dbg_error(str(exc), code=exc.code)
+
+    return {
+        "success": True,
+        "result": {
+            "static_address": hex(static_address),
+            "runtime_address": hex(runtime),
+            "binary": descriptor["binary"],
             "text": text,
         },
     }

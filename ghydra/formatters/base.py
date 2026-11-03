@@ -181,6 +181,19 @@ class BaseFormatter(ABC):
         pass
 
     @abstractmethod
+    def format_x64dbg(self, data: Dict[str, Any]) -> str:
+        """Format an x64dbg MCP server result.
+
+        Args:
+            data: Result with 'kind' (what was requested) and 'data' (the
+                  payload returned by the x64dbg plugin)
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
     def format_error(self, error: Exception) -> str:
         """Format error message.
 

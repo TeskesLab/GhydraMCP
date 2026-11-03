@@ -126,6 +126,10 @@ class JSONFormatter(BaseFormatter):
         """Format a Kuna result as JSON."""
         return self._format_json(data)
 
+    def format_x64dbg(self, data: Dict[str, Any]) -> str:
+        """Format an x64dbg MCP server result as JSON."""
+        return self._format_json(data)
+
     def format_error(self, error: Exception) -> str:
         """Format error as JSON."""
         error_dict = {

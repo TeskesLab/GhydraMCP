@@ -194,9 +194,44 @@ ghydra kuna export ./challenge.exe -o ./challenge.kuna   # analyse once
 ghydra kuna export-read ./challenge.kuna main              # then read it
 ```
 
-The MCP bridge exposes the same operations as `kuna_*` tools, including `kuna_export_start` / `kuna_export_status` / `kuna_export_read` for the export flow.
+Exporting the same binary again reuses the export that is already on disk instead of analysing it again. The export is named after a digest of the path and the modification time, so it can be read without knowing where the directory is:
+
+```bash
+ghydra kuna status                                      # lists the exports and their digests
+ghydra kuna export-read 9f2c1a4b7e03 main                # by digest
+```
+
+The MCP bridge exposes the same operations as `kuna_*` tools, including `kuna_export_start` / `kuna_export_status` / `kuna_export_read` for the export flow. The exports are also exposed as **MCP resources** addressed by that digest — `kuna://exports` lists them, and `kuna://export/{digest}/index.jsonl` and `kuna://export/{digest}/{function}.c` serve the files. Those URIs outlive the bridge process, so an export made by the CLI is readable by the agent too.
 
 **[GHYDRA_KUNA.md](GHYDRA_KUNA.md) is the full reference** — the opt-in, every tool and command, the export layout, the measured performance and the limits. [GHYDRA_CLI.md](GHYDRA_CLI.md#kuna-commands) has the command summary.
+
+## x64dbg debugger (optional)
+
+The [x64dbg MCP server](https://github.com/duty1g/x64dbg-mcp-server) is a plugin that lives inside the debugger and answers JSON-RPC over HTTP. GhydraMCP can drive it, so the static image (Ghidra) and the live process (x64dbg) can be worked on in the same session — with the addresses of one side usable on the other.
+
+The plugin writes the bearer token it wants to its own `mcp_config.json`, so pointing at the installation is enough:
+
+```json
+{
+  "x64dbg": {
+    "path": "C:/tools/x64dbg"
+  }
+}
+```
+
+```bash
+ghydra x64dbg status                       # is the debugger there
+ghydra x64dbg tools                        # the plugin's catalogue
+ghydra x64dbg target                       # how Ghidra and x64dbg line up
+ghydra x64dbg breakpoint 0x140001234       # a breakpoint on a Ghidra address
+ghydra x64dbg call GetAllRegisters         # any of the plugin's eighty tools
+```
+
+The address model is the point: Ghidra shows an address in the file, x64dbg works in the process, and the two are related by the image base and the module base. The tools that take an address take the **Ghidra** one and translate it.
+
+The plugin's eighty tools are not exposed one by one — that would drown the agent's tool list — so the bridge exposes the catalogue (`x64dbg_tools`), a generic pass-through (`x64dbg_call`) and four workflow tools that carry the address model.
+
+**[GHYDRA_X64DBG.md](GHYDRA_X64DBG.md) is the full reference** — the contract, the configuration, the address model, every tool and command, the failure codes and the limits.
 
 # Installation
 
@@ -409,9 +444,17 @@ Tools are grouped into namespaces:
 - `kuna_crypto`: Find crypto constants and the functions using them (params: binary_path, algorithm [optional], section [optional])
 - `kuna_xrefs`: Cross-references of a symbol (params: binary_path, target, direction, kind [optional])
 - `kuna_unpack`: Unpack a UPX image (params: binary_path, output [optional])
-- `kuna_export_start`: Export a binary to disk in the background (params: binary_path, functions [optional], jobs, job_id [optional])
+- `kuna_export_start`: Export a binary to disk in the background, or reuse the export that is already there (params: binary_path, functions [optional], jobs, job_id [optional])
 - `kuna_export_status`: Progress of an export job (params: job_id)
-- `kuna_export_read`: Read a function out of an export (params: job_id, function [optional], artifact, max_bytes)
+- `kuna_export_read`: Read a function out of an export, addressed by job id or by directory/digest (params: job_id [optional], function [optional], artifact, max_bytes, directory [optional])
+
+**x64dbg debugger** (`x64dbg_*`): local tools that drive the x64dbg MCP server plugin; the debugger is local, so no `port` for it. The `port` on the workflow tools is the Ghidra instance. See [GHYDRA_X64DBG.md](GHYDRA_X64DBG.md).
+- `x64dbg_status`: Whether the server answered, where it is, how many tools it has and which modules are loaded
+- `x64dbg_tools`: The plugin's catalogue: name, description, input schema and whether the tool is read-only
+- `x64dbg_call`: Call any plugin tool by name (params: tool, tool_arguments [optional, the arguments as one piece of JSON text], timeout [optional])
+- `x64dbg_target`: How the Ghidra program and the x64dbg session line up: both bases and the distance between them (params: port [optional])
+- `x64dbg_breakpoint_at`: Set a breakpoint on a Ghidra address, translated into the runtime address (params: address, port [optional])
+- `x64dbg_go_to`: Move the instruction pointer to a Ghidra address, translated the same way (params: address, port [optional])
 
 **Example Usage**:
 ```python

@@ -683,6 +683,94 @@ class TableFormatter(BaseFormatter):
         body = self._capture(table)
         return f"{header_text}\n{body}".strip()
 
+    def format_x64dbg(self, data: Dict[str, Any]) -> str:
+        """Format an x64dbg MCP server result.
+
+        Args:
+            data: Result with 'kind' (what was requested) and 'data' (the
+                  payload returned by the x64dbg plugin)
+
+        Returns:
+            Formatted string output
+        """
+        kind = data.get("kind", "")
+        payload = data.get("data", {})
+        if not isinstance(payload, dict):
+            payload = {}
+
+        if kind == "status":
+            lines = [
+                f"[cyan]x64dbg MCP server:[/cyan] reachable at "
+                f"{escape(str(payload.get('host')))}:{payload.get('port')}",
+                f"[cyan]Tools:[/cyan] {payload.get('tools', 0)}",
+            ]
+            modules = payload.get("modules") or []
+            if modules:
+                lines.append(f"[cyan]Modules ({len(modules)}):[/cyan]")
+                for module in modules:
+                    lines.append(
+                        f"  {hex(module.get('base', 0))}  {hex(module.get('size', 0))}  "
+                        f"{escape(str(module.get('path')))}"
+                    )
+            else:
+                lines.append("[cyan]Modules:[/cyan] none loaded (no debug session?)")
+            if payload.get("debug_state"):
+                lines.append(f"[cyan]State:[/cyan] {escape(str(payload['debug_state']))}")
+            return self._capture("\n".join(lines))
+
+        if kind == "tools":
+            tools = payload.get("tools") or []
+            lines = [f"[cyan]x64dbg tools ({payload.get('count', len(tools))}):[/cyan]", ""]
+            for tool in tools:
+                description = str(tool.get("description") or "").split("\n")[0]
+                if len(description) > 110:
+                    description = description[:107] + "..."
+                lines.append(f"  [cyan]{escape(str(tool.get('name')))}[/cyan]")
+                if description:
+                    lines.append(f"    {escape(description)}")
+            lines.append("")
+            lines.append("Call one with: ghydra x64dbg call <name> --arg value")
+            return self._capture("\n".join(lines))
+
+        if kind == "call":
+            # The plugin's own text carries a "[state]" marker, and Rich reads
+            # a bracketed word as a style: without the escape the marker is
+            # swallowed and the agent loses the line it needs.
+            return self._capture(
+                f"[cyan]{escape(str(payload.get('tool')))}[/cyan]\n\n"
+                f"{escape(str(payload.get('text', '')))}"
+            )
+
+        if kind == "target":
+            return self._capture("\n".join([
+                "[cyan]Ghidra and x64dbg agree on this binary:[/cyan]",
+                f"  Binary:      {escape(str(payload.get('binary')))}",
+                f"  Image base:  {hex(payload.get('image_base') or 0)}  (Ghidra, in the file)",
+                f"  Module base: {hex(payload.get('module_base') or 0)}  (x64dbg, in the process)",
+                f"  Delta:       {hex(payload.get('delta') or 0)}",
+                "",
+                "runtime = static - image_base + module_base",
+            ]))
+
+        if kind in ("breakpoint_at", "go_to"):
+            lines = [
+                f"[cyan]{'Breakpoint set at' if kind == 'breakpoint_at' else 'Runtime address'}[/cyan] "
+                f"{escape(str(payload.get('runtime_address')))} "
+                f"(static {escape(str(payload.get('static_address')))})",
+                f"  Binary: {escape(str(payload.get('binary')))}",
+            ]
+            if payload.get("image_base"):
+                lines.append(f"  Image base:  {payload.get('image_base')}")
+                lines.append(f"  Module base: {payload.get('module_base')}")
+            text = payload.get("text")
+            if text:
+                lines.append("")
+                # The plugin's own text, escaped for the same reason as above.
+                lines.append(escape(str(text)))
+            return self._capture("\n".join(lines))
+
+        return self._capture(str(payload))
+
     def format_kuna(self, data: Dict[str, Any]) -> str:
         """Format a Kuna decompiler result.
 
@@ -700,14 +788,32 @@ class TableFormatter(BaseFormatter):
 
         if kind == "status":
             state = "enabled" if payload.get("enabled") else "disabled"
+            # The version and the path come from the outside world: square
+            # brackets are rich markup, and rich eats "[kuna 1.988]" whole if
+            # the whole group is not escaped.
             lines = [
                 f"[cyan]Kuna integration:[/cyan] {state} "
                 f"(opt-in via {payload.get('source', 'unknown')})",
-                f"[cyan]Binary:[/cyan] {payload.get('binary') or 'not found'}"
-                + (f"  [{payload.get('version')}]" if payload.get("version") else ""),
-                f"[cyan]Config:[/cyan] {payload.get('config_file', '')}",
-                f"[cyan]Work:[/cyan] {payload.get('work_dir', '')}",
+                f"[cyan]Binary:[/cyan] {escape(str(payload.get('binary') or 'not found'))}"
+                + (f"  {escape('[' + str(payload.get('version')) + ']')}"
+                   if payload.get("version") else ""),
+                f"[cyan]Config:[/cyan] {escape(str(payload.get('config_file', '')))}",
+                f"[cyan]Work:[/cyan] {escape(str(payload.get('work_dir', '')))}",
             ]
+            exports = payload.get("exports") or []
+            if exports:
+                lines.append("")
+                lines.append(f"[cyan]Exports on disk ({len(exports)}):[/cyan]")
+                for export in exports:
+                    streaming = "  (streaming)" if export.get("streaming") else ""
+                    lines.append(
+                        f"  {export.get('digest')}  "
+                        f"{export.get('functions', 0)} functions  "
+                        f"{escape(str(export.get('binary') or 'unknown binary'))}{streaming}"
+                    )
+                    lines.append(
+                        f"    kuna://export/{export.get('digest')}/index.jsonl"
+                    )
             return self._capture("\n".join(lines))
 
         if kind == "summary":
@@ -919,12 +1025,18 @@ class TableFormatter(BaseFormatter):
             )
 
         if kind == "export":
+            reused = payload.get("reused")
             lines = [
-                f"[cyan]Exported[/cyan] {payload.get('binary', '?')}",
-                f"[cyan]Dir:[/cyan] {payload.get('dir', '?')}",
+                f"[cyan]{'Reused' if reused else 'Exported'}[/cyan] "
+                f"{escape(str(payload.get('binary', '?')))}",
+                f"[cyan]Dir:[/cyan] {escape(str(payload.get('dir', '?')))}",
                 f"[cyan]Functions:[/cyan] {payload.get('functions', 0)} "
                 f"({payload.get('failed', 0)} failed)",
             ]
+            if reused:
+                lines.append(
+                    "[cyan]The export was already there:[/cyan] the binary was not analysed again"
+                )
             for failure in payload.get("failures", []) or []:
                 lines.append(
                     f"  [red]ERROR[/red] {failure.get('name', '?')}: {failure.get('error')}"

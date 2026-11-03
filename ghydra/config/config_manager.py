@@ -44,12 +44,14 @@ class ConfigManager:
             if verbose:
                 print(f"Loaded config from {cls.CONFIG_FILE}", file=sys.stderr)
 
-            # Validate and filter known keys only. The "kuna" section is
-            # nested and is read by GhidraConfig.from_dict.
+            # Validate and filter known keys only. The "kuna" and "x64dbg"
+            # sections are nested and are read by GhidraConfig.from_dict.
             valid_keys = {
                 'default_host', 'default_port', 'timeout',
                 'use_colors', 'page_output', 'max_pagination',
-                'kuna', 'kuna_enabled', 'kuna_path'
+                'kuna', 'kuna_enabled', 'kuna_path',
+                'x64dbg', 'x64dbg_host', 'x64dbg_port', 'x64dbg_token',
+                'x64dbg_path'
             }
             filtered_data = {k: v for k, v in data.items() if k in valid_keys}
 

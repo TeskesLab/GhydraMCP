@@ -20,6 +20,11 @@ class GhidraConfig:
         kuna_enabled: Enable the Kuna decompiler integration; None means the
             environment decides
         kuna_path: Path to the kuna executable
+        x64dbg_host: Where the x64dbg MCP server is; empty means the default
+        x64dbg_port: The port of the x64dbg MCP server; 0 means the default
+        x64dbg_token: The bearer token the x64dbg plugin wants
+        x64dbg_path: The x64dbg installation, where the plugin's own
+            mcp_config.json - and with it the token - is found
     """
 
     default_host: str = "localhost"
@@ -30,17 +35,27 @@ class GhidraConfig:
     max_pagination: int = 100
     kuna_enabled: Optional[bool] = None
     kuna_path: str = ""
+    x64dbg_host: str = ""
+    x64dbg_port: int = 0
+    x64dbg_token: str = ""
+    x64dbg_path: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary.
 
-        The Kuna settings live under a "kuna" section, so the file reads
-        {"kuna": {"enabled": true, "path": "..."}} rather than two flat keys.
+        The Kuna and the x64dbg settings live under their own sections, so the
+        file reads {"kuna": {...}, "x64dbg": {...}} rather than flat keys.
         """
         data = asdict(self)
         enabled = data.pop("kuna_enabled")
         path = data.pop("kuna_path")
         data["kuna"] = {"enabled": enabled, "path": path}
+        data["x64dbg"] = {
+            "host": data.pop("x64dbg_host"),
+            "port": data.pop("x64dbg_port"),
+            "token": data.pop("x64dbg_token"),
+            "path": data.pop("x64dbg_path"),
+        }
         return data
 
     @classmethod
@@ -50,6 +65,9 @@ class GhidraConfig:
         section = values.pop("kuna", None)
         if not isinstance(section, dict):
             section = {}
+        x64dbg = values.pop("x64dbg", None)
+        if not isinstance(x64dbg, dict):
+            x64dbg = {}
 
         known = {f for f in cls.__dataclass_fields__}
         config = cls(**{k: v for k, v in values.items() if k in known})
@@ -58,5 +76,17 @@ class GhidraConfig:
             config.kuna_enabled = truthy(section["enabled"])
         if section.get("path"):
             config.kuna_path = str(section["path"])
+
+        if x64dbg.get("host"):
+            config.x64dbg_host = str(x64dbg["host"])
+        if x64dbg.get("port"):
+            try:
+                config.x64dbg_port = int(x64dbg["port"])
+            except (TypeError, ValueError):
+                config.x64dbg_port = 0
+        if x64dbg.get("token"):
+            config.x64dbg_token = str(x64dbg["token"])
+        if x64dbg.get("path"):
+            config.x64dbg_path = str(x64dbg["path"])
 
         return config

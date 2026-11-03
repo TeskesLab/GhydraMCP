@@ -15,10 +15,10 @@ decompilation, annotation, and data manipulation.
   subsequent instances walk up to `MAX_PORT_ATTEMPTS` = 256 ports (8192–8447).
 - The bridge auto-discovers instances on startup and on a daemon timer, but `QUICK_DISCOVERY_RANGE`
   only scans **8192–8201**. Instances above 8202 need `instances_register` / the CLI.
-- 85 MCP tools in 22 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
+- 91 MCP tools in 23 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
   `functions_*`, `instances_*`, `kuna_*`, `memory_*`, `namespaces_*`, `programs_*`, `project_*`,
   `projects_*`, `raw_image_*`, `scalars_*`, `scripts_*`, `segments_*`, `structs_*`, `symbols_*`,
-  `ui_*`, `variables_*`, `xrefs_*`.
+  `ui_*`, `variables_*`, `x64dbg_*`, `xrefs_*`.
 - v3.0.0 migrated `HttpServer` → **Javalin** with service/DTO/resource layering. `API_VERSION` is
   **3000** (breaking: fully-qualified names everywhere).
 - The `kuna_*` namespace is **local**: it drives the Kuna decompiler CLI as a subprocess, so it
@@ -184,6 +184,29 @@ The bridge and the CLI duplicate all request logic, so one endpoint means **six*
 
 Name tools `resource_verb` (`functions_get_cfg`, `data_create`).
 
+**A tool parameter must not be called `arguments`.** That is the name of the container the MCP
+protocol uses for a tool's parameters, so a client that re-encodes the container loses the value
+— the call goes through with no arguments and the tool does something else instead of failing. It
+happened to `x64dbg_call`, and the unit tests did not catch it because they called the function
+instead of the protocol: `test_x64dbg.py` now drives a tool through `mcp.call_tool(...)`, and a
+guard asserts that no bridge tool declares a parameter the protocol reserves.
+
+**A tool parameter that takes a nested object should take it as one piece of text.** A client that
+delivers a tool's parameters over stdio flattens what is nested in them: every value of a nested
+object arrives as a string. Measured on this desktop with the official GitHub MCP server, whose
+`labels` array arrived as something that was not an array, and with `x64dbg_call`, whose integer
+`count` arrived as `"3"` — the plugin ignores a parameter it cannot read and answers with its
+default instead of the one that was asked for.
+
+So `x64dbg_call` declares `tool_arguments` as a **string** (the JSON text) and parses it itself;
+an object is accepted as well, and its types are put back from the plugin's own input schema.
+Two things make it work, and both are worth keeping: the schema asks for the form that survives
+the client, and the types are restored from the schema the plugin publishes — not guessed.
+
+The trap on the way: FastMCP's `pre_parse_json` (`func_metadata.py`) turns a JSON string into the
+object it describes *before* the validation, so a parameter declared as `str` rejects the object it
+just built. `Annotated[str, BeforeValidator(...)]` is what takes the object back as text.
+
 Note `safe_put`/`safe_post`/`safe_patch` **mutate the payload you pass in** (`data.pop("headers", None)`).
 The popped `headers` dict is the only way to satisfy the server's Origin check on state-changing
 calls, so don't reuse a literal dict across calls.
@@ -216,7 +239,7 @@ SemVer: patch for fixes, minor for features, major for breaking.
 
 ```bash
 python run_tests.py                      # all suites
-python run_tests.py --http --mcp --data --comments --port --kuna   # or any subset
+python run_tests.py --http --mcp --data --comments --port --kuna --x64dbg   # or any subset
 ```
 
 **Every suite skips itself when Ghidra isn't running** (`setUp` → `skipTest("Ghidra not running")`).
@@ -227,6 +250,19 @@ Tests need Ghidra with a binary open, and a loaded binary with functions (`skipT
 runs and always gives a signal. It covers the Kuna opt-in precedence, the bridge/CLI contract
 (every `kuna_*` tool has a `FORMATTERS` entry and is registered in MCP; none takes a `port`) and
 the export readers.
+
+**`--x64dbg` is the other one that always runs**: `test_x64dbg.py` needs neither Ghidra nor
+x64dbg, because it starts a fake plugin that answers like the real one (JSON-RPC over HTTP, a
+bearer token, the tool catalogue with `annotations.readOnlyHint`). It covers the client, the
+config precedence, the address model, the bridge tools and the error taxonomy.
+
+**The x64dbg suite is not immune to the network stack.** A local TCP connection is reset every
+now and then on this machine (measured: 7%), so a suite that opens dozens of connections will
+see a failure every now and then unless the client retries — which it does, but only where
+repeating is safe. When a test fails there, look at the transport before the logic: a
+`ConnectionResetError` underneath is the machine, not the code. It reaches the test as
+`X64DBG_UNCERTAIN` when the tool changes the debuggee (the request was delivered and its
+answer was lost, so it was not repeated) and as `X64DBG_MISSING` when it did not leave.
 
 Target selection is inconsistent and worth knowing:
 - `test_javalin_port.py` honors `GHYDRAMCP_TEST_HOST` **and** `GHYDRAMCP_TEST_PORT`.
@@ -352,17 +388,118 @@ tools work with any Ghidra version.
   `enabled: false` keeps it off even with the env var set. A config file *without* an `enabled`
   value (or with a null one) leaves the decision to the env var — otherwise `ghydra config init`,
   which writes `"enabled": null`, would silently pin the integration off.
-- **Kuna loads and analyses the whole image on every invocation** — measured: 19 s for a 22 MB
-  binary, 0.7 s for a 332 KB one. The cost is the analysis, not the command, so the export flow is
-  the main path: analyse once into `~/.ghydra/kuna/<hash of path+mtime>/`, then read the C, the
-  disassembly and `index.jsonl` from disk. `kuna strings` requires a filter for the same reason
-  (an unfiltered scan of `cmd.exe` returns 480 KB).
-- **The bridge's export jobs live in the bridge process.** The job registry is in memory, so a job
-  started by one bridge is invisible to another, and the registry does not survive a restart. The
-  CLI has no registry: `ghydra kuna export` runs synchronously and `export-read` works off the
-  directory.
+- **Kuna loads and analyses the whole image on every invocation** — measured with Kuna 1.988:
+  20 s for a 44 MB binary, 0.5 s for a 332 KB one. The cost is the analysis, not the command, so
+  the export flow is the main path: analyse once into `~/.ghydra/kuna/<digest of path+mtime>/`,
+  then read the C, the disassembly and `index.jsonl` from disk. `kuna strings` requires a filter
+  for the same reason (an unfiltered scan of `cmd.exe` returns 480 KB).
+- **A complete export is reused, not re-analysed.** `kuna_export_start` and `ghydra kuna export`
+  look under the digest first and only run Kuna when there is no complete export, or when the one
+  on disk does not hold the functions that were asked for. The report says which happened
+  (`"reused": true`). Measured: re-reading the export of a 332 KB binary takes 21 ms against the
+  2 750 ms of the export itself; for a 44 MB binary it is 152 ms against the 154 s of the export.
+  The re-read is not quite free either — it reads the index, which holds one record per function.
+  The digest keys on the path *and* the mtime, so a rebuilt binary gets a fresh directory.
+- **A subset is not the whole binary, and the digest does not know that.** The digest keys on the
+  path and the mtime, *not* on the filter, so the same directory serves a filtered export and an
+  unfiltered one. An export made with `--functions main` holds only that function; reusing it for
+  an unfiltered request would answer with the subset and call it the whole binary. So the sidecar
+  `.ghydra.json` records the filter, and an unfiltered request against a filtered export is
+  analysed again.
+- **A directory the caller named has no provenance of its own.** The digest directory carries the
+  provenance in its name; a directory given with `-o` does not. The sidecar therefore records the
+  mtime as well as the binary, and an export in a named directory is only reused when the sidecar
+  says it came from this binary, with the mtime it has now — another binary, or the same path
+  rebuilt, is analysed again instead of answered with stale artifacts.
+- **The performance numbers are measured, not remembered.** `scripts/bench_kuna.py` produces the
+  table in `GHYDRA_KUNA.md` and is committed with it. A Kuna upgrade changes the numbers, so they
+  are re-measured rather than quoted.
+- **The export is addressed by its digest, not by the job.** The digest is 12 hex characters,
+  survives a restart of the bridge, and is what `kuna_export_read(directory=...)`, the
+  `kuna://export/<digest>/` resources and `ghydra kuna status` all use. The job registry lives in
+  the bridge process, so a job started by one bridge is invisible to another and does not survive
+  a restart — which is why the digest exists. The CLI has no registry: `ghydra kuna export` runs
+  synchronously and `export-read` works off the directory or the digest.
+- **The exports are MCP resources.** `kuna://exports` is a JSON manifest of every export on disk;
+  `kuna://export/{digest}/index.jsonl`, `kuna://export/{digest}/{function}.c`,
+  `kuna://export/{digest}/{function}.asm` and `kuna://export/{digest}/README.md` serve the files.
+  A function name goes into the URI percent-encoded. The resources are the RAG loop with *exact*
+  addressing: list the exports, read the index, read one function. Embeddings would retrieve the
+  wrong function more often than the right one — the corpus has an exact index.
+- **One error taxonomy on both sides.** The bridge and the CLI carry the same 14 codes
+  (`KUNA_DISABLED`, `KUNA_MISSING`, `KUNA_TIMEOUT`, `KUNA_LAUNCH`, `KUNA_FAILED`, `KUNA_NO_JSON`,
+  `KUNA_TOO_LARGE`, `KUNA_NO_FILE`, `KUNA_IO`, `KUNA_NO_DIR`, `KUNA_NO_INDEX`, `KUNA_BAD_ARTIFACT`,
+  `KUNA_NO_FUNCTION`, `KUNA_ERROR`). `test_kuna.py` asserts the two lists are identical, so adding
+  a code to one side without the other fails the suite.
 - **The `kuna_*` tools take no `port`.** They are not part of the plugin API, so they take no
   instance either.
+
+## x64dbg integration (local, like the Kuna one)
+
+The [x64dbg MCP server](https://github.com/duty1g/x64dbg-mcp-server) is a Zig plugin that lives
+inside the debugger and answers JSON-RPC 2.0 POSTed to `/`. It is **not** part of the Ghidra
+plugin API, so it changes neither `API_VERSION` nor the Java side.
+
+- **The contract**: `POST /` with a JSON-RPC 2.0 body, `Authorization: Bearer <token>`, and the
+  answer is `application/json` — no SSE framing. The server keeps no state, so every request
+  stands alone and there is no handshake to maintain. `tools/call` answers
+  `{"content": [{"type": "text", "text": ...}]}`; an error is `{"error": {...}}`.
+- **The token cannot be guessed.** The plugin writes it to its own `mcp_config.json` next to
+  `x64dbg.exe` (it asks the OS for the *process* path, not the DLL's), so
+  `"x64dbg": {"path": "<installation>"}` is enough to find it; `"x64dbg": {"token": ...}`
+  sets it outright. The plugin's `IpAddress`, `Port` and `AuthToken` keys are the ones in that file.
+  The environment carries `GHYDRA_X64DBG_HOST`, `GHYDRA_X64DBG_PORT`, `GHYDRA_X64DBG_TOKEN` and
+  `GHYDRA_X64DBG_PATH`; the config file wins over the environment, as everywhere else. The path in
+  the environment is what makes the integration usable without editing a configuration file, since
+  the token is the one thing that cannot be guessed.
+- **The port**: 9094 for a 64-bit debuggee and 9095 for a 32-bit one. The released plugin binds
+  exactly those two and stops serving if the port is taken; the fixed build (PR #13 upstream)
+  walks up to 32 ports instead. The bridge and the CLI look for the port rather than assume it,
+  and the scan reaches as far as the fixed plugin can go. The walk starts from the **configured**
+  port as well as from the two defaults, because that is where the fixed build starts: a server
+  on the configured port plus one has to be found too.
+- **The plugin's file fills the blanks and only the blanks.** It says which address the plugin
+  listens on, and that is used when nothing else says so — but a host or a port that came from
+  the config file or from the environment is a decision the user made, and the plugin's file
+  does not get to overrule it.
+- **No token means `X64DBG_DISABLED`, before the scan.** There is no way to talk to the server
+  without one, and probing the ports would only report a missing server or a rejected token:
+  neither of them says what is actually wrong. The CLI and the bridge refuse the same way.
+- **The plugin's text is escaped before it reaches Rich.** Every answer carries a `[state]` line,
+  and Rich reads a bracketed word as a style: without the escape the marker is swallowed and the
+  agent loses the line that says what the debugger is doing. `escape()` the raw text, never the
+  markup around it.
+- **The arguments' types are restored from the plugin's own schema.** A `--arg count=3` reaches
+  the plugin as the string `"3"`, and the plugin ignores a parameter it cannot read and answers
+  with its default: the call comes back with ten instructions when three were asked for. The
+  schema says what every parameter is, so the type is put back from it — not guessed.
+- **The address model**: `runtime = static − image_base + module_base`. The `image_base` comes
+  from the Ghidra `/program` endpoint, the `module_base` from the plugin's `ListModules`. The two
+  binaries are matched by full path first and by file name second, because the two sides can
+  disagree about the directory.
+- **The 80 plugin tools are not exposed one by one.** That would drown the agent's tool list
+  (165 tools in one agent), so the catalogue (`x64dbg_tools`) and a generic pass-through
+  (`x64dbg_call`) are exposed instead, plus four workflow tools that carry the address model.
+- **The `x64dbg_*` tools take no `port` for the debugger.** They are local, like the Kuna ones;
+  the `port` on the workflow tools is the **Ghidra** instance, as everywhere else in the bridge.
+- **No session pooling.** The plugin closes the connection after every response, so a pooled
+  connection is reused after the server has already hung up on it — that is a
+  `ConnectionResetError`, not a missing server. Use a plain `requests.post` per call.
+- **A local connection is reset every now and then on this machine**: measured at 7% of the
+  connections, with curl and with plain sockets alike, so it is the Windows network stack and not
+  the client. The client retries a connection error (up to three attempts, on a fresh connection).
+- **A timeout is only retried when the request is safe to repeat**, and so is a connection that
+  died while the answer was coming: the plugin marks every tool with `annotations.readOnlyHint`,
+  so a read-only tool may be called again; a tool that changes the debuggee may not, because the
+  first attempt may already have reached it. A connection that never came up is the one
+  exception: the request was never sent, so that one is always safe to try again.
+- **The connect timeout and the read timeout are separate.** A closed local port does not refuse
+  straight away on Windows — the SYN hangs and is only refused about two seconds later — so the
+  probe uses a short connect timeout (0.35 s) and the ports are probed concurrently. A tool that
+  blocks (`run`, `WaitForEvent`) needs a read timeout of its own: `x64dbg_call` takes a `timeout`.
+- **The logic is duplicated**, like the Kuna helpers: the bridge is a standalone script and must
+  not import the `ghydra` package, so `ghydra/x64dbg.py` and the bridge's x64dbg section carry
+  the same client, the same error taxonomy and the same retry rules.
 
 ## Ghidra API gotchas
 
@@ -453,5 +590,6 @@ Verified rough edges — check before trusting anything downstream:
 
 `README.md` (install, MCP client setup), `GHIDRA_HTTP_API.md` (REST reference, API_VERSION 3000),
 `GHYDRA_CLI.md` (CLI reference), `GHYDRA_KUNA.md` (the Kuna integration: opt-in, tools, export
-layout), `CONTRIBUTING.md` (PR/release process),
+layout), `GHYDRA_X64DBG.md` (the x64dbg integration: the contract, the address model, the tools),
+`CONTRIBUTING.md` (PR/release process),
 `TESTING.md` (stale on flags), `CHANGELOG.md` (release history — also the release-notes source).

@@ -15,8 +15,10 @@ script that must not depend on the ghydra package.
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import time
 from typing import Any, Dict, List, Optional, Sequence
 
 from .utils.validators import truthy as _truthy
@@ -215,6 +217,204 @@ def work_dir(binary: str) -> str:
     return os.path.join(WORK_DIR, digest)
 
 
+# The sidecar the CLI and the bridge write next to an export. The digest is a
+# hash, not a reversible pointer, so without it an export cannot say which
+# binary it came from - and the listing of exports needs that.
+EXPORT_META = ".ghydra.json"
+
+# An export directory is named after a 12 hex character digest.
+DIGEST_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def export_meta_path(directory: str) -> str:
+    """Where the sidecar of an export lives."""
+    return os.path.join(directory, EXPORT_META)
+
+
+def write_export_meta(directory: str, binary: str, **extra: Any) -> None:
+    """Record which binary an export came from.
+
+    Best effort: the export is already on disk and perfectly usable without
+    the sidecar, so a failure here must not fail the export.
+    """
+    payload: Dict[str, Any] = {
+        "binary": os.path.abspath(binary),
+        "created": time.time(),
+    }
+    # The mtime is the other half of the provenance: the digest is keyed by
+    # the path and the mtime, so a binary rebuilt at the same path is a
+    # different binary and an export of the old one must not be reused.
+    try:
+        payload["mtime"] = os.path.getmtime(os.path.abspath(binary))
+    except OSError:
+        pass
+    payload.update(extra)
+    try:
+        with open(export_meta_path(directory), "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+    except OSError:
+        pass
+
+
+def read_export_meta(directory: str) -> Dict[str, Any]:
+    """The sidecar of an export, or an empty dict when there is none."""
+    try:
+        with open(export_meta_path(directory), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def readme_binary(directory: str) -> Optional[str]:
+    """The binary an export came from, read from Kuna's own report.
+
+    The sidecar is the primary source, but an export made before the
+    sidecar existed still names its binary in the report Kuna writes.
+    """
+    path = os.path.join(directory, "README.md")
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                match = re.match(r"\|\s*Path\s*\|\s*`(.+?)`\s*\|", line)
+                if match:
+                    raw = match.group(1).strip()
+                    # Kuna writes the Win32 extended-length prefix.
+                    if raw.startswith("\\\\?\\"):
+                        raw = raw[4:]
+                    return raw
+    except OSError:
+        return None
+    return None
+
+
+def export_binary(directory: str) -> Optional[str]:
+    """Which binary an export came from, by sidecar or by report."""
+    meta_binary = read_export_meta(directory).get("binary")
+    if meta_binary:
+        return meta_binary
+    return readme_binary(directory)
+
+
+def export_state(directory: str) -> Optional[Dict[str, Any]]:
+    """The state of an export directory, or None when it holds no export.
+
+    An export is complete when it has an index and is not still streaming: a
+    streamed export appends a record only after that function's C block is
+    done, so an index without the streaming marker is a finished one.
+    """
+    if not os.path.isdir(directory):
+        return None
+    if os.path.isfile(os.path.join(directory, ".streaming")):
+        return None
+    records = index_records(directory)
+    if not records:
+        return None
+    meta = read_export_meta(directory)
+    return {
+        "dir": directory,
+        "functions": len(records),
+        "failed": len([record for record in records if record.get("error")]),
+        "binary": meta.get("binary") or readme_binary(directory),
+        "created": meta.get("created"),
+        "mtime": meta.get("mtime"),
+        # Whether the export was made with a filter: a subset export holds
+        # only the functions it was asked for, so it is not a full export of
+        # the binary.
+        "filtered": bool(meta.get("functions")),
+        "names": {record.get("name") for record in records},
+    }
+
+
+def export_matches(state: Dict[str, Any], binary: str) -> bool:
+    """Does this export come from this binary, as it is now?
+
+    The digest directory is keyed by the path and the mtime, so its
+    provenance is implied by its name. A directory the caller named does
+    not carry that guarantee, so the sidecar has to say so: the binary it
+    came from and the mtime it had. A binary rebuilt at the same path is a
+    different binary, and its old export must not be reused for it.
+    """
+    recorded = state.get("binary")
+    if not recorded:
+        return False
+    if os.path.normcase(os.path.abspath(str(recorded))) != os.path.normcase(
+            os.path.abspath(binary)
+    ):
+        return False
+    recorded_mtime = state.get("mtime")
+    if recorded_mtime is None:
+        # An export made before the sidecar carried the mtime: there is no
+        # way to tell whether the binary is still the same one.
+        return False
+    try:
+        current = os.path.getmtime(binary)
+    except OSError:
+        return False
+    try:
+        return abs(float(current) - float(recorded_mtime)) < 1e-6
+    except (TypeError, ValueError):
+        return False
+
+
+def export_covers(state: Dict[str, Any], functions: Optional[str]) -> bool:
+    """Does this export already hold everything the caller asked for?
+
+    A full export covers every request. A subset export covers a request for
+    one of its own functions, and nothing else - and an unfiltered request
+    needs an export that was itself unfiltered, or the whole binary is
+    analysed again.
+    """
+    wanted = {name.strip() for name in (functions or "").split(",") if name.strip()}
+    if not wanted:
+        return not state.get("filtered")
+    return wanted.issubset(state.get("names") or set())
+
+
+def list_exports() -> List[Dict[str, Any]]:
+    """Every export on this machine, newest first.
+
+    The listing is read from disk, so it survives a restart and is the same
+    list the MCP resources expose.
+    """
+    exports: List[Dict[str, Any]] = []
+    try:
+        entries = sorted(os.listdir(WORK_DIR))
+    except OSError:
+        return []
+    for entry in entries:
+        directory = os.path.join(WORK_DIR, entry)
+        if not os.path.isdir(directory):
+            continue
+        records = index_records(directory)
+        meta = read_export_meta(directory)
+        exports.append({
+            "digest": entry,
+            "dir": directory,
+            "binary": meta.get("binary") or readme_binary(directory),
+            "functions": len(records),
+            "failed": len([record for record in records if record.get("error")]),
+            "created": meta.get("created"),
+            "streaming": os.path.isfile(os.path.join(directory, ".streaming")),
+        })
+    exports.sort(key=lambda item: item.get("created") or 0, reverse=True)
+    return exports
+
+
+def resolve_export_dir(reference: str) -> str:
+    """Turn an export reference into a directory.
+
+    A bare digest - the 12 hex characters an export is named after - resolves
+    inside the work directory; anything else is a path.
+    """
+    if not reference:
+        raise KunaError("an export directory or digest is required", code="KUNA_NO_DIR")
+    candidate = str(reference).strip()
+    if DIGEST_RE.match(candidate):
+        return os.path.join(WORK_DIR, candidate)
+    return os.path.abspath(os.path.expanduser(candidate))
+
+
 def index_records(directory: str) -> List[dict]:
     """Read index.jsonl from an export directory.
 
@@ -333,6 +533,9 @@ def export(binary: str, output: Optional[str] = None,
     disassembly and an index.jsonl land in a directory. Every function is
     then read from those files instead of paying the analysis cost again.
 
+    A complete export that already covers the request is reused instead of
+    re-analysed, and the report says so with "reused": true.
+
     Args:
         binary: Path to the executable
         output: Directory to write to (a per-binary directory by default)
@@ -353,6 +556,28 @@ def export(binary: str, output: Optional[str] = None,
         os.makedirs(directory, exist_ok=True)
     except OSError as exc:
         raise KunaError(f"could not create {directory}: {exc}", code="KUNA_IO") from None
+
+    # Reuse a complete export instead of paying the analysis again. Kuna loads
+    # and analyses the whole image on every invocation, so a second export of
+    # the same binary is the most expensive no-op there is.
+    #
+    # A directory the caller named has no provenance of its own, so the
+    # export in it is only reused when its sidecar says it came from this
+    # binary, as it is now. The digest directory carries the provenance in its
+    # name, so it does not need the check.
+    state = export_state(directory)
+    provenance_ok = state is None or not output or export_matches(state, target)
+    if state and provenance_ok and export_covers(state, functions):
+        if not read_export_meta(directory):
+            write_export_meta(directory, target)
+        return {
+            "binary": target,
+            "dir": directory,
+            "functions": state["functions"],
+            "failed": state["failed"],
+            "failures": [],
+            "reused": True,
+        }
 
     args = ["decompile-project", target, "-o", directory, "--stream", "--jobs", str(jobs)]
     if functions:
@@ -383,6 +608,7 @@ def export(binary: str, output: Optional[str] = None,
 
     records = index_records(directory)
     failures = [record for record in records if record.get("error")]
+    write_export_meta(directory, target, functions=functions)
     return {
         "binary": target,
         "dir": directory,
@@ -392,6 +618,7 @@ def export(binary: str, output: Optional[str] = None,
             {"name": record.get("name"), "addr": record.get("addr"), "error": record.get("error")}
             for record in failures[:20]
         ],
+        "reused": False,
     }
 
 
@@ -400,7 +627,7 @@ def read_export(directory: str, function: Optional[str] = None,
     """Read a function out of an export directory.
 
     Args:
-        directory: The export directory
+        directory: The export directory, or the 12-character digest of one
         function: Function name to read; without it the names are listed
         artifact: "c", "asm", "index" or "readme"
         max_bytes: Maximum bytes of text to return
@@ -412,6 +639,7 @@ def read_export(directory: str, function: Optional[str] = None,
         KunaError: When the directory holds no export, or the artifact is
             unknown.
     """
+    directory = resolve_export_dir(directory)
     if not os.path.isdir(directory):
         raise KunaError(f"no such directory: {directory}", code="KUNA_NO_DIR")
 
