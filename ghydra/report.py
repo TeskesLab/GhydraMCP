@@ -47,6 +47,13 @@ def is_local_host(host: str) -> bool:
     a remote target has to be up already. The name of the machine and the
     addresses of its own interfaces count as local - the server binds them
     all, so a run started here answers to them.
+
+    The address is asked of the operating system: a socket that binds to an
+    address of this machine is accepted, and one that binds to an address of
+    somebody else is refused. A secondary address of a LAN card and an IPv6
+    address that the name of the machine does not carry are both local, and
+    neither is in the DNS of the hostname - which is why the list of the
+    interfaces is not the answer.
     """
     name = str(host or "").strip().lower()
     if name in ("", "localhost", "127.0.0.1", "::1", "0.0.0.0"):
@@ -55,14 +62,42 @@ def is_local_host(host: str) -> bool:
         addresses = {info[4][0] for info in socket.getaddrinfo(name, None)}
     except OSError:
         return False
-    return bool(addresses & local_addresses())
+    return any(address_is_local(address) for address in addresses)
+
+
+def address_is_local(address: str) -> bool:
+    """Whether the address belongs to this machine.
+
+    The question is answered by the operating system: a socket that binds
+    to an address of this machine is accepted, and one that binds to an
+    address of somebody else is refused.
+    """
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            probe = socket.socket(family, socket.SOCK_STREAM)
+        except OSError:
+            continue
+        try:
+            probe.bind((address, 0))
+            return True
+        except OSError:
+            continue
+        finally:
+            probe.close()
+    return False
 
 
 def local_addresses() -> set:
     """The addresses of this machine."""
     out = {"127.0.0.1", "::1"}
+    hostname = socket.gethostname()
     try:
-        out.update(socket.gethostbyname_ex(socket.gethostname())[2])
+        for info in socket.getaddrinfo(hostname, None):
+            out.add(info[4][0])
+    except OSError:
+        pass
+    try:
+        out.update(socket.gethostbyname_ex(hostname)[2])
     except OSError:
         pass
     return out
@@ -395,6 +430,20 @@ def _instance_binary(client: GhidraHTTPClient) -> str:
     return str(result.get("path") or result.get("name") or "")
 
 
+def _normalized_path(path: str) -> str:
+    """The path, the way the two sides write it.
+
+    Java writes the path of the executable with a slash in front of the
+    drive - "/C:/dir/file" - and the shell writes it without.
+    """
+    text = str(path or "").strip()
+    if not text:
+        return ""
+    if len(text) > 2 and text[0] == "/" and text[2] == ":":
+        text = text[1:]
+    return os.path.normcase(text)
+
+
 def _serves_binary(client: GhidraHTTPClient, binary: str) -> bool:
     """Whether the instance has the binary that was asked for.
 
@@ -402,10 +451,21 @@ def _serves_binary(client: GhidraHTTPClient, binary: str) -> bool:
     carries the addresses of the program the instance has - so an instance
     with another file open would produce a report that says one thing and
     shows another.
+
+    The full path is what tells two files with the same name apart: a
+    CodeBrowser that serves /a/foo.exe is not serving the /b/foo.exe that
+    the report asks about, and a report that combined the Ghidra addresses
+    of the first with the Kuna output of the second would be about a file
+    nobody has. The name is only the answer when one of the two paths is
+    not known.
     """
     actual = _instance_binary(client)
     if not actual:
         return True
+    wanted_path = _normalized_path(binary)
+    actual_path = _normalized_path(actual)
+    if wanted_path and actual_path:
+        return wanted_path == actual_path
     wanted = binary_name(binary).lower()
     if not wanted:
         return True

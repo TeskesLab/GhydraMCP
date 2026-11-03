@@ -38,11 +38,16 @@ public class GhidraHeadlessServer extends GhidraScript {
 
         int port = portFromArgs();
         Map<Integer, Object> instances = new ConcurrentHashMap<>();
-        instances.put(port, this);
 
         GhydraServerFactory.Handle handle =
             GhydraServerFactory.startHeadless(program, project, port, instances, true);
-        instances.put(port, handle);
+        // The registry of the instances is read by the /instances route, and
+        // it knows two things: the plugin of a CodeBrowser, and a map that
+        // carries the snapshot of the program. A headless run has no plugin
+        // - so the snapshot is what is registered, and the file, the
+        // project, the executable, the architecture and the image base are
+        // there for the clients that pick an instance.
+        instances.put(port, snapshot(program, project, port));
 
         System.out.println("[GhidraMCP] HEADLESS READY port=" + port
             + " program=" + program.getName()
@@ -66,6 +71,21 @@ public class GhidraHeadlessServer extends GhidraScript {
 
         System.out.println("[GhydraMCP] HEADLESS STOPPED port=" + port);
         System.out.flush();
+    }
+
+    /** What /instances says about this run. */
+    private Map<String, Object> snapshot(Program program, Project project, int port) {
+        Map<String, Object> snapshot = new java.util.LinkedHashMap<>();
+        snapshot.put("port", port);
+        snapshot.put("url", "http://localhost:" + port);
+        snapshot.put("isBaseInstance", true);
+        snapshot.put("toolName", null);
+        snapshot.put("project", project != null ? project.getName() : null);
+        snapshot.put("file", program.getName());
+        snapshot.put("executable", program.getExecutablePath());
+        snapshot.put("architecture", program.getLanguageID().getIdAsString());
+        snapshot.put("imageBase", program.getImageBase().toString());
+        return snapshot;
     }
 
     /**

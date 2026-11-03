@@ -34,6 +34,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -79,6 +80,11 @@ class HeadlessInstance:
     java_home: str = ""
     log: str = ""
     started_at: float = 0.0
+    # The port is claimed before the child is launched, so a start that
+    # arrives at the same time as another one finds the port taken. The
+    # token says which runner made the claim.
+    reserved: bool = False
+    token: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -306,6 +312,10 @@ def binary_provenance(binary: str) -> Dict[str, Any]:
         "binary": os.path.abspath(binary),
         "size": int(info.st_size),
         "mtime": int(info.st_mtime),
+        # The time with the sub-second part: a rebuild that happens inside
+        # the same second leaves the same size and the same second, and the
+        # project would serve the old bytes while Kuna reads the new file.
+        "mtime_ns": int(info.st_mtime_ns),
     }
 
 
@@ -338,6 +348,12 @@ def project_is_current(project_dir: str, project_name: str, binary: str) -> bool
     now = binary_provenance(binary)
     if not now:
         return False
+    # The sidecar of a run that was made before the sub-second precision
+    # was kept carries only the second: it is compared as it is, and the
+    # binary is imported again - which is the safe answer.
+    if "mtime_ns" in recorded and "mtime_ns" in now:
+        return (recorded.get("size") == now.get("size")
+                and recorded.get("mtime_ns") == now.get("mtime_ns"))
     return (recorded.get("size") == now.get("size")
             and recorded.get("mtime") == now.get("mtime"))
 
@@ -422,6 +438,28 @@ def clear_state(port: int) -> None:
         pass
 
 
+# How long a claim of a port stays valid. The claim is written right before
+# the child is launched, so a start that arrives a moment later finds the
+# port taken; one that finds a claim much later finds a claim that nobody
+# took up.
+RESERVATION_TTL = 60.0
+
+
+def reservation_is_live(port: int) -> bool:
+    """Whether the claim of a port is one that was taken up.
+
+    The claim is written immediately before the child is launched, so it is
+    young for a moment and then it is the state of a live run. A claim that
+    nobody took up - the process died between the claim and the launch - is
+    older than that, and the port is free again.
+    """
+    try:
+        age = time.time() - os.path.getmtime(state_path(port))
+    except OSError:
+        return False
+    return age < RESERVATION_TTL
+
+
 def process_command_line(pid: int) -> str:
     """The command line of a process, or an empty string.
 
@@ -450,7 +488,50 @@ def process_command_line(pid: int) -> str:
     return output.strip()
 
 
-def process_is_ours(pid: int, marker: str = SCRIPT_NAME) -> bool:
+def live_processes() -> List[tuple]:
+    """The processes of this machine, with their command lines.
+
+    It is what tells a Ghidra that has a project open from a Ghidra that is
+    gone: the lock file of a project carries no owner that can be read.
+    """
+    out: List[tuple] = []
+    try:
+        if os.name == "nt":
+            command = (
+                "Get-CimInstance Win32_Process | "
+                "Select-Object ProcessId,CommandLine | "
+                "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }"
+            )
+            output = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True, text=True, timeout=30,
+            ).stdout or ""
+            for line in output.splitlines():
+                pid_text, _, command_line = line.partition("|")
+                try:
+                    out.append((int(pid_text.strip()), command_line.strip()))
+                except ValueError:
+                    continue
+        else:
+            output = subprocess.run(
+                ["ps", "-eo", "pid=,args="],
+                capture_output=True, text=True, timeout=30,
+            ).stdout or ""
+            for line in output.splitlines():
+                parts = line.strip().split(None, 1)
+                if len(parts) < 2:
+                    continue
+                try:
+                    out.append((int(parts[0]), parts[1]))
+                except ValueError:
+                    continue
+    except (OSError, subprocess.SubprocessError):
+        return out
+    return out
+
+
+def process_is_ours(pid: int, marker: str = SCRIPT_NAME,
+                    port: Optional[int] = None) -> bool:
     """Whether the process is the headless run this launcher started.
 
     A run that crashed leaves its state file behind, and the operating
@@ -458,13 +539,24 @@ def process_is_ours(pid: int, marker: str = SCRIPT_NAME) -> bool:
     stop something that has nothing to do with the analysis, so the command
     line is read and the process is only ours when it carries the marker of
     the headless script.
+
+    The port is part of the answer too: the PID of a crashed run can be
+    handed to another run of the same script - on another port, with another
+    project - and stopping that one would kill a live analysis.
     """
     if not pid:
         return False
     command = process_command_line(pid)
     if not command:
         return False
-    return marker.lower() in command.lower()
+    lowered = command.lower()
+    if marker.lower() not in lowered:
+        return False
+    if port is not None:
+        # The port is a token of its own: "port=8192" is not "port=81920".
+        if not re.search(rf"port={int(port)}(?!\d)", lowered):
+            return False
+    return True
 
 
 def process_alive(pid: int) -> bool:
@@ -612,21 +704,40 @@ class HeadlessRunner:
         # bound the API yet - it is analysing. Starting a second one would
         # overwrite the state of the first, and the first would be left
         # running with nothing remembering it.
+        #
+        # The claim of the port is part of it: the port is claimed before
+        # the child is launched, so two starts that arrive together cannot
+        # both find the port free and both launch an analyzer.
         remembered = load_state(self.port)
-        if remembered is not None and remembered.pid and process_is_ours(remembered.pid):
-            raise HeadlessError(
-                f"a headless run is already there on port {self.port} "
-                f"(pid {remembered.pid}). Stop it first, or start this one "
-                "on another port.",
-                code="HEADLESS_ALREADY_RUNNING")
+        if remembered is not None:
+            if remembered.reserved and reservation_is_live(self.port):
+                raise HeadlessError(
+                    f"a headless run is already being started on port {self.port}. "
+                    "Stop it first, or start this one on another port.",
+                    code="HEADLESS_ALREADY_RUNNING")
+            if remembered.pid and process_is_ours(remembered.pid, port=self.port):
+                raise HeadlessError(
+                    f"a headless run is already there on port {self.port} "
+                    f"(pid {remembered.pid}). Stop it first, or start this one "
+                    "on another port.",
+                    code="HEADLESS_ALREADY_RUNNING")
 
         check_project_dir(self.project_dir)
         os.makedirs(self.project_dir, exist_ok=True)
         command = self.command()
-        write_provenance(self.project_dir, self.project_name, self.binary)
         # A stop flag that a killed run left behind would stop this one as
         # soon as it starts.
         clear_stop_flag(self.port)
+
+        # The port is claimed before the child is launched. Two starts that
+        # arrive together would both find the port free, and both would
+        # launch an analyzer: the one that binds the API first answers both
+        # waits, and the state file ends up naming the loser - so one report
+        # can combine the Ghidra data of one binary with the Kuna data of
+        # another.
+        self.instance.token = uuid.uuid4().hex
+        self.instance.reserved = True
+        save_state(self.instance)
 
         handle = open(self.instance.log, "a", encoding="utf-8", errors="replace")
         handle.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} "
@@ -649,6 +760,7 @@ class HeadlessRunner:
         try:
             self.process = subprocess.Popen(command, **kwargs)
         except OSError as exc:
+            self._release_claim()
             raise HeadlessError(
                 f"could not start the headless run: {exc}",
                 code="HEADLESS_LAUNCH",
@@ -657,8 +769,15 @@ class HeadlessRunner:
             handle.close()
 
         self.instance.pid = self.process.pid
+        self.instance.reserved = False
         save_state(self.instance)
         self.wait_ready(timeout)
+        # The provenance is written when the run is serving: the binary is
+        # only in the project when the import reached that point. A run that
+        # failed before it - an unexecutable launcher, a project that would
+        # not open - must not leave the sidecar of a binary that is not in
+        # the project, or the next run would analyse the old bytes again.
+        write_provenance(self.project_dir, self.project_name, self.binary)
         return self.instance
 
     def wait_ready(self, timeout: int = DEFAULT_TIMEOUT) -> None:
@@ -727,11 +846,14 @@ class HeadlessRunner:
         saved = self.save()
         pid = self.instance.pid or (self.process.pid if self.process else 0)
         if not pid:
-            clear_stop_flag(self.port)
-            clear_state(self.port)
+            # A start that was refused before the child was launched has no
+            # PID of its own: the state on disk belongs to another run, and
+            # erasing it would leave that run untracked - so the next start
+            # would walk past the guard that remembers it.
+            self._clear_own_state()
             return saved
 
-        if not process_is_ours(pid):
+        if not process_is_ours(pid, port=self.port):
             # The run is gone, or the PID belongs to somebody else by now.
             # A run that is dead cannot hold the project: the lock it left
             # behind is stale, and every later start would refuse the
@@ -739,8 +861,7 @@ class HeadlessRunner:
             # alone - its lock may belong to a real owner.
             if not process_alive(pid):
                 self._drop_stale_lock()
-            clear_stop_flag(self.port)
-            clear_state(self.port)
+            self._clear_own_state()
             return saved
 
         flag = stop_file_path(self.port)
@@ -752,8 +873,11 @@ class HeadlessRunner:
             flag = ""
 
         if flag and self._wait_for_exit(pid, timeout):
-            clear_state(self.port)
-            return True
+            self._clear_own_state()
+            # The save was asked for and answered before the run was told to
+            # stop: a save that the server refused is not a save, and the
+            # caller is told the truth.
+            return saved
 
         if os.name == "nt":
             try:
@@ -780,19 +904,76 @@ class HeadlessRunner:
         # The run was killed before it could see the flag, so the flag is
         # still there - and the next run on this port would stop as soon as
         # it starts.
+        self._clear_own_state()
+        return saved
+
+    def _clear_own_state(self) -> None:
+        """Erase the state of this run, and only of this run.
+
+        A start that was refused before the child was launched has no PID of
+        its own, and the state on disk belongs to another run: erasing it
+        would leave that run untracked, and the next start would walk past
+        the guard that remembers it. A runner that stops a run it found
+        erases the state only while it is still the state of that run.
+        """
+        pid = self.instance.pid or (self.process.pid if self.process else 0)
+        if not pid:
+            return
+        remembered = load_state(self.port)
+        if remembered is not None and remembered.pid and remembered.pid != pid:
+            return
         clear_stop_flag(self.port)
         clear_state(self.port)
-        return saved
+
+    def _release_claim(self) -> None:
+        """Give the port back, when the child never came up.
+
+        The claim of the port is only ours while the token on disk is the
+        one this runner wrote: a start that came later has its own claim,
+        and that one is not ours to erase.
+        """
+        remembered = load_state(self.port)
+        if remembered is not None and remembered.token and remembered.token != self.instance.token:
+            return
+        clear_state(self.port)
+
+    def _lock_has_live_owner(self) -> bool:
+        """Whether another Ghidra has the project open.
+
+        The lock carries no owner that can be read, so the answer comes from
+        the processes: a live Ghidra that has the project open holds the
+        lock, and taking that lock away would let a second analyzer open
+        the same project beside it - and the project would be written by
+        two of them.
+        """
+        marker = os.path.normcase(os.path.abspath(self.project_dir))
+        marker = marker.replace("\\", "/").lower()
+        for pid, command_line in live_processes():
+            if pid == self.instance.pid:
+                continue
+            if not command_line:
+                continue
+            lowered = command_line.replace("\\", "/").lower()
+            if "ghidra" not in lowered:
+                continue
+            if marker in lowered:
+                return True
+        return False
 
     def _drop_stale_lock(self) -> None:
         """Remove the lock of a project whose owner was killed.
 
         Ghidra writes a lock file when it opens a project and removes it
         when it closes it. A run that was killed leaves the lock behind, and
-        the next run refuses to open the project. The lock carries no PID,
-        so there is no way to tell a live owner from a dead one - which is
-        why the lock is only removed here, right after the kill.
+        the next run refuses to open the project.
+
+        The lock is only removed when nothing else holds the project: a
+        CodeBrowser that has it open holds the lock too, and that one
+        belongs to a live process - the run that died was refused the
+        project in the first place because of it.
         """
+        if self._lock_has_live_owner():
+            return
         for name in (f"{self.project_name}.lock", f"{self.project_name}.lock~"):
             path = os.path.join(self.project_dir, name)
             try:
