@@ -36,7 +36,17 @@ from typing import Any, Dict, List, Optional
 from . import kuna
 from .client import GhidraHTTPClient
 from .client.exceptions import GhidraError
-from .headless import HeadlessError, HeadlessRunner, api_answers
+from .headless import HeadlessError, HeadlessRunner, api_answers, binary_name
+
+
+def is_local_host(host: str) -> bool:
+    """Whether the host is this machine.
+
+    A headless run is started here, so it serves this machine and no other:
+    a remote target has to be up already.
+    """
+    name = str(host or "").strip().lower()
+    return name in ("", "localhost", "127.0.0.1", "::1", "0.0.0.0")
 
 
 class ReportError(Exception):
@@ -377,10 +387,10 @@ def _serves_binary(client: GhidraHTTPClient, binary: str) -> bool:
     actual = _instance_binary(client)
     if not actual:
         return True
-    wanted = os.path.basename(binary).lower()
+    wanted = binary_name(binary).lower()
     if not wanted:
         return True
-    return os.path.basename(actual).lower() == wanted
+    return binary_name(actual).lower() == wanted
 
 
 def build_report(request: ReportRequest) -> Dict[str, Any]:
@@ -398,6 +408,17 @@ def build_report(request: ReportRequest) -> Dict[str, Any]:
                 f"no Ghidra instance is serving on {request.host}:{request.port}",
                 code="REPORT_NO_INSTANCE",
             )
+        if not is_local_host(request.host):
+            # A headless run is started here, on this machine, and it serves
+            # this machine. A remote target has to be up already - starting
+            # a run for it would wait for an answer that cannot come, and
+            # leave the analyzer behind.
+            raise ReportError(
+                f"no Ghidra instance is serving on {request.host}:{request.port}, and "
+                "a headless run only serves this machine. Start the instance there, "
+                "or point the report at this machine.",
+                code="REPORT_NO_INSTANCE",
+            )
         try:
             runner = HeadlessRunner(
                 binary=binary,
@@ -408,6 +429,10 @@ def build_report(request: ReportRequest) -> Dict[str, Any]:
             )
             runner.start(timeout=request.timeout)
         except HeadlessError as exc:
+            # The run that was started is not left behind: it would keep the
+            # port and the project busy, with nothing serving on it.
+            if runner is not None:
+                runner.stop()
             raise ReportError(str(exc), code=exc.code) from None
         started = True
     else:

@@ -243,6 +243,31 @@ class HeadlessDiscoveryTests(unittest.TestCase):
         self.assertEqual(headless.slug_for("/usr/bin/ls"), "ls")
         self.assertEqual(headless.slug_for("weird name!.exe"), "weird_name")
 
+    def test_a_windows_path_is_read_on_posix(self):
+        """The backslash is a separator everywhere.
+
+        A Windows path handed to a POSIX machine still has a file name at the
+        end, and Ghidra identifies a program by that name.
+        """
+        self.assertEqual(headless.binary_name("C:\\bin\\cmd.exe"), "cmd.exe")
+        self.assertEqual(headless.binary_name("C:/bin/cmd.exe"), "cmd.exe")
+        self.assertEqual(headless.slug_for("C:\\bin\\cmd.exe"), "cmd")
+
+    def test_a_port_that_is_not_a_port_is_refused(self):
+        """The port is checked before anything is started.
+
+        The script falls back to 8192 for a port it cannot use, and the wait
+        would keep polling a port that was never bound.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = os.path.join(tmp, "cmd.exe")
+            with open(binary, "w", encoding="utf-8") as handle:
+                handle.write("MZ")
+            for port in (0, -1, 70000):
+                with self.assertRaises(headless.HeadlessError) as caught:
+                    headless.HeadlessRunner(binary=binary, port=port)
+                self.assertEqual(caught.exception.code, "HEADLESS_BAD_PORT")
+
     def test_stop_file_lives_with_the_state(self):
         """The stop file is where the launcher can find it."""
         path = headless.stop_file_path(8192)
@@ -437,6 +462,39 @@ class ReportCommandTests(unittest.TestCase):
         """A command without the CLI around still has somewhere to go."""
         ctx = self._Ctx({})
         self.assertEqual(report_cli.target_endpoint(ctx), ("127.0.0.1", 8192))
+
+
+class ReportTargetTests(unittest.TestCase):
+    """Where the report goes, and what it leaves behind."""
+
+    def test_a_remote_target_does_not_start_a_run(self):
+        """A headless run serves this machine, so a remote target is refused.
+
+        Starting one anyway would wait for an answer that cannot come - the
+        local server is not the remote one - and leave the analyzer behind.
+        """
+        request = report_module.ReportRequest(
+            binary=os.path.abspath(__file__), host="192.168.0.10", port=8192)
+        with mock.patch.object(report_module, "api_answers", return_value=False), \
+                mock.patch.object(report_module, "HeadlessRunner") as runner:
+            with self.assertRaises(report_module.ReportError) as caught:
+                report_module.build_report(request)
+        self.assertEqual(caught.exception.code, "REPORT_NO_INSTANCE")
+        runner.assert_not_called()
+
+    def test_a_run_that_does_not_come_up_is_not_left_behind(self):
+        """The analyzer of a start that failed is stopped."""
+        request = report_module.ReportRequest(
+            binary=os.path.abspath(__file__), host="127.0.0.1", port=8192)
+        runner = mock.Mock()
+        runner.start.side_effect = headless.HeadlessError(
+            "the run ended", code="HEADLESS_DIED")
+        with mock.patch.object(report_module, "api_answers", return_value=False), \
+                mock.patch.object(report_module, "HeadlessRunner", return_value=runner):
+            with self.assertRaises(report_module.ReportError) as caught:
+                report_module.build_report(request)
+        self.assertEqual(caught.exception.code, "HEADLESS_DIED")
+        runner.stop.assert_called()
 
 
 class _RecordingClient:

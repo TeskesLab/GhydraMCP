@@ -185,9 +185,20 @@ def launcher_for(ghidra_home: str) -> str:
     )
 
 
+def binary_name(path: str) -> str:
+    """The name of the file a path points at, with either separator.
+
+    A Windows path handed to a POSIX machine is still a path with a file
+    name at the end, so the backslash is a separator there too - and Ghidra
+    identifies a program by that name.
+    """
+    normalized = str(path).replace("\\", os.sep).replace("/", os.sep)
+    return os.path.basename(normalized)
+
+
 def slug_for(binary: str) -> str:
     """A project name for a binary: the file name, without the extension."""
-    name = os.path.basename(binary)
+    name = binary_name(binary)
     stem = os.path.splitext(name)[0]
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("_") or "binary"
     return cleaned
@@ -261,7 +272,7 @@ def project_has_program(project_dir: str, project_name: str, program: str) -> bo
     without ever reaching the script that starts the server. When the
     program is there, the run has to process it instead of importing it.
     """
-    name = os.path.basename(program)
+    name = binary_name(program)
     index = project_index(project_dir, project_name)
     if not index:
         return False
@@ -285,7 +296,7 @@ def build_command(
     """
     command = [launcher, project_dir, project_name]
     if process:
-        command += ["-process", os.path.basename(binary)]
+        command += ["-process", binary_name(binary)]
     else:
         command += ["-import", binary]
     command += ["-postScript", SCRIPT_NAME, f"port={int(port)}"]
@@ -430,6 +441,14 @@ class HeadlessRunner:
     ) -> None:
         self.binary = os.path.abspath(os.path.expanduser(binary))
         self.port = int(port)
+        if not 1 <= self.port <= 65535:
+            # The port is refused here, before anything is started: the
+            # script would fall back to 8192, and the wait would keep
+            # polling a port that cannot be bound.
+            raise HeadlessError(
+                f"{self.port} is not a port: it has to be between 1 and 65535.",
+                code="HEADLESS_BAD_PORT",
+            )
         self.host = host
         self.ghidra_home = find_ghidra_home(ghidra_home)
         self.java_home = java_home or os.environ.get(ENV_JAVA_HOME, "")
