@@ -463,6 +463,47 @@ class ReaParityApiTests(unittest.TestCase):
         self.assertIn("statistics", result)
         self.assertIsNotNone(result["statistics"]["functions"])
 
+    def test_the_batch_survives_the_protocol(self):
+        """The list of targets has to survive the way a client sends it.
+
+        A client that hands over a nested list flattens it, and every value
+        arrives as a string. This drives the tool over the protocol, the way
+        a client does, and looks at what arrived - not at the text of the
+        answer.
+        """
+        functions = self._functions(limit=1)
+        if not functions:
+            self.skipTest("the program has no functions")
+
+        name = functions[0]["name"]
+        text = self._call_over_the_protocol(
+            "functions_batch_decompile",
+            {"targets": json.dumps([name, "no_such_function_xyz"])})
+
+        self.assertIn(name, text)
+        self.assertIn("no_such_function_xyz", text)
+        self.assertIn("1 of 2 succeeded", text)
+
+    def _call_over_the_protocol(self, tool: str, arguments: dict) -> str:
+        """Call a bridge tool the way a client does, over the protocol."""
+        import asyncio
+
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "bridge_mcp_hydra.py")
+
+        async def call():
+            params = StdioServerParameters(command=sys.executable, args=[script])
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(tool, arguments=arguments)
+                    return result.content[0].text
+
+        return asyncio.run(call())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
