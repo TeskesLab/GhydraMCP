@@ -21,12 +21,17 @@ import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
+import ghidra.program.model.listing.Parameter;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.listing.Variable;
 import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.HighFunctionDBUtil;
 import ghidra.program.model.pcode.HighSymbol;
 import ghidra.program.model.pcode.PcodeOp;
+import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.SourceType;
+import ghidra.program.model.symbol.Symbol;
+import ghidra.program.model.symbol.SymbolType;
 import ghidra.util.Msg;
 import ghidra.util.task.ConsoleTaskMonitor;
 
@@ -382,15 +387,79 @@ public class FunctionService {
 
         return TransactionHelper.executeInTransaction(program,
             "Update variable " + variableName + " in " + function.getName(), () -> {
-                for (var it = highFunc.getLocalSymbolMap().getSymbols(); it.hasNext(); ) {
-                    HighSymbol sym = it.next();
-                    if (sym.getName().equals(variableName)) {
-                        HighFunctionDBUtil.updateDBVariable(sym, newName, finalType, SourceType.USER_DEFINED);
-                        return true;
+                // The listing merges what the database holds with what the
+                // decompiler knows, and the lookup has to answer for both:
+                // a local that is already in the database is renamed there,
+                // and only what the decompiler knows is renamed through it.
+                Variable stored = findStoredLocal(function, variableName);
+                if (stored != null) {
+                    stored.setName(newName, SourceType.USER_DEFINED);
+                    if (finalType != null) {
+                        stored.setDataType(finalType, SourceType.USER_DEFINED);
                     }
+                    return true;
                 }
-                return false;
+                // A local that has already been renamed is a unique symbol,
+                // and a unique symbol lives in the global map - not in the
+                // local one. So a rename that already happened has to be
+                // found there too, or the same variable cannot be renamed
+                // twice.
+                //
+                // What the decompiler invents for a register it did not map
+                // ("puVar13") is not a variable: there is nothing behind it
+                // to rename, and the name it carries is re-numbered on the
+                // next decompile. It is refused here, and the listing says
+                // which names came from the decompiler.
+                HighSymbol found = findUniqueSymbol(highFunc, function, variableName);
+                if (found == null) {
+                    return false;
+                }
+                HighFunctionDBUtil.updateDBVariable(found, newName, finalType, SourceType.USER_DEFINED);
+                return true;
             });
+    }
+
+    /** The symbol of the given name, among the ones of a map. */
+    private static HighSymbol findSymbol(Iterator<HighSymbol> symbols, String name) {
+        for (Iterator<HighSymbol> it = symbols; it.hasNext(); ) {
+            HighSymbol sym = it.next();
+            if (name.equals(sym.getName())) {
+                return sym;
+            }
+        }
+        return null;
+    }
+
+    /** The local of the given name that the database holds. */
+    private static Variable findStoredLocal(Function function, String name) {
+        for (Variable candidate : function.getAllVariables()) {
+            if (candidate instanceof Parameter) {
+                continue;
+            }
+            if (name.equals(candidate.getName())) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A local that was renamed is a unique symbol of the function's own
+     * namespace. It sits in the global map of the high function, because
+     * that is where a unique symbol goes - so it is only accepted when it
+     * belongs to this function and not to the program.
+     */
+    private static HighSymbol findUniqueSymbol(HighFunction highFunc, Function function, String name) {
+        HighSymbol found = findSymbol(highFunc.getGlobalSymbolMap().getSymbols(), name);
+        if (found == null) {
+            return null;
+        }
+        Symbol symbol = found.getSymbol();
+        if (symbol == null || symbol.getSymbolType() != SymbolType.LOCAL_VAR) {
+            return null;
+        }
+        Namespace parent = symbol.getParentNamespace();
+        return parent != null && parent.equals(function) ? found : null;
     }
 
     // -------------------------------------------------------------------------

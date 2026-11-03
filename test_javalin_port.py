@@ -228,10 +228,16 @@ class JavalinPortTests(unittest.TestCase):
         for fn in funcs.get("result", []):
             vars_ = _as_json(requests.get(f"{URL}/functions/{fn['address']}/variables"))
             for v in vars_["result"]["variables"]:
-                if not v.get("isParameter"):
-                    func_addr = fn["address"]
-                    old_var_name = v["name"]
-                    break
+                # Only a variable the database holds has a name that stays
+                # the same across two decompilations. The decompiler's own
+                # names for a register it did not map ("puVar13") are
+                # re-numbered on the next decompile, so a rename that used
+                # one would be a rename of nothing.
+                if v.get("isParameter") or v.get("source") != "database":
+                    continue
+                func_addr = fn["address"]
+                old_var_name = v["name"]
+                break
             if func_addr:
                 break
         if not func_addr:
