@@ -216,6 +216,9 @@ And four more that came out of the same comparison with the REA — the composed
 ghydra analysis callers 0x140001008
 ghydra analysis callees 0x1400373f0
 
+# A page of them, when there are more than the page holds
+ghydra analysis callers 0x140027bc0 --offset 0 --limit 50
+
 # Everything about one function: the decompilation, the callers, the callees, the references
 ghydra functions analyze --address 0x140001008
 ghydra functions analyze --name main
@@ -226,8 +229,8 @@ ghydra analysis overview
 
 | Command | Endpoint | Notes |
 | --- | --- | --- |
-| `ghydra analysis callers ADDR` | `GET /analysis/callers/{address}` | the functions that reach this one |
-| `ghydra analysis callees ADDR` | `GET /analysis/callees/{address}` | the functions this one calls |
+| `ghydra analysis callers ADDR` | `GET /analysis/callers/{address}` | the functions that reach this one; `--offset` and `--limit` take a page, and the answer says how many there are in total when the page holds fewer |
+| `ghydra analysis callees ADDR` | `GET /analysis/callees/{address}` | the functions this one calls; `--offset` and `--limit` take a page |
 | `ghydra functions analyze --name/--address` | several | one call that gathers the function, its decompilation, its callers, its callees and its references |
 | `ghydra analysis overview` | several | the program, its segments, its counts and its imports |
 

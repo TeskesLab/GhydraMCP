@@ -4,7 +4,8 @@ import click
 from urllib.parse import quote
 
 from ..client.exceptions import GhidraError
-from ..utils import should_page, page_output, parse_targets, rich_echo, validate_address
+from ..utils import (MAX_BATCH_TARGETS, should_page, page_output, parse_targets,
+                     rich_echo, validate_address)
 
 DEFAULT_DECOMPILATION_TIMEOUT = 1200
 
@@ -367,9 +368,12 @@ def decompile_batch(ctx, targets, timeout):
 
     try:
         # Keep the HTTP timeout above the whole batch: every target gets its
-        # own decompilation timeout, and the transport must not fire first.
+        # own decompilation timeout, and the server runs them one after the
+        # other, so the transport must not fire before the last one is done.
+        # The count is the one the server accepts - a longer batch is refused.
         original_timeout = client.timeout
-        client.timeout = max(original_timeout, timeout * min(len(wanted), 10) + 60)
+        client.timeout = max(original_timeout,
+                              timeout * min(len(wanted), MAX_BATCH_TARGETS) + 60)
         try:
             response = client.post('functions/decompile-batch',
                                    json_data={'targets': wanted, 'timeout': timeout})
@@ -429,22 +433,37 @@ def analyze(ctx, name, address, xref_limit):
             rich_echo(f"[red]Error:[/red] The function '{name or address}' has no address", err=True)
             ctx.exit(1)
 
-        decompiled = client.get(f'functions/{quote(resolved)}/decompile')
-        callers = client.get(f'analysis/callers/{quote(resolved)}')
-        callees = client.get(f'analysis/callees/{quote(resolved)}')
-        xrefs = client.get('xrefs', params={'to_addr': resolved, 'limit': xref_limit})
+        # A composed answer must not hide a failure, and it must not lose
+        # what it already has: the function was found, and the decompilation
+        # came with it. A part that failed is reported as empty, and only the
+        # function - the thing the caller asked for - decides the success.
+        def _part(call):
+            """One part of the answer, and the reason it is not there."""
+            try:
+                return call(), None
+            except GhidraError as exc:
+                return None, str(exc)
+
+        decompiled, decompile_error = _part(
+            lambda: client.get(f'functions/{quote(resolved)}/decompile'))
+        callers, _ = _part(
+            lambda: client.get(f'analysis/callers/{quote(resolved)}'))
+        callees, _ = _part(
+            lambda: client.get(f'analysis/callees/{quote(resolved)}'))
+        xrefs, _ = _part(
+            lambda: client.get('xrefs', params={'to_addr': resolved, 'limit': xref_limit}))
 
         def _list_of(response):
-            payload = response.get('result')
+            payload = (response or {}).get('result')
             return payload if isinstance(payload, list) else []
 
-        code = decompiled.get('result') or {}
+        code = (decompiled or {}).get('result') or {}
         payload = {
             "success": True,
             "result": {
                 "function": function,
                 "decompilation": code.get('decompilation'),
-                "decompileError": code.get('errorMessage'),
+                "decompileError": code.get('errorMessage') or decompile_error,
                 "callers": _list_of(callers),
                 "callees": _list_of(callees),
                 "xrefs": _list_of(xrefs),

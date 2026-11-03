@@ -16,6 +16,30 @@ from rich.tree import Tree
 from .base import BaseFormatter
 
 
+def _page_total(data: Dict[str, Any]) -> int | None:
+    """How many items there are, when the answer is one page of more.
+
+    A page that is not the whole list has to say so: "Callers (100)" reads
+    as "there are 100" when there are two hundred and fifty.
+    """
+    meta = data.get("meta")
+    if not isinstance(meta, dict):
+        return None
+    total = meta.get("total")
+    if not isinstance(total, int) or total < 0:
+        return None
+    return total
+
+
+def _page_note(data: Dict[str, Any], items: list) -> str:
+    """The note that says the list is one page of a longer one."""
+    total = _page_total(data)
+    if total is None or total <= len(items):
+        return ""
+    return (f"There are {total} in total - this page holds {len(items)}. "
+            f"Ask for the rest with --offset and --limit.")
+
+
 class TableFormatter(BaseFormatter):
     """Formatter that outputs rich terminal tables and formatted text.
 
@@ -442,7 +466,12 @@ class TableFormatter(BaseFormatter):
         if not isinstance(items, list) or not items:
             return self._capture("[yellow]Nobody calls it[/yellow]")
 
-        table = Table(title=f"Callers ({len(items)})", show_lines=False)
+        title = f"Callers ({len(items)})"
+        total = _page_total(data)
+        if total is not None and total > len(items):
+            title += f" of {total}"
+
+        table = Table(title=title, show_lines=False)
         table.add_column("Name", style="green")
         table.add_column("Address", style="cyan", no_wrap=True)
         table.add_column("Signature", style="yellow", overflow="fold")
@@ -455,6 +484,10 @@ class TableFormatter(BaseFormatter):
                 escape(str(item.get("address", "?"))),
                 escape(str(item.get("signature", ""))),
             )
+
+        note = _page_note(data, items)
+        if note:
+            return self._capture(Group(table, note))
 
         return self._capture(table)
 
@@ -464,7 +497,12 @@ class TableFormatter(BaseFormatter):
         if not isinstance(items, list) or not items:
             return self._capture("[yellow]It calls nothing[/yellow]")
 
-        table = Table(title=f"Callees ({len(items)})", show_lines=False)
+        title = f"Callees ({len(items)})"
+        total = _page_total(data)
+        if total is not None and total > len(items):
+            title += f" of {total}"
+
+        table = Table(title=title, show_lines=False)
         table.add_column("Name", style="green")
         table.add_column("Address", style="cyan", no_wrap=True)
         table.add_column("Signature", style="yellow", overflow="fold")
@@ -477,6 +515,10 @@ class TableFormatter(BaseFormatter):
                 escape(str(item.get("address", "?"))),
                 escape(str(item.get("signature", ""))),
             )
+
+        note = _page_note(data, items)
+        if note:
+            return self._capture(Group(table, note))
 
         return self._capture(table)
 
@@ -495,15 +537,14 @@ class TableFormatter(BaseFormatter):
             lines.append(f"  [dim]{escape(str(signature))}[/dim]")
 
         code = result.get("decompilation")
+        syntax = None
         if code:
-            lines.append("")
             syntax = Syntax(str(code).strip(), "c", theme="monokai",
                             line_numbers=True, word_wrap=False)
-            return self._capture(Group("\n".join(lines), syntax))
-
-        reason = result.get("decompileError")
-        lines.append("")
-        lines.append(f"[yellow](no decompilation{f': {escape(str(reason))}' if reason else ''})[/yellow]")
+        else:
+            reason = result.get("decompileError")
+            lines.append("")
+            lines.append(f"[yellow](no decompilation{f': {escape(str(reason))}' if reason else ''})[/yellow]")
 
         for label, key in (("Callers", "callers"), ("Callees", "callees"), ("References", "xrefs")):
             items = result.get(key) or []
@@ -517,6 +558,11 @@ class TableFormatter(BaseFormatter):
                 else:
                     lines.append(f"    {escape(str(item.get('name', '?')))}"
                                  f"  [dim]{escape(str(item.get('address', '')))}[/dim]")
+
+        # The relations are part of the answer even when the decompilation
+        # worked, so the code is rendered after them and not instead of them.
+        if syntax is not None:
+            return self._capture(Group("\n".join(lines), syntax))
 
         return self._capture("\n".join(lines))
 

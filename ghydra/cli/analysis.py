@@ -158,8 +158,10 @@ def trace_call_path(ctx, from_function, to_function, max_depth):
 
 @analysis.command('callers')
 @click.argument('address')
+@click.option('--offset', type=int, default=0, help='Pagination offset (default: 0)')
+@click.option('--limit', type=int, default=100, help='Maximum items to return (default: 100)')
 @click.pass_context
-def callers(ctx, address):
+def callers(ctx, address, offset, limit):
     """Get the functions that call this function.
 
     \b
@@ -171,7 +173,8 @@ def callers(ctx, address):
     config = ctx.obj['config']
 
     try:
-        response = client.get(f'analysis/callers/{quote(validate_address(address))}')
+        response = client.get(f'analysis/callers/{quote(validate_address(address))}',
+                              params={'offset': offset, 'limit': limit})
         output = formatter.format_callers(response)
 
         if should_page(config, ctx.obj['output_json']):
@@ -187,8 +190,10 @@ def callers(ctx, address):
 
 @analysis.command('callees')
 @click.argument('address')
+@click.option('--offset', type=int, default=0, help='Pagination offset (default: 0)')
+@click.option('--limit', type=int, default=100, help='Maximum items to return (default: 100)')
 @click.pass_context
-def callees(ctx, address):
+def callees(ctx, address, offset, limit):
     """Get the functions this function calls.
 
     \b
@@ -200,7 +205,8 @@ def callees(ctx, address):
     config = ctx.obj['config']
 
     try:
-        response = client.get(f'analysis/callees/{quote(validate_address(address))}')
+        response = client.get(f'analysis/callees/{quote(validate_address(address))}',
+                              params={'offset': offset, 'limit': limit})
         output = formatter.format_callees(response)
 
         if should_page(config, ctx.obj['output_json']):

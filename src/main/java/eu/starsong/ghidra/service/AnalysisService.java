@@ -187,6 +187,7 @@ public class AnalysisService {
 
             int explored = 0;
             List<FunctionSummaryDto> path = null;
+            boolean truncated = false;
 
             while (!queue.isEmpty() && path == null) {
                 CallPathNode current = queue.poll();
@@ -198,13 +199,14 @@ public class AnalysisService {
 
                 for (String calleeAddr : calleeAddresses(program, current.function())) {
                     if (calleeAddr.equals(toAddr)) {
-                        path = buildPath(program, parent, current.address(), toAddr, fromDto, toDto);
+                        path = buildPath(program, parent, current.address(), fromDto, toDto);
                         break;
                     }
                     if (!visited.add(calleeAddr)) {
                         continue;
                     }
                     if (visited.size() >= MAX_CALL_PATH_NODES) {
+                        truncated = true;
                         continue;
                     }
                     Function callee = functionService.findByAddress(program, calleeAddr);
@@ -222,6 +224,10 @@ public class AnalysisService {
 
             String reason = "No call path from " + fromDto.name() + " to " + toDto.name()
                 + " within " + depth + " hop(s) (" + explored + " function(s) explored)";
+            if (truncated) {
+                reason += "; the search stopped at the cap of " + MAX_CALL_PATH_NODES
+                    + " visited function(s), so a path beyond it was not looked for";
+            }
             return new CallPathDto(false, 0, depth, fromDto, toDto, List.of(), explored, reason);
         });
     }
@@ -263,28 +269,42 @@ public class AnalysisService {
         return addresses;
     }
 
-    /** Rebuild the path from the parent map the search filled in. */
+    /**
+     * Rebuild the path from the parent map the search filled in.
+     *
+     * <p>The chain is walked from the last hop back to the source, and the
+     * cursor itself belongs to it: the function that made the call is a link
+     * of the path, not a detail of the search. The source is the head of that
+     * chain, so it is added once - adding it again would put it twice and
+     * leave out the function in between.
+     */
     private List<FunctionSummaryDto> buildPath(Program program, Map<String, String> parent,
-            String lastHop, String toAddr, FunctionSummaryDto fromDto, FunctionSummaryDto toDto) {
-        List<FunctionSummaryDto> path = new ArrayList<>();
-        path.add(toDto);
-
+            String lastHop, FunctionSummaryDto fromDto, FunctionSummaryDto toDto) {
+        List<String> chain = new ArrayList<>();
         String cursor = lastHop;
         int guard = 0;
         while (guard++ < 1024) {
+            chain.add(0, cursor);
             String previous = parent.get(cursor);
             if (previous == null) {
                 break;
             }
-            Function fn = functionService.findByAddress(program, previous);
-            if (fn == null) {
-                break;
-            }
-            path.add(0, FunctionSummaryDto.from(fn));
             cursor = previous;
         }
 
-        path.add(0, fromDto);
+        List<FunctionSummaryDto> path = new ArrayList<>();
+        for (int i = 0; i < chain.size(); i++) {
+            String address = chain.get(i);
+            if (i == 0 && address.equals(fromDto.address())) {
+                path.add(fromDto);
+                continue;
+            }
+            Function fn = functionService.findByAddress(program, address);
+            if (fn != null) {
+                path.add(FunctionSummaryDto.from(fn));
+            }
+        }
+        path.add(toDto);
         return path;
     }
 

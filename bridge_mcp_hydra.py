@@ -67,6 +67,10 @@ DEFAULT_DECOMPILATION_TIMEOUT = int(
     os.environ.get("GHIDRA_DECOMP_TIMEOUT", str(max(DEFAULT_TIMEOUT, 1200)))
 )
 
+# How many functions one batch may ask for. The server refuses a longer one,
+# so the deadline of a batch is sized for the batch it will actually accept.
+MAX_BATCH_TARGETS = 200
+
 current_instance_port = DEFAULT_GHIDRA_PORT
 
 # The tools answer in text, because a table is what a human - or an LLM -
@@ -744,6 +748,29 @@ def _extract_requested_decompile_timeout(params: dict | None = None) -> int:
     except (TypeError, ValueError):
         return DEFAULT_DECOMPILATION_TIMEOUT
 
+
+def _extract_batch_transport_timeout(json_data: dict | None = None) -> int:
+    """The transport deadline a batch of decompilations needs.
+
+    A batch is processed one target after the other, and each target may take
+    the whole timeout, so the deadline has to cover the batch and not one
+    function. The timeout of a batch travels in the body and not in the query,
+    so the query alone cannot say how long the server may take - reading the
+    body is what makes the deadline right.
+    """
+    if not isinstance(json_data, dict):
+        return 0
+    targets = json_data.get("targets")
+    if not isinstance(targets, (list, tuple)) or not targets:
+        return 0
+    try:
+        per_target = int(json_data.get("timeout", DEFAULT_DECOMPILATION_TIMEOUT))
+    except (TypeError, ValueError):
+        per_target = DEFAULT_DECOMPILATION_TIMEOUT
+    # The server refuses a batch longer than this, so the deadline is sized
+    # for the batch it will actually accept.
+    return per_target * min(len(targets), MAX_BATCH_TARGETS) + 30
+
 def _make_request(method: str, port: int, endpoint: str, params: dict | None = None, 
                  json_data: dict | None = None, data: str | None = None, 
                  headers: dict | None = None) -> dict:
@@ -764,6 +791,10 @@ def _make_request(method: str, port: int, endpoint: str, params: dict | None = N
         requested_timeout = _extract_requested_decompile_timeout(params)
         # Keep transport timeout above decompiler timeout to avoid premature client-side cutoffs.
         request_timeout = max(DEFAULT_TIMEOUT, requested_timeout + 30)
+        # A batch runs its targets one after the other, so the deadline has to
+        # cover the whole batch: otherwise the bridge answers REQUEST_TIMEOUT
+        # while the server is still decompiling the targets that are left.
+        request_timeout = max(request_timeout, _extract_batch_transport_timeout(json_data))
 
     is_state_changing = method.upper() in ["POST", "PUT", "PATCH", "DELETE"]
     if is_state_changing:
@@ -1616,6 +1647,22 @@ def format_call_path(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def _page_note(response: dict, items: list) -> str:
+    """The note that says the list is one page of a longer one.
+
+    A page that is not the whole list has to say so: "Callers (100)" reads
+    as "there are 100" when there are two hundred and fifty.
+    """
+    meta = response.get("meta")
+    if not isinstance(meta, dict):
+        return ""
+    total = meta.get("total")
+    if not isinstance(total, int) or total <= len(items):
+        return ""
+    return (f"There are {total} in total - this page holds {len(items)}. "
+            f"Ask for the rest with offset and limit.")
+
+
 def format_callers(response: dict, **kwargs) -> str:
     """Format the callers of a function as plain text"""
     if not response.get("success", False):
@@ -1629,6 +1676,9 @@ def format_callers(response: dict, **kwargs) -> str:
         return "Nobody calls it."
 
     lines = [f"Callers ({len(items)}):", ""]
+    note = _page_note(response, items)
+    if note:
+        lines.insert(1, note)
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -1653,6 +1703,9 @@ def format_callees(response: dict, **kwargs) -> str:
         return "It calls nothing."
 
     lines = [f"Callees ({len(items)}):", ""]
+    note = _page_note(response, items)
+    if note:
+        lines.insert(1, note)
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -5258,7 +5311,8 @@ def analysis_trace_call_path(from_function: str, to_function: str,
 
 @mcp.tool()
 @text_output
-def analysis_callers(address: str, port: int | None = None) -> dict:
+def analysis_callers(address: str, offset: int = 0, limit: int = 100,
+                     port: int | None = None) -> dict:
     """Get the functions that call this function
 
     The call graph says who calls whom; this answers the one question an
@@ -5266,10 +5320,12 @@ def analysis_callers(address: str, port: int | None = None) -> dict:
 
     Args:
         address: The function address (hex)
+        offset: Pagination offset (default: 0)
+        limit: Maximum items to return (default: 100)
         port: Specific Ghidra instance port (optional)
 
     Returns:
-        dict: The functions that call it
+        dict: The functions that call it, one page of them
     """
     if not address:
         return {
@@ -5283,21 +5339,25 @@ def analysis_callers(address: str, port: int | None = None) -> dict:
 
     port = _get_instance_port(port)
 
-    response = safe_get(port, f"analysis/callers/{quote(address)}")
+    response = safe_get(port, f"analysis/callers/{quote(address)}",
+                        params={"offset": offset, "limit": limit})
     return simplify_response(response)
 
 
 @mcp.tool()
 @text_output
-def analysis_callees(address: str, port: int | None = None) -> dict:
+def analysis_callees(address: str, offset: int = 0, limit: int = 100,
+                     port: int | None = None) -> dict:
     """Get the functions this function calls
 
     Args:
         address: The function address (hex)
+        offset: Pagination offset (default: 0)
+        limit: Maximum items to return (default: 100)
         port: Specific Ghidra instance port (optional)
 
     Returns:
-        dict: The functions it calls
+        dict: The functions it calls, one page of them
     """
     if not address:
         return {
@@ -5311,7 +5371,8 @@ def analysis_callees(address: str, port: int | None = None) -> dict:
 
     port = _get_instance_port(port)
 
-    response = safe_get(port, f"analysis/callees/{quote(address)}")
+    response = safe_get(port, f"analysis/callees/{quote(address)}",
+                        params={"offset": offset, "limit": limit})
     return simplify_response(response)
 
 @mcp.tool()

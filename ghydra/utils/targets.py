@@ -10,6 +10,11 @@ import json
 from typing import List
 
 
+# How many functions one batch may ask for. The server refuses a longer one,
+# so the deadline of a batch is sized for the batch it will actually accept.
+MAX_BATCH_TARGETS = 200
+
+
 def parse_targets(text: str) -> List[str]:
     """The targets of a batch, from JSON text, from a list, or from a bare name.
 

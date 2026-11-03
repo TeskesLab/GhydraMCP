@@ -208,6 +208,121 @@ class ReaParityContractTests(unittest.TestCase):
                 self.assertTrue(text.strip())
                 self.assertNotEqual(text.strip(), "Done")
 
+    def test_a_page_that_is_not_the_whole_list_says_so(self):
+        """A list of a hundred that reads as "there are a hundred".
+
+        A function with a hundred and thirty-six callers came back as a list
+        of the first hundred, and nothing said that the other thirty-six were
+        not there.
+        """
+        response = {
+            "success": True,
+            "result": [{"name": "caller", "address": "140002000", "signature": "void f()"}],
+            "meta": {"total": 136, "offset": 0, "limit": 1},
+        }
+        text = bridge.FORMATTERS["analysis_callers"](response)
+        self.assertIn("136", text)
+        self.assertIn("offset", text)
+
+        # The whole list says nothing about a page it does not have.
+        whole = {"success": True, "result": response["result"], "meta": {"total": 1}}
+        self.assertNotIn("136", bridge.FORMATTERS["analysis_callers"](whole))
+
+    def test_the_callers_and_the_callees_take_a_page(self):
+        """The tools expose the page the endpoint already had."""
+        import inspect
+
+        for tool in ("analysis_callers", "analysis_callees"):
+            with self.subTest(tool=tool):
+                parameters = inspect.signature(getattr(bridge, tool)).parameters
+                self.assertIn("offset", parameters)
+                self.assertIn("limit", parameters)
+
+    def test_the_deadline_of_a_batch_covers_the_batch(self):
+        """The server runs the targets one after the other.
+
+        The timeout of a batch travels in the body and not in the query, so a
+        deadline derived from the query alone is one function long - and the
+        bridge gives up while the server is still decompiling the rest.
+        """
+        deadline = bridge._extract_batch_transport_timeout(
+            {"targets": ["a", "b", "c"], "timeout": 120})
+        self.assertGreaterEqual(deadline, 3 * 120)
+
+        # Not a batch, no batch deadline.
+        self.assertEqual(bridge._extract_batch_transport_timeout(None), 0)
+        self.assertEqual(bridge._extract_batch_transport_timeout({"targets": []}), 0)
+
+    def test_a_composed_answer_keeps_what_it_already_has(self):
+        """A part that failed does not throw away the rest.
+
+        The function was found and the decompilation came with it; a caller
+        that could not be fetched is an empty part, not a lost answer.
+        """
+        from click.testing import CliRunner
+
+        from ghydra.cli.functions import functions
+        from ghydra.client.exceptions import GhidraError
+
+        class HalfBrokenClient:
+            """Answers everything but the callers."""
+
+            timeout = 30
+
+            def get(self, endpoint, params=None):
+                if endpoint.startswith("analysis/callers"):
+                    raise GhidraError("the callers could not be fetched")
+                if endpoint.endswith("/decompile"):
+                    return {"result": {"decompilation": "int main(void) { return 0; }"}}
+                if endpoint.startswith("functions/"):
+                    return {"result": {"name": "main", "address": "140001000"}}
+                return {"result": []}
+
+        class PlainFormatter:
+            def format_function_analysis(self, payload):
+                return json.dumps(payload)
+
+            def format_error(self, exc):
+                return str(exc)
+
+        result = CliRunner().invoke(functions, ["analyze", "--address", "140001000"], obj={
+            "client": HalfBrokenClient(),
+            "formatter": PlainFormatter(),
+            "config": None,
+            "output_json": True,
+        })
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        payload = json.loads(result.output)
+        self.assertEqual(payload["result"]["function"]["name"], "main")
+        self.assertIn("return 0", payload["result"]["decompilation"])
+        self.assertEqual(payload["result"]["callers"], [])
+
+    def test_the_relations_are_rendered_after_the_decompilation(self):
+        """The relations are part of the answer either way.
+
+        The formatter returned as soon as the decompilation was there, so the
+        default table carried the function and the C code and nothing else.
+        """
+        from ghydra.formatters.table_formatter import TableFormatter
+
+        payload = {
+            "success": True,
+            "result": {
+                "function": {"name": "main", "address": "140001000"},
+                "decompilation": "int main(void) { return 0; }",
+                "callers": [{"name": "caller", "address": "140002000"}],
+                "callees": [{"name": "callee", "address": "140003000"}],
+                "xrefs": [{"fromAddress": "140004000", "toAddress": "140001000",
+                           "refType": "UNCONDITIONAL_CALL"}],
+            },
+        }
+        text = TableFormatter(use_colors=False).format_function_analysis(payload)
+        self.assertIn("Callers", text)
+        self.assertIn("Callees", text)
+        self.assertIn("References", text)
+        self.assertIn("caller", text)
+
 
 class ReaParityApiTests(unittest.TestCase):
     """The API against a live Ghidra."""
@@ -346,6 +461,32 @@ class ReaParityApiTests(unittest.TestCase):
         self.assertGreaterEqual(len(result["path"]), 2)
         self.assertEqual(result["path"][0]["name"], caller)
         self.assertEqual(result["path"][-1]["name"], callee)
+
+    def test_trace_call_path_keeps_the_function_in_the_middle(self):
+        """Every link of the path is a node of it.
+
+        The path was rebuilt from the last hop back to the source, and the
+        rebuild put the source in twice and dropped the function in between:
+        a path of A -> B -> C came back as A, A, C.
+        """
+        pair = self._caller_and_callee()
+        if not pair:
+            self.skipTest("no caller/callee pair in this program")
+
+        caller, callee = pair
+        response = self._get("analysis/call-path", **{"from": caller, "to": callee})
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()["result"]
+
+        if not result.get("found"):
+            self.skipTest("this program has no path between the two")
+
+        path = result["path"]
+        names = [node.get("name") for node in path]
+        self.assertEqual(len(names), len(set(names)),
+                         f"the path repeats a function: {names}")
+        self.assertEqual(result["depth"], len(path) - 1,
+                         f"the depth does not match the path: {names}")
 
     def test_trace_call_path_says_so_when_there_is_no_chain(self):
         pair = self._caller_and_callee()

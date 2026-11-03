@@ -96,7 +96,8 @@ src/test/ghidra -postScript MeasurePerf`) and prints a `RESULT` line per measure
   entity in the program and paginate afterwards: on a binary with 29 587 symbols that
   was 400 ms of DTO work for a 100-item page, against 87 ms when only the page is
   converted (`util/PagedCollector.java`). The response contract is unchanged — `result`
-  is the page, `meta.total` the count.
+  is the page, `meta.total` the count. The references to a *name* are the same case: the
+  count comes from the references themselves, and only the ones of the page become DTOs.
 - **Only skip the counting scan where the native count matches.** `getNumDefinedData()`
   agrees with what `getDefinedData()` yields, so the data listing stops walking as soon
   as the page is full. `getNumSymbols()` (28 993) and `getFunctionCount()` (4 444) do
@@ -610,16 +611,26 @@ gaps that were native and cheap. All four are closed, on the three surfaces at o
   because a client that hands over a nested list flattens it - every value arrives as a string. The
   schema asks for the form that survives the client, and the parser reads a JSON array, a bare name or
   a comma-separated list.
+- **The deadline of a batch covers the batch.** The server runs the targets one after the other and
+  each of them may take the whole timeout, so the transport deadline is the timeout times the number
+  of targets the server accepts (200). The timeout of a batch travels in the body and not in the
+  query, so a deadline derived from the query alone is one function long - and the bridge answers
+  `REQUEST_TIMEOUT` while the server is still decompiling the targets that are left.
 - **A name is a name.** `xrefs_find_by_name` resolves the name to the symbols that carry it (a bare name
   matches every namespace, a qualified one matches that namespace) and returns the references to them.
-  A name that resolves to nothing is a 404 with `SYMBOL_NOT_FOUND`, not an empty list.
+  A name that resolves to nothing is a 404 with `SYMBOL_NOT_FOUND`, not an empty list. The page is cut
+  before the DTOs are built: each reference resolves the functions on both of its sides, so a hot
+  symbol would make every page pay for the references it does not return.
 - **The address context is one traversal.** `inspect_address` gathers the symbol, the containing
   function, the data, the instruction, both comments and the references on both sides inside a single
   `GhidraSwing.runRead`, so the answer is consistent and the agent pays one round trip.
 - **The call path is the shortest one.** `analysis_trace_call_path` is a breadth-first walk over the
   call edges, bounded by the depth limit (16 at most) and by a cap on the functions it visits. When
   there is no path it says how many functions it explored and why it gave up - it never says "not
-  found" without saying what it looked at.
+  found" without saying what it looked at. The path is rebuilt from the last hop back to the source,
+  and every link of it is a node of the path: the function in the middle is not dropped, and the
+  source is not put in twice. When the cap of visited functions cut the search short, the reason
+  says so - a path beyond the cap was not looked for, and "there is none" is not the same answer.
 
 ## The composed calls
 
@@ -637,10 +648,15 @@ one formatter each. None of them needed a new endpoint - they compose what was a
 endpoints were there since v3.0.0; the bridge and the CLI simply never exposed them, which is the
 kind of gap that only a real comparison finds.
 
+**A page that is not the whole list says so.** The callers and the callees take an `offset` and a
+`limit`, and the text of the answer says how many there are in total when the page holds fewer - a
+list of 100 that reads as "there are 100" when there are 136 is a lie an agent cannot see.
+
 **A composed answer must not hide a failure.** `functions_analyze` and `programs_overview` gather
 several answers into one, and a part that failed is reported as empty rather than as the whole
 thing having failed. The one part that decides the success is the one the caller asked for: the
-function, and the program.
+function, and the program. The CLI follows the same rule: a caller, a callee or a reference that
+fails does not throw away the function that was found and the decompilation that came with it.
 
 ## Ghidra API gotchas
 

@@ -101,22 +101,21 @@ public class XrefResource implements Resource {
         String name = ctx.pathParam("name");
         var pagination = ctx.pagination();
 
-        XrefService.NameReferences found = xrefService.getReferencesToName(program, name);
+        XrefService.NameReferences found = xrefService.getReferencesToName(program, name,
+            pagination.offset(), pagination.limit());
         if (found.symbols().isEmpty()) {
             throw new NotFoundException("No symbol named '" + name
                 + "' (a bare name matches every namespace; use the fully-qualified name, e.g. NS::"
                 + name + ")", "SYMBOL_NOT_FOUND");
         }
 
-        List<XrefDto> all = found.references();
-        int total = all.size();
+        int total = found.total();
         int from = Math.min(pagination.offset(), total);
-        int to = Math.min(from + pagination.limit(), total);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("name", name);
         result.put("symbols", found.symbols());
-        result.put("references", all.subList(from, to));
+        result.put("references", found.references());
         result.put("total", total);
 
         ctx.json(Response.ok(ctx.ctx(), ctx.port(), result)

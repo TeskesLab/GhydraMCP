@@ -773,6 +773,7 @@ Provides information about references to/from addresses.
 - **`GET /xrefs/to-name/{name}`**: Get the references to a symbol, found by name. The name is URL-encoded.
   - A bare name matches every namespace; a qualified name (`NS::foo`) matches that namespace only.
   - A name that resolves to nothing is a 404 with the code `SYMBOL_NOT_FOUND` — not an empty list.
+  - It takes `?offset=` and `?limit=`: the page is cut before the references become DTOs, and `total` is the count of all of them.
   ```json
   // Example Response Fragment
   "result": {
@@ -859,6 +860,7 @@ Provides access to Ghidra's analysis results.
 
 - **`GET /analysis/callers/{address}`**: The functions that call the function at this address.
 - **`GET /analysis/callees/{address}`**: The functions the function at this address calls.
+  - Both take `?offset=` and `?limit=`; `result` is the page and `meta.total` the count.
   ```json
   // Example Response Fragment
   "result": [
