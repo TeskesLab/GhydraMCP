@@ -551,15 +551,31 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
   as well, and an exit cannot throw the analysis away.
 - **The save is checked before it is reported.** `requests.post` does not raise on a 4xx, so the
   launcher looks at the answer before it says `saved: true`; the reason goes to the log of the run.
+  `headless stop` reports the save it got, and a save that was refused is not reported as a save.
 - **The lock of a run that died is cleaned up.** A crashed analyzer leaves `<project>.lock`
   behind and every later start refuses the project, so stopping a run that is gone removes the
-  lock. The lock of a live process that is not ours is left alone.
+  lock. The lock of a live process that is not ours is left alone - and the lock file of a
+  project carries no owner that can be read, so the processes are asked instead: a CodeBrowser
+  that has the project open holds the lock, and that lock is never removed.
+- **The state of a run is erased only while it is that run's state.** A start that was refused
+  before the child was launched has no PID of its own, and the state on disk belongs to a run
+  that is still there - erasing it would leave that run untracked, and the next start would
+  walk past the guard that remembers it.
 - **The report goes to the instance the CLI chose.** The command takes the host and the port from
   the client the root command built - the configuration, the environment or `--host/--port` - and
   not from a request of its own.
+- **The program is matched by its full path.** Ghidra identifies a program by its file name, so
+  the report compares the full path of the executable and falls back to the name only when one
+  of the two paths is not known - otherwise a CodeBrowser serving `/a/foo.exe` answers for
+  `/b/foo.exe`, and the report combines the addresses of the first with the output of the
+  second.
 - **A headless run serves this machine.** The run is started here, so a report pointed at another
   machine that is not serving the API is refused (`REPORT_NO_INSTANCE`) instead of starting a run
   that cannot answer it - and a run that does not come up is stopped, not left behind.
+- **An address of this machine is local even without the DNS.** The question is asked of the
+  operating system and not of the name of the machine: a socket that binds to the address is
+  accepted, and one that binds to an address of somebody else is refused. A secondary address of
+  a LAN card and an IPv6 address that the hostname does not carry are both local.
 - **The port is checked before anything is started.** The script falls back to 8192 for a port it
   cannot use, so a port of 0, a negative one or one above 65535 is refused with
   `HEADLESS_BAD_PORT` instead of waiting on a port that was never bound.
@@ -570,10 +586,20 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
 - **A project remembers the binary it was built from.** The size and the time of the file are
   written next to the project (`<project>.ghydra.json`), and a binary that changed is imported
   again with `-overwrite` - otherwise the run would analyse the stored copy of a file that is not
-  there any more.
+  there any more. The time keeps its sub-second part, because a rebuild inside the same second
+  is a different file; and the sidecar is written when the run is serving, not before it - a run
+  that failed left behind the sidecar of a binary that was never in the project.
 - **A run that is still analysing keeps the port.** It has not bound the API yet, so the port
   looks free - but the PID that is remembered is checked before anything is started, or a second
   run would take the state of the first and leave it untracked.
+- **The port is claimed before the child is launched.** Two starts that arrive together both
+  find the port free, and both launch an analyzer: the one that binds the API first answers
+  both waits, and the state file ends up naming the loser - so one report can combine the
+  Ghidra data of one binary with the Kuna data of another. The claim carries a token that says
+  which runner made it, and a claim that nobody took up is given back after a minute.
+- **The PID is matched to its port.** The PID of a run that crashed is reused by another run
+  of the same script - on another port, with another project - and stopping that one would kill
+  a live analysis. The command line has to carry `port=<n>` as well as the marker.
 - **The stop flag is removed after a kill, and before a run starts.** A run that was killed before
   the script could see the flag leaves it behind, and the next run on that port would stop as soon
   as it started.
@@ -581,6 +607,11 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
   the script's bundle finds them; a jar with only the compiled classes fails at runtime with
   `NoClassDefFoundError: io/javalin/http/Handler`. `scripts/make_uberjar.py` does the merge
   without Maven.
+- **The registry of the instances holds a snapshot, not a handle.** The `/instances` route knows
+  two things: the plugin of a CodeBrowser, and a map that carries the snapshot of the program.
+  A headless run has no plugin - so what it registers is the map, and the file, the project,
+  the executable, the architecture and the image base are there for the clients that pick an
+  instance.
 
 ## Ghidra API gotchas
 
