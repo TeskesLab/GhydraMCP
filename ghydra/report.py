@@ -368,6 +368,18 @@ def _table(headers: List[str], rows: List[List[Any]]) -> str:
     return "\n".join(out) + "\n"
 
 
+def _permissions(segment: Dict[str, Any]) -> str:
+    """The access of a segment, the way it is written."""
+    flags = ""
+    if segment.get("isRead"):
+        flags += "r"
+    if segment.get("isWrite"):
+        flags += "w"
+    if segment.get("isExecute"):
+        flags += "x"
+    return flags or "-"
+
+
 def render_markdown(report: Dict[str, Any]) -> str:
     """The report a human reads."""
     ghidra = report.get("ghidra", {})
@@ -416,7 +428,7 @@ def render_markdown(report: Dict[str, Any]) -> str:
                 segment.get("name", ""),
                 segment.get("start", segment.get("address", "")),
                 segment.get("size", ""),
-                segment.get("permissions", segment.get("access", "")),
+                _permissions(segment),
             ])
         out.append(_table(["Name", "Start", "Size", "Access"], rows))
 
