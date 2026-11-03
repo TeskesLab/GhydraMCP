@@ -22,6 +22,14 @@
             <!-- Filter so ${ghidra.version} in extension.properties is substituted. -->
             <filtered>true</filtered>
         </fileSet>
+
+        <!-- The headless runner. It lives in the extension so that Ghidra
+             compiles it with the extension's own classes on the classpath:
+             the script starts the same server the CodeBrowser plugin does. -->
+        <fileSet>
+            <directory>src/main/resources/ghidra_scripts</directory>
+            <outputDirectory>Ghidra/ghidra_scripts</outputDirectory>
+        </fileSet>
     </fileSets>
     
     <!-- The main jar is already shaded (includes Javalin/Jetty/Kotlin/SLF4J),

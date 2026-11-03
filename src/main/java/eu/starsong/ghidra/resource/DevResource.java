@@ -69,7 +69,7 @@ public class DevResource implements Resource {
         int savedCount = 0;
         if (save) {
             try {
-                savedCount = new SaveService().saveAllChanged(ctx.tool()).size();
+                savedCount = new SaveService().saveAllChanged(ctx.tool(), ctx.program()).size();
                 Msg.info(this, "dev shutdown: saved " + savedCount + " changed program(s) before exit");
             } catch (Exception e) {
                 // Saving failed: do NOT exit, or the unsaved work would be lost anyway.

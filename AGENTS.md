@@ -501,6 +501,47 @@ plugin API, so it changes neither `API_VERSION` nor the Java side.
   not import the `ghydra` package, so `ghydra/x64dbg.py` and the bridge's x64dbg section carry
   the same client, the same error taxonomy and the same retry rules.
 
+## Headless mode (no window)
+
+The same API, served by a headless Ghidra run: the binary is imported, analysed, and the API
+answers for that analysis, with nobody watching. `ghydra headless start|status|stop`, and
+`ghydra report build` for the report. See `GHYDRA_HEADLESS.md`.
+
+- **The bootstrap lives in `server/GhydraServerFactory`**, not in the plugin. Both paths - the
+  CodeBrowser plugin and the headless run - go through it, so the same twenty-one resources are
+  registered in both. A resource added to one and not the other answers 404 in one instance and
+  200 in the other; that is the bug this factory exists to prevent.
+- **The headless context holds one fixed program and one fixed project**
+  (`server/GhidraContext.java`). `ctx.program()` and `ctx.project()` prefer them. The endpoints
+  that need the GUI's cursor - `/address` and `/function` - answer 503 `HEADLESS_LIMITATION`,
+  because there is no cursor without a window. The HTTP test suites that exercise them need the
+  CodeBrowser; every other endpoint behaves the same in both.
+- **A Ghidra script has to import the class it extends**: `import ghidra.app.script.GhidraScript;`.
+  Ghidra only adds that import to the template it writes for a *new* script; an existing one has
+  to carry it. Without it the script does not compile, and the error says nothing about the import
+  - "cannot find symbol" on the class and on everything the class brings with it
+  (`currentProgram`, `state`, `getScriptArgs()`). Measured: the same failure happens for a script
+  inside a Ghidra module and for one outside every module, so it is not about where the script
+  lives.
+- **A Ghidra project path may not hold an element that starts with a dot.** `analyzeHeadless`
+  refuses it ("Path element starting with '.' is not permitted"), so the project cannot live under
+  `~/.ghidra`. The launcher uses `ghidra_projects` in the home directory.
+- **The run is stopped politely.** The launcher leaves `~/.ghidra/headless-<port>.stop` behind and
+  the script returns when it sees it; the headless analyzer then saves the program and closes the
+  project, and the project is left unlocked. Killing the process instead leaves the lock file
+  behind, and the next run refuses to open the project.
+- **The launcher is cross-platform**: `support/analyzeHeadless` on POSIX,
+  `support/analyzeHeadless.bat` on Windows. The JDK comes from `JAVA_HOME`, and Ghidra 12 needs a
+  JDK 21 or newer - the machine's default is often an older one.
+- **A program that is already in the project is processed again; one that is not is imported.**
+  Importing a program that is already there fails, and the run never reaches the script that
+  starts the server. The index of the project (`<project>.rep/idata/~index.dat`) is plain text and
+  says which files are in it.
+- **The extension's jar is shaded.** Javalin, Jetty, SLF4J and Kotlin are inside `Ghydra.jar`, so
+  the script's bundle finds them; a jar with only the compiled classes fails at runtime with
+  `NoClassDefFoundError: io/javalin/http/Handler`. `scripts/make_uberjar.py` does the merge
+  without Maven.
+
 ## Ghidra API gotchas
 
 Signatures that do not match the obvious guess:

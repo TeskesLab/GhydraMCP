@@ -20,11 +20,30 @@ public class GhidraContext {
     private final int port;
     private final Map<Integer, ?> activeInstances;
 
+    /**
+     * The program this instance serves, when it runs without a CodeBrowser.
+     *
+     * <p>Headless there is no PluginTool and so no ProgramManager to ask: the
+     * analysed program is the one the headless run imported, and it is fixed
+     * for the life of the instance.
+     */
+    private final Program fixedProgram;
+
+    /** The project this instance serves, when it runs without a CodeBrowser. */
+    private final Project fixedProject;
+
     public GhidraContext(Context ctx, PluginTool tool, int port, Map<Integer, ?> activeInstances) {
+        this(ctx, tool, port, activeInstances, null, null);
+    }
+
+    public GhidraContext(Context ctx, PluginTool tool, int port, Map<Integer, ?> activeInstances,
+            Program program, Project project) {
         this.ctx = ctx;
         this.tool = tool;
         this.port = port;
         this.activeInstances = activeInstances;
+        this.fixedProgram = program;
+        this.fixedProject = project;
     }
 
     // -------------------------------------------------------------------------
@@ -126,9 +145,23 @@ public class GhidraContext {
 
     /**
      * Get the Ghidra PluginTool.
+     *
+     * <p>Null in a headless instance: there is no CodeBrowser behind it, and
+     * the handlers that need one answer that they cannot run instead of
+     * failing with a NullPointerException.
      */
     public PluginTool tool() {
         return tool;
+    }
+
+    /**
+     * Whether this instance runs without a CodeBrowser.
+     *
+     * <p>The UI endpoints need one, and so do the endpoints that open a file
+     * in a new window.
+     */
+    public boolean isHeadless() {
+        return tool == null;
     }
 
     /**
@@ -149,6 +182,9 @@ public class GhidraContext {
      * Get the current program. Returns null if no program is loaded.
      */
     public Program program() {
+        if (fixedProgram != null) {
+            return fixedProgram;
+        }
         if (tool == null) {
             return null;
         }
@@ -182,6 +218,9 @@ public class GhidraContext {
      * Get the current project.
      */
     public Project project() {
+        if (fixedProject != null) {
+            return fixedProject;
+        }
         if (tool == null) {
             return null;
         }

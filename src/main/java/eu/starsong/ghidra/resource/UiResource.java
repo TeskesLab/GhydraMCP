@@ -28,6 +28,7 @@ public class UiResource implements Resource {
 
     private void currentAddress(GhidraContext ctx) {
         var program = ctx.requireProgram();
+        requireCodeBrowser(ctx);
         CodeViewerService cv = ctx.tool().getService(CodeViewerService.class);
         ProgramLocation loc = cv != null ? cv.getCurrentLocation() : null;
         String address = loc != null
@@ -44,6 +45,7 @@ public class UiResource implements Resource {
 
     private void currentFunction(GhidraContext ctx) {
         var program = ctx.requireProgram();
+        requireCodeBrowser(ctx);
         CodeViewerService cv = ctx.tool().getService(CodeViewerService.class);
         ProgramLocation loc = cv != null ? cv.getCurrentLocation() : null;
         if (loc == null) {
@@ -65,5 +67,19 @@ public class UiResource implements Resource {
             .link("program", "/program")
             .link("by_address", "/functions/{}", dto.address())
             .build());
+    }
+
+    /**
+     * The cursor lives in a CodeBrowser window.
+     *
+     * <p>A headless instance has no window and so no cursor: it answers that
+     * it cannot, rather than pretending the image base is where the human is
+     * looking.
+     */
+    private void requireCodeBrowser(GhidraContext ctx) {
+        if (ctx.isHeadless()) {
+            throw new eu.starsong.ghidra.server.GhydraServer.HeadlessException(
+                "This endpoint reports the cursor of a CodeBrowser; this instance runs headless");
+        }
     }
 }

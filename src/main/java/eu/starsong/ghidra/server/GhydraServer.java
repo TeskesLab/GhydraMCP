@@ -30,13 +30,33 @@ public class GhydraServer {
     private final boolean isBaseInstance;
     private final List<Resource> resources = new ArrayList<>();
 
+    /** The program this instance serves when there is no CodeBrowser behind it. */
+    private final ghidra.program.model.listing.Program program;
+
+    /** The project this instance serves when there is no CodeBrowser behind it. */
+    private final ghidra.framework.model.Project project;
+
     private Javalin app;
 
     public GhydraServer(PluginTool tool, int port, Map<Integer, Object> activeInstances, boolean isBaseInstance) {
+        this(tool, port, activeInstances, isBaseInstance, null, null);
+    }
+
+    /**
+     * A server for an instance that runs without a CodeBrowser.
+     *
+     * <p>Headless there is no PluginTool to ask for the current program, so the
+     * program and the project are handed over instead: the ones the headless
+     * run imported and opened.
+     */
+    public GhydraServer(PluginTool tool, int port, Map<Integer, Object> activeInstances, boolean isBaseInstance,
+            ghidra.program.model.listing.Program program, ghidra.framework.model.Project project) {
         this.tool = tool;
         this.port = port;
         this.activeInstances = activeInstances;
         this.isBaseInstance = isBaseInstance;
+        this.program = program;
+        this.project = project;
     }
 
     /**
@@ -142,6 +162,13 @@ public class GhydraServer {
             ctx.json(Response.error(ctx, port, e.errorCode(), e.getMessage()).build());
         });
 
+        // An endpoint that needs a CodeBrowser, on an instance that has none.
+        // That is the server's limitation, not a mistake in the request.
+        app.exception(HeadlessException.class, (e, ctx) -> {
+            ctx.status(HttpStatus.SERVICE_UNAVAILABLE);
+            ctx.json(Response.error(ctx, port, "HEADLESS_LIMITATION", e.getMessage()).build());
+        });
+
         app.exception(BadRequestException.class, (e, ctx) -> {
             ctx.status(HttpStatus.BAD_REQUEST);
             ctx.json(Response.error(ctx, port, e.errorCode(), e.getMessage()).build());
@@ -182,7 +209,7 @@ public class GhydraServer {
      * This is passed to resources for creating handlers.
      */
     private GhidraContext createContext(io.javalin.http.Context ctx) {
-        return new GhidraContext(ctx, tool, port, activeInstances);
+        return new GhidraContext(ctx, tool, port, activeInstances, program, project);
     }
 
     // -------------------------------------------------------------------------
@@ -245,6 +272,20 @@ public class GhydraServer {
 
         public String errorCode() {
             return errorCode;
+        }
+    }
+
+    /**
+     * An endpoint that needs a CodeBrowser, on an instance that runs headless.
+     *
+     * <p>The UI endpoints report where the human's cursor is, and opening a
+     * project file needs a window to open it in. Neither exists without a
+     * CodeBrowser, and saying so is better than failing with a
+     * NullPointerException.
+     */
+    public static class HeadlessException extends RuntimeException {
+        public HeadlessException(String message) {
+            super(message);
         }
     }
 }

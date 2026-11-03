@@ -42,7 +42,7 @@ public class ProgramResource implements Resource {
         boolean all = "true".equalsIgnoreCase(ctx.queryParam("all"));
         try {
             Object result = all
-                ? saveService.saveAllChanged(ctx.tool())
+                ? saveService.saveAllChanged(ctx.tool(), ctx.program())
                 : saveService.save(ctx.requireProgram());
             ctx.json(Response.ok(ctx.ctx(), ctx.port(), result)
                 .self("/program/save")
