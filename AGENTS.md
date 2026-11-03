@@ -537,6 +537,21 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
   Importing a program that is already there fails, and the run never reaches the script that
   starts the server. The index of the project (`<project>.rep/idata/~index.dat`) is plain text and
   says which files are in it.
+- **Ghidra identifies a program by its file name.** Two binaries with the same name in different
+  directories are two programs that cannot live in the same project, so the default project name
+  carries a short digest of the absolute path (`cmd-3f2a1b9c`). Without it the second run reuses
+  the project of the first and is served the analysis of a file nobody asked about.
+- **`POST /dev/shutdown` guards the headless program too.** The unsaved-changes probe asks the
+  ProgramManager, and a headless instance has none - so the program the instance serves is asked
+  as well, and an exit cannot throw the analysis away.
+- **The save is checked before it is reported.** `requests.post` does not raise on a 4xx, so the
+  launcher looks at the answer before it says `saved: true`; the reason goes to the log of the run.
+- **The lock of a run that died is cleaned up.** A crashed analyzer leaves `<project>.lock`
+  behind and every later start refuses the project, so stopping a run that is gone removes the
+  lock. The lock of a live process that is not ours is left alone.
+- **The report goes to the instance the CLI chose.** The command takes the host and the port from
+  the client the root command built - the configuration, the environment or `--host/--port` - and
+  not from a request of its own.
 - **The extension's jar is shaded.** Javalin, Jetty, SLF4J and Kotlin are inside `Ghydra.jar`, so
   the script's bundle finds them; a jar with only the compiled classes fails at runtime with
   `NoClassDefFoundError: io/javalin/http/Handler`. `scripts/make_uberjar.py` does the merge

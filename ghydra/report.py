@@ -241,9 +241,15 @@ def interesting_functions(ghidra: Dict[str, Any], kuna_data: Dict[str, Any],
                           limit: int) -> List[Dict[str, Any]]:
     """The functions worth a human's attention.
 
-    Three groups: the ones Kuna found big, the ones Ghidra found with a
-    name of their own, and the entry point. A function that both tools found
-    is more interesting than one that only one of them found.
+    Two groups: the ones Kuna found big, and the ones Ghidra found with a
+    name of their own. A function that both tools found is more interesting
+    than one that only one of them found.
+
+    A stripped binary read without Kuna leaves both groups empty - every
+    name is one Ghidra made up, and nothing was measured. A report with
+    nothing in it is worse than one with the code in it, so there is a third
+    group for that case: the functions that are really in the program, the
+    ones that take arguments first.
     """
     by_address = kuna_functions_by_address(kuna_data.get("index") or [])
     functions = ghidra.get("functions") or []
@@ -267,6 +273,8 @@ def interesting_functions(ghidra: Dict[str, Any], kuna_data: Dict[str, Any],
             "kuna_size": size,
             "named": named,
             "external": bool(function.get("isExternal")),
+            "thunk": bool(function.get("isThunk")),
+            "parameters": int(function.get("parameterCount") or 0),
         })
 
     scored.sort(key=lambda item: (item["kuna_size"], item["named"]), reverse=True)
@@ -290,6 +298,20 @@ def interesting_functions(ghidra: Dict[str, Any], kuna_data: Dict[str, Any],
             take(item)
         if len(chosen) >= limit:
             break
+
+    if not chosen:
+        # Nothing ranked anything. The fallback is the code itself: the real
+        # functions - not the thunks, not the ones outside the program - with
+        # the ones that take arguments first, and the rest in the order they
+        # come in the program.
+        fallback = [item for item in scored
+                    if not item["external"] and not item["thunk"]]
+        fallback.sort(key=lambda item: (-item["parameters"], item["address"]))
+        for item in fallback:
+            take(item)
+            if len(chosen) >= limit:
+                break
+
     return chosen[:limit]
 
 
@@ -564,15 +586,34 @@ def render_markdown(report: Dict[str, Any]) -> str:
             out.append(f"\n_and {len(strings) - 40} more in the JSON report_\n")
 
     decompiled = report.get("decompiled") or []
-    if decompiled:
+    kuna_code = report.get("kuna_code") or []
+    if decompiled or kuna_code:
         out.append("## Decompilation\n")
         by_address = {item["address"]: item for item in chosen}
+        ghidra_by_address = {item["address"]: item for item in decompiled}
+        kuna_by_address = {item["address"]: item for item in kuna_code}
+        addresses: List[str] = []
         for item in decompiled:
-            name = by_address.get(item["address"], {}).get("name", item["address"])
-            out.append(f"### {name} (`{item['address']}`)\n")
-            out.append("```c")
-            out.append(item["code"].rstrip())
-            out.append("```\n")
+            if item["address"] not in addresses:
+                addresses.append(item["address"])
+        for item in kuna_code:
+            if item["address"] not in addresses:
+                addresses.append(item["address"])
+        for address in addresses:
+            name = by_address.get(address, {}).get("name", address)
+            out.append(f"### {name} (`{address}`)\n")
+            ghidra_item = ghidra_by_address.get(address)
+            if ghidra_item:
+                out.append("_Ghidra_\n")
+                out.append("```c")
+                out.append(ghidra_item["code"].rstrip())
+                out.append("```\n")
+            kuna_item = kuna_by_address.get(address)
+            if kuna_item:
+                out.append("_Kuna_\n")
+                out.append("```c")
+                out.append(kuna_item["code"].rstrip())
+                out.append("```\n")
 
     annotations = (report.get("annotations") or {}).get("annotations") or []
     if annotations:

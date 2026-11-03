@@ -97,7 +97,10 @@ public class ProjectService {
      */
     public OpenResult openFile(PluginTool tool, String filePath) {
         if (tool == null) {
-            throw new IllegalStateException(
+            // The dedicated exception, not a generic one: this is the
+            // server's limitation, and the client can tell it apart from a
+            // fault (503 HEADLESS_LIMITATION, not 500).
+            throw new eu.starsong.ghidra.server.GhydraServer.HeadlessException(
                 "Opening a file needs a CodeBrowser; this instance runs headless");
         }
         Project project = tool.getProject();

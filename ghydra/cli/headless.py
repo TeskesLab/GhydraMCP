@@ -41,7 +41,7 @@ def headless():
 @click.option('--project-dir', default=None,
               help="Where the Ghidra project lives (default: ~/.ghydra/projects)")
 @click.option('--project-name', default=None,
-              help="Name of the Ghidra project (default: the name of the binary)")
+              help="Name of the Ghidra project (default: the name of the binary, with a mark of its path)")
 @click.option('--ghidra-home', default=None,
               help="Path of the Ghidra installation (default: GHIDRA_HOME)")
 @click.option('--java-home', default=None,

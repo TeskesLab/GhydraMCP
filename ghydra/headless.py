@@ -24,6 +24,7 @@ that started it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -190,6 +191,21 @@ def slug_for(binary: str) -> str:
     stem = os.path.splitext(name)[0]
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("_") or "binary"
     return cleaned
+
+
+def default_project_name(binary: str) -> str:
+    """The project of a binary: its name, and a mark of where it came from.
+
+    Ghidra identifies a program by its file name, so two binaries with the
+    same name in different directories are two programs that cannot live in
+    the same project - and the second one would be served the first one, with
+    the analysis of a file nobody asked about. The mark is a short digest of
+    the absolute path: it tells the two apart, and it keeps the name of the
+    binary readable.
+    """
+    absolute = os.path.abspath(os.path.expanduser(binary))
+    digest = hashlib.sha256(os.path.normcase(absolute).encode("utf-8")).hexdigest()[:8]
+    return f"{slug_for(absolute)}-{digest}"
 
 
 def default_project_dir() -> str:
@@ -417,7 +433,7 @@ class HeadlessRunner:
         self.host = host
         self.ghidra_home = find_ghidra_home(ghidra_home)
         self.java_home = java_home or os.environ.get(ENV_JAVA_HOME, "")
-        self.project_name = project_name or slug_for(self.binary)
+        self.project_name = project_name or default_project_name(self.binary)
         if project_dir:
             self.project_dir = os.path.abspath(os.path.expanduser(project_dir))
         else:
@@ -558,16 +574,32 @@ class HeadlessRunner:
         The headless analyzer saves when the script returns, and the script
         never returns - so the save is asked for over the API before the run
         is stopped.
+
+        A refused or failed save is not a save: the answer is checked, and
+        the caller is told the truth instead of a promise.
         """
         if not api_answers(self.host, self.port):
             return False
         import requests
 
         try:
-            requests.post(f"http://{self.host}:{self.port}/program/save", timeout=30)
-        except Exception:
+            response = requests.post(f"http://{self.host}:{self.port}/program/save", timeout=30)
+        except Exception as exc:
+            self._note(f"the save request failed: {exc}")
+            return False
+        if not response.ok:
+            self._note(f"the server refused the save: {response.status_code} "
+                       f"{response.text[:200]}")
             return False
         return True
+
+    def _note(self, message: str) -> None:
+        """Write a line into the log of the run."""
+        try:
+            with open(self.instance.log, "a", encoding="utf-8", errors="replace") as handle:
+                handle.write(f"[ghydra] {message}\n")
+        except OSError:
+            pass
 
     def stop(self, timeout: int = 20) -> bool:
         """Stop the run, and let it save the analysis on its way out.
@@ -587,6 +619,13 @@ class HeadlessRunner:
             return saved
 
         if not process_is_ours(pid):
+            # The run is gone, or the PID belongs to somebody else by now.
+            # A run that is dead cannot hold the project: the lock it left
+            # behind is stale, and every later start would refuse the
+            # project because of it. A live PID that is not ours is left
+            # alone - its lock may belong to a real owner.
+            if not process_alive(pid):
+                self._drop_stale_lock()
             clear_state(self.port)
             return saved
 

@@ -391,7 +391,7 @@ ghydra headless stop
 | --- | --- |
 | `--port`, `-p` | the port to serve on (default: 8192) |
 | `--project-dir` | where the Ghidra project lives (default: `~/ghidra_projects`) |
-| `--project-name` | the name of the project (default: the name of the binary) |
+| `--project-name` | the name of the project (default: the name of the binary, with a mark of its path) |
 | `--ghidra-home` | the Ghidra installation (default: `GHIDRA_HOME`) |
 | `--java-home` | the JDK (default: `JAVA_HOME`) |
 | `--timeout` | how long to wait for the API, in seconds (default: 900) |

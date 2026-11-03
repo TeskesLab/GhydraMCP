@@ -27,7 +27,7 @@ The run outlives the command that started it: the state lives under `~/.ghidra`,
 | --- | --- |
 | `--port`, `-p` | the port to serve on (default: 8192) |
 | `--project-dir` | where the Ghidra project lives (default: `~/ghidra_projects`) |
-| `--project-name` | the name of the project (default: the name of the binary) |
+| `--project-name` | the name of the project (default: the name of the binary, with a mark of its path) |
 | `--ghidra-home` | the Ghidra installation (default: `GHIDRA_HOME`) |
 | `--java-home` | the JDK (default: `JAVA_HOME`) |
 | `--timeout` | how long to wait for the API, in seconds (default: 900) |
@@ -62,6 +62,12 @@ often an older one, so `--java-home` is there for that.
 `~/.ghidra`: **Ghidra refuses a project path with an element that starts with a dot** ("Path
 element starting with '.' is not permitted"), and `.ghidra` is exactly that. The launcher says so
 when the path it is given is refused.
+
+Its name is the name of the binary with a mark of where the binary came from — `cmd-3f2a1b9c` for
+`C:\Windows\System32\cmd.exe`. Ghidra identifies a program by its file name, so two binaries with
+the same name in different directories are two programs that cannot live in the same project; the
+mark is what keeps them apart, so the second one is imported instead of being served the analysis
+of the first. `--project-name` names the project yourself.
 
 **The state.** `~/.ghidra/headless-<port>.json` remembers the run, and `~/.ghidra/headless-<port>.log`
 holds its output. The log is where the reasons a run failed are.

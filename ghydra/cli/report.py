@@ -27,12 +27,28 @@ def report():
     pass
 
 
+def target_endpoint(ctx, host=None, port=None):
+    """Where the report goes: the options of the command, or the CLI's own.
+
+    The instance the CLI talks to is the one the root command chose: the host
+    and the port come from the configuration, from the environment or from
+    --host/--port. A report that went somewhere else would say one thing and
+    show another.
+    """
+    client = (getattr(ctx, "obj", None) or {}).get('client')
+    target_host = host or (client.host if client is not None else "127.0.0.1")
+    target_port = int(port) if port else int(client.port if client is not None else 8192)
+    return target_host, target_port
+
+
 @report.command('build')
 @click.argument('binary', type=click.Path(exists=False, dir_okay=False))
 @click.option('--output', '-o', default=None,
               help="Where the files go (default: the current directory)")
-@click.option('--port', '-p', type=int, default=8192,
-              help="Port of the Ghidra instance (default: 8192)")
+@click.option('--host', default=None,
+              help="Host of the Ghidra instance (default: the one the CLI uses)")
+@click.option('--port', '-p', type=int, default=None,
+              help="Port of the Ghidra instance (default: the one the CLI uses)")
 @click.option('--ghidra-home', default=None,
               help="Path of the Ghidra installation (default: GHIDRA_HOME)")
 @click.option('--java-home', default=None,
@@ -54,7 +70,7 @@ def report():
 @click.option('--max-annotations', type=int, default=60,
               help="How many annotations to prepare (default: 60)")
 @click.pass_context
-def build(ctx, binary, output, port, ghidra_home, java_home, timeout,
+def build(ctx, binary, output, host, port, ghidra_home, java_home, timeout,
           no_kuna, no_headless, keep, max_functions, max_strings,
           max_decompile, max_annotations):
     """Build the report on BINARY.
@@ -68,10 +84,13 @@ def build(ctx, binary, output, port, ghidra_home, java_home, timeout,
     """
     formatter = ctx.obj['formatter']
 
+    target_host, target_port = target_endpoint(ctx, host, port)
+
     request = ReportRequest(
         binary=binary,
         output=output,
-        port=port,
+        host=target_host,
+        port=target_port,
         ghidra_home=ghidra_home,
         java_home=java_home,
         timeout=timeout,

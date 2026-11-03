@@ -23,7 +23,8 @@ import java.util.function.Function;
  * When disabled, POST /dev/shutdown returns 403 and does nothing. With unsaved changes the call
  * refuses (409) unless {@code ?save=true} (save all changed programs, then exit) or
  * {@code ?force=true} (discard and exit) is given, so an accidental call cannot silently lose
- * analysis.
+ * analysis. The guard covers a headless instance too: the program it serves is the one whose
+ * analysis the exit would throw away.
  *
  * <p>Note: the gate is the opt-in flag, not the request origin. The server already binds all
  * interfaces by default and exposes equally-destructive write endpoints (rename, memory write,
@@ -117,6 +118,13 @@ public class DevResource implements Resource {
         try {
             PluginTool tool = ctx.tool();
             if (tool == null) {
+                // A headless instance has no ProgramManager to ask: the
+                // program it serves is the one the run imported, and it is
+                // the one whose analysis the shutdown would throw away.
+                Program program = ctx.program();
+                if (program != null && program.isChanged()) {
+                    return "the program '" + program.getName() + "' has unsaved changes";
+                }
                 return null;
             }
             ProgramManager pm = tool.getService(ProgramManager.class);

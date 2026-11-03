@@ -11,12 +11,14 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ghydra import headless
 from ghydra import report as report_module
 from ghydra import x64dbg as x64dbg_helper
+from ghydra.cli import report as report_cli
 
 
 class HeadlessProjectTests(unittest.TestCase):
@@ -85,16 +87,40 @@ class HeadlessProjectTests(unittest.TestCase):
             binary = os.path.join(tmp, "cmd.exe")
             with open(binary, "w", encoding="utf-8") as handle:
                 handle.write("MZ")
-            index = os.path.join(tmp, "cmd.rep", "idata")
-            os.makedirs(index)
-            with open(os.path.join(index, "~index.dat"), "w", encoding="utf-8") as handle:
-                handle.write("VERSION=1\r\n/\r\n 00000000:cmd.exe:abc\r\n")
             runner = headless.HeadlessRunner(
                 binary=binary, project_dir=tmp,
                 ghidra_home=self._fake_home(tmp))
+            index = os.path.join(tmp, f"{runner.project_name}.rep", "idata")
+            os.makedirs(index)
+            with open(os.path.join(index, "~index.dat"), "w", encoding="utf-8") as handle:
+                handle.write("VERSION=1\r\n/\r\n 00000000:cmd.exe:abc\r\n")
             command = runner.command()
             self.assertIn("-process", command)
             self.assertNotIn("-import", command)
+
+    def test_the_project_carries_the_path_of_the_binary(self):
+        """Two binaries with the same name do not share a project.
+
+        Ghidra identifies a program by its file name, so a project that holds
+        one of them cannot hold the other - and the second run would be
+        served the analysis of the first.
+        """
+        first = headless.default_project_name(os.path.join("one", "cmd.exe"))
+        second = headless.default_project_name(os.path.join("two", "cmd.exe"))
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.startswith("cmd-"))
+        self.assertEqual(first, headless.default_project_name(os.path.join("one", "cmd.exe")))
+
+    def test_the_name_of_the_project_can_be_given(self):
+        """The caller may name the project himself."""
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = os.path.join(tmp, "cmd.exe")
+            with open(binary, "w", encoding="utf-8") as handle:
+                handle.write("MZ")
+            runner = headless.HeadlessRunner(
+                binary=binary, project_dir=tmp, project_name="my-project",
+                ghidra_home=self._fake_home(tmp))
+            self.assertEqual(runner.project_name, "my-project")
 
     def test_command_carries_the_port_to_the_script(self):
         """The script is told which port to serve on."""
@@ -108,6 +134,70 @@ class HeadlessProjectTests(unittest.TestCase):
             command = runner.command()
             self.assertIn("GhidraHeadlessServer", command)
             self.assertIn("port=8200", command)
+
+
+class HeadlessStopTests(unittest.TestCase):
+    """Stopping a run: the save, the lock and the state."""
+
+    def _runner(self, tmp, port=65431):
+        binary = os.path.join(tmp, "cmd.exe")
+        with open(binary, "w", encoding="utf-8") as handle:
+            handle.write("MZ")
+        runner = headless.HeadlessRunner(
+            binary=binary, port=port, project_dir=tmp, project_name="cmd",
+            ghidra_home=tmp)
+        runner.instance.log = os.path.join(tmp, "run.log")
+        return runner
+
+    def test_a_refused_save_is_not_a_save(self):
+        """The server refusing the save is not a save."""
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            answer = mock.Mock(ok=False, status_code=409, text="unsaved changes")
+            with mock.patch.object(headless, "api_answers", return_value=True), \
+                    mock.patch("requests.post", return_value=answer):
+                self.assertFalse(runner.save())
+
+    def test_an_accepted_save_is_a_save(self):
+        """A save the server accepts is a save."""
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            answer = mock.Mock(ok=True, status_code=200, text="{}")
+            with mock.patch.object(headless, "api_answers", return_value=True), \
+                    mock.patch("requests.post", return_value=answer):
+                self.assertTrue(runner.save())
+
+    def test_a_dead_run_leaves_no_lock(self):
+        """A run that died leaves a lock that nobody owns any more.
+
+        The lock of a project keeps the next run out of it, so a crash that
+        leaves one behind has to be cleaned up.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            lock = os.path.join(tmp, "cmd.lock")
+            with open(lock, "w", encoding="utf-8") as handle:
+                handle.write("")
+            runner.instance.pid = 999999
+            runner.save = lambda: False
+            with mock.patch.object(headless, "process_is_ours", return_value=False), \
+                    mock.patch.object(headless, "process_alive", return_value=False):
+                runner.stop()
+            self.assertFalse(os.path.exists(lock))
+
+    def test_a_live_process_that_is_not_ours_keeps_its_lock(self):
+        """The lock of a live process is not ours to remove."""
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            lock = os.path.join(tmp, "cmd.lock")
+            with open(lock, "w", encoding="utf-8") as handle:
+                handle.write("")
+            runner.instance.pid = 999999
+            runner.save = lambda: False
+            with mock.patch.object(headless, "process_is_ours", return_value=False), \
+                    mock.patch.object(headless, "process_alive", return_value=True):
+                runner.stop()
+            self.assertTrue(os.path.exists(lock))
 
 
 class HeadlessDiscoveryTests(unittest.TestCase):
@@ -212,6 +302,34 @@ class ReportTests(unittest.TestCase):
         names = [item["name"] for item in chosen]
         self.assertIn("WinMain", names)
 
+    def test_the_functions_are_chosen_without_kuna(self):
+        """A stripped binary read without Kuna still has functions to show.
+
+        Nothing ranked anything: Kuna is off, and every name is one Ghidra
+        made up. The report still has to say something.
+        """
+        ghidra = self._ghidra()
+        ghidra["functions"] = [
+            {"name": "FUN_140001000", "address": "140001000", "signature": "void f()"},
+            {"name": "FUN_140002000", "address": "140002000",
+             "signature": "void g(int a)", "parameterCount": 1},
+        ]
+        chosen = report_module.interesting_functions(
+            ghidra, {"enabled": False, "index": []}, 10)
+        self.assertEqual(len(chosen), 2)
+        self.assertEqual(chosen[0]["address"], "140002000")
+
+    def test_the_thunks_are_left_out_of_the_fallback(self):
+        """A thunk is a jump, not code worth reading."""
+        ghidra = self._ghidra()
+        ghidra["functions"] = [
+            {"name": "FUN_140001000", "address": "140001000", "isThunk": True},
+            {"name": "FUN_140002000", "address": "140002000"},
+        ]
+        chosen = report_module.interesting_functions(
+            ghidra, {"enabled": False, "index": []}, 10)
+        self.assertEqual([item["address"] for item in chosen], ["140002000"])
+
     def test_the_annotations_carry_the_image_base(self):
         """The annotations know the base the addresses belong to."""
         chosen = report_module.interesting_functions(self._ghidra(), self._kuna(), 10)
@@ -246,6 +364,31 @@ class ReportTests(unittest.TestCase):
                         "## The functions worth a look", "## Decompilation"):
             self.assertIn(section, text)
 
+    def test_the_markdown_shows_the_code_of_both_tools(self):
+        """The document puts the two decompilers side by side.
+
+        The JSON has the C that Kuna recovered; the Markdown a human reads
+        has to show it too, or the promise of the report is half kept.
+        """
+        report = {
+            "binary": "C:\\bin\\cmd.exe",
+            "generated_at": 0,
+            "ghidra": self._ghidra(),
+            "kuna": self._kuna(),
+            "functions": report_module.interesting_functions(
+                self._ghidra(), self._kuna(), 10),
+            "decompiled": [{"address": "140001000", "name": "FUN_140001000",
+                            "code": "void f() { }"}],
+            "kuna_code": [{"address": "140001000", "name": "sub_140001000",
+                           "code": "int f(void) { }"}],
+            "annotations": {"annotations": []},
+        }
+        text = report_module.render_markdown(report)
+        self.assertIn("_Ghidra_", text)
+        self.assertIn("_Kuna_", text)
+        self.assertIn("void f() { }", text)
+        self.assertIn("int f(void) { }", text)
+
     def test_the_three_files_are_written(self):
         """The report leaves a document, the data and the annotations."""
         report = {
@@ -264,6 +407,36 @@ class ReportTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(paths["annotations"]))
             with open(paths["json"], "r", encoding="utf-8") as handle:
                 self.assertEqual(json.load(handle)["binary"], report["binary"])
+
+
+class ReportCommandTests(unittest.TestCase):
+    """The report command talks to the instance the CLI chose."""
+
+    class _Ctx:
+        def __init__(self, obj):
+            self.obj = obj
+
+    def test_the_report_goes_to_the_endpoint_of_the_cli(self):
+        """The host and the port come from the client the CLI built.
+
+        A report that went to localhost while the CLI was pointed at another
+        machine would say one thing and show another.
+        """
+        client = mock.Mock(host="192.168.0.10", port=8200)
+        ctx = self._Ctx({"client": client})
+        self.assertEqual(report_cli.target_endpoint(ctx), ("192.168.0.10", 8200))
+
+    def test_the_options_of_the_command_win(self):
+        """What the command is told is what it uses."""
+        client = mock.Mock(host="192.168.0.10", port=8200)
+        ctx = self._Ctx({"client": client})
+        self.assertEqual(report_cli.target_endpoint(ctx, "localhost", 8192),
+                         ("localhost", 8192))
+
+    def test_without_a_client_the_default_is_used(self):
+        """A command without the CLI around still has somewhere to go."""
+        ctx = self._Ctx({})
+        self.assertEqual(report_cli.target_endpoint(ctx), ("127.0.0.1", 8192))
 
 
 class _RecordingClient:
