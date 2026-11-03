@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -43,10 +44,28 @@ def is_local_host(host: str) -> bool:
     """Whether the host is this machine.
 
     A headless run is started here, so it serves this machine and no other:
-    a remote target has to be up already.
+    a remote target has to be up already. The name of the machine and the
+    addresses of its own interfaces count as local - the server binds them
+    all, so a run started here answers to them.
     """
     name = str(host or "").strip().lower()
-    return name in ("", "localhost", "127.0.0.1", "::1", "0.0.0.0")
+    if name in ("", "localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        return True
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(name, None)}
+    except OSError:
+        return False
+    return bool(addresses & local_addresses())
+
+
+def local_addresses() -> set:
+    """The addresses of this machine."""
+    out = {"127.0.0.1", "::1"}
+    try:
+        out.update(socket.gethostbyname_ex(socket.gethostname())[2])
+    except OSError:
+        pass
+    return out
 
 
 class ReportError(Exception):

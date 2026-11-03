@@ -37,7 +37,9 @@ def target_endpoint(ctx, host=None, port=None):
     """
     client = (getattr(ctx, "obj", None) or {}).get('client')
     target_host = host or (client.host if client is not None else "127.0.0.1")
-    target_port = int(port) if port else int(client.port if client is not None else 8192)
+    # A port of 0 is a port that is not a port, and the runner says so -
+    # so the test is whether the option was given, not whether it is true.
+    target_port = int(port) if port is not None else int(client.port if client is not None else 8192)
     return target_host, target_port
 
 

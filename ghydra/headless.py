@@ -123,6 +123,18 @@ def stop_file_path(port: int) -> str:
     return os.path.join(os.path.expanduser("~"), ".ghidra", f"headless-{int(port)}.stop")
 
 
+def clear_stop_flag(port: int) -> None:
+    """Remove the stop flag, if there is one.
+
+    A run that was killed before the script could see the flag leaves it
+    behind, and the next run on that port would stop as soon as it starts.
+    """
+    try:
+        os.remove(stop_file_path(port))
+    except OSError:
+        pass
+
+
 def candidate_homes() -> List[str]:
     """The places Ghidra is usually installed."""
     home = os.path.expanduser("~")
@@ -279,6 +291,57 @@ def project_has_program(project_dir: str, project_name: str, program: str) -> bo
     return f":{name}:" in index
 
 
+def provenance_path(project_dir: str, project_name: str) -> str:
+    """The file that remembers which binary a project was built from."""
+    return os.path.join(project_dir, f"{project_name}.ghydra.json")
+
+
+def binary_provenance(binary: str) -> Dict[str, Any]:
+    """What the binary on disk looks like right now."""
+    try:
+        info = os.stat(binary)
+    except OSError:
+        return {}
+    return {
+        "binary": os.path.abspath(binary),
+        "size": int(info.st_size),
+        "mtime": int(info.st_mtime),
+    }
+
+
+def write_provenance(project_dir: str, project_name: str, binary: str) -> None:
+    """Remember the binary the project is being built from."""
+    try:
+        with open(provenance_path(project_dir, project_name), "w",
+                  encoding="utf-8") as handle:
+            json.dump(binary_provenance(binary), handle, indent=2)
+    except OSError:
+        pass
+
+
+def project_is_current(project_dir: str, project_name: str, binary: str) -> bool:
+    """Whether the program in the project is the binary that is on disk now.
+
+    A binary that was rebuilt has the same name and the same path, and the
+    program that is in the project is the old one - so a run would analyse
+    the stored copy again and the addresses would be the ones of a file
+    that is not there any more.
+    """
+    try:
+        with open(provenance_path(project_dir, project_name), "r",
+                  encoding="utf-8") as handle:
+            recorded = json.load(handle)
+    except (OSError, ValueError):
+        # Nothing was recorded, so nothing is known: the binary is imported
+        # again, and the project holds the bytes that are there now.
+        return False
+    now = binary_provenance(binary)
+    if not now:
+        return False
+    return (recorded.get("size") == now.get("size")
+            and recorded.get("mtime") == now.get("mtime"))
+
+
 def build_command(
     launcher: str,
     project_dir: str,
@@ -286,6 +349,7 @@ def build_command(
     binary: str,
     port: int,
     process: bool = False,
+    overwrite: bool = False,
     extra: Optional[List[str]] = None,
 ) -> List[str]:
     """The command that starts the headless run.
@@ -293,12 +357,17 @@ def build_command(
     ``-process`` re-analyses a program that is already in the project;
     ``-import`` puts a new one in. The script runs after the analysis and
     stays in the run, so the run serves the API until it is stopped.
+
+    ``-overwrite`` replaces the program that is in the project with the file
+    that is on disk now - which is what a rebuilt binary needs.
     """
     command = [launcher, project_dir, project_name]
     if process:
         command += ["-process", binary_name(binary)]
     else:
         command += ["-import", binary]
+        if overwrite:
+            command += ["-overwrite"]
     command += ["-postScript", SCRIPT_NAME, f"port={int(port)}"]
     if extra:
         command += list(extra)
@@ -487,15 +556,23 @@ class HeadlessRunner:
         A program that is already in the project is processed again; one
         that is not is imported. Importing a program that is already there
         fails, and the run never reaches the script that starts the server.
+
+        A program that is in the project but is not the file that is on disk
+        now - the binary was rebuilt - is imported again, with the file that
+        is there, so the analysis is of the bytes that exist.
         """
         launcher = launcher_for(self.ghidra_home)
+        in_project = self.program_in_project()
+        current = in_project and project_is_current(
+            self.project_dir, self.project_name, self.binary)
         return build_command(
             launcher,
             self.project_dir,
             self.project_name,
             self.binary,
             self.port,
-            process=self.program_in_project(),
+            process=current,
+            overwrite=in_project and not current,
         )
 
     def environment(self) -> Dict[str, str]:
@@ -531,9 +608,25 @@ class HeadlessRunner:
                 "Stop it first, or start this one on another port.",
                 code="HEADLESS_PORT_IN_USE")
 
+        # A run that is still going is this port's run, even when it has not
+        # bound the API yet - it is analysing. Starting a second one would
+        # overwrite the state of the first, and the first would be left
+        # running with nothing remembering it.
+        remembered = load_state(self.port)
+        if remembered is not None and remembered.pid and process_is_ours(remembered.pid):
+            raise HeadlessError(
+                f"a headless run is already there on port {self.port} "
+                f"(pid {remembered.pid}). Stop it first, or start this one "
+                "on another port.",
+                code="HEADLESS_ALREADY_RUNNING")
+
         check_project_dir(self.project_dir)
         os.makedirs(self.project_dir, exist_ok=True)
         command = self.command()
+        write_provenance(self.project_dir, self.project_name, self.binary)
+        # A stop flag that a killed run left behind would stop this one as
+        # soon as it starts.
+        clear_stop_flag(self.port)
 
         handle = open(self.instance.log, "a", encoding="utf-8", errors="replace")
         handle.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} "
@@ -634,6 +727,7 @@ class HeadlessRunner:
         saved = self.save()
         pid = self.instance.pid or (self.process.pid if self.process else 0)
         if not pid:
+            clear_stop_flag(self.port)
             clear_state(self.port)
             return saved
 
@@ -645,6 +739,7 @@ class HeadlessRunner:
             # alone - its lock may belong to a real owner.
             if not process_alive(pid):
                 self._drop_stale_lock()
+            clear_stop_flag(self.port)
             clear_state(self.port)
             return saved
 
@@ -682,6 +777,10 @@ class HeadlessRunner:
                 except OSError:
                     pass
         self._drop_stale_lock()
+        # The run was killed before it could see the flag, so the flag is
+        # still there - and the next run on this port would stop as soon as
+        # it starts.
+        clear_stop_flag(self.port)
         clear_state(self.port)
         return saved
 

@@ -61,6 +61,7 @@ def start(ctx, binary, port, project_dir, project_name, ghidra_home, java_home, 
     """
     formatter = ctx.obj['formatter']
 
+    runner = None
     try:
         runner = HeadlessRunner(
             binary=binary,
@@ -72,6 +73,10 @@ def start(ctx, binary, port, project_dir, project_name, ghidra_home, java_home, 
         )
         instance = runner.start(timeout=timeout)
     except HeadlessError as exc:
+        # The run that was started is not left behind: the analyzer would
+        # keep the project busy and might start serving later.
+        if runner is not None:
+            runner.stop()
         rich_echo(formatter.format_error(exc), err=True)
         ctx.exit(1)
 

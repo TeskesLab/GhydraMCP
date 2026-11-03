@@ -34,6 +34,14 @@ class HeadlessProjectTests(unittest.TestCase):
             handle.write("")
         return tmp
 
+    @staticmethod
+    def _program_in_project(tmp, project_name, name="cmd.exe"):
+        """A project that holds a program."""
+        index = os.path.join(tmp, f"{project_name}.rep", "idata")
+        os.makedirs(index, exist_ok=True)
+        with open(os.path.join(index, "~index.dat"), "w", encoding="utf-8") as handle:
+            handle.write(f"VERSION=1\r\n/\r\n 00000000:{name}:abc\r\n")
+
     def test_dotted_project_dir_is_refused(self):
         """Ghidra refuses a path element that starts with a dot."""
         with self.assertRaises(headless.HeadlessError) as caught:
@@ -90,13 +98,29 @@ class HeadlessProjectTests(unittest.TestCase):
             runner = headless.HeadlessRunner(
                 binary=binary, project_dir=tmp,
                 ghidra_home=self._fake_home(tmp))
-            index = os.path.join(tmp, f"{runner.project_name}.rep", "idata")
-            os.makedirs(index)
-            with open(os.path.join(index, "~index.dat"), "w", encoding="utf-8") as handle:
-                handle.write("VERSION=1\r\n/\r\n 00000000:cmd.exe:abc\r\n")
+            self._program_in_project(tmp, runner.project_name)
+            headless.write_provenance(tmp, runner.project_name, binary)
             command = runner.command()
             self.assertIn("-process", command)
             self.assertNotIn("-import", command)
+
+    def test_a_program_without_a_record_is_imported_again(self):
+        """A project that does not say where its program came from.
+
+        Nothing is known about the file in it, so the binary is imported
+        again - with the file that is on disk now.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = os.path.join(tmp, "cmd.exe")
+            with open(binary, "w", encoding="utf-8") as handle:
+                handle.write("MZ")
+            runner = headless.HeadlessRunner(
+                binary=binary, project_dir=tmp,
+                ghidra_home=self._fake_home(tmp))
+            self._program_in_project(tmp, runner.project_name)
+            command = runner.command()
+            self.assertIn("-import", command)
+            self.assertIn("-overwrite", command)
 
     def test_the_project_carries_the_path_of_the_binary(self):
         """Two binaries with the same name do not share a project.
@@ -121,6 +145,47 @@ class HeadlessProjectTests(unittest.TestCase):
                 binary=binary, project_dir=tmp, project_name="my-project",
                 ghidra_home=self._fake_home(tmp))
             self.assertEqual(runner.project_name, "my-project")
+
+    def test_a_binary_that_was_rebuilt_is_imported_again(self):
+        """A program that is in the project but is not the file of today.
+
+        The binary was rebuilt: it has the same name and the same path, and
+        the program in the project is the old one. Processing it again would
+        analyse the stored copy, and the addresses would be the ones of a
+        file that is not there any more.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = os.path.join(tmp, "cmd.exe")
+            with open(binary, "w", encoding="utf-8") as handle:
+                handle.write("MZ")
+            runner = headless.HeadlessRunner(
+                binary=binary, project_dir=tmp,
+                ghidra_home=self._fake_home(tmp))
+            self._program_in_project(tmp, runner.project_name)
+            # The project remembers an older file.
+            headless.write_provenance(tmp, runner.project_name, binary)
+            with open(headless.provenance_path(tmp, runner.project_name), "w",
+                      encoding="utf-8") as handle:
+                json.dump({"binary": binary, "size": 1, "mtime": 1}, handle)
+            command = runner.command()
+            self.assertIn("-import", command)
+            self.assertIn("-overwrite", command)
+            self.assertNotIn("-process", command)
+
+    def test_a_program_that_is_current_is_processed_again(self):
+        """The file has not changed, so the program in the project is the one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = os.path.join(tmp, "cmd.exe")
+            with open(binary, "w", encoding="utf-8") as handle:
+                handle.write("MZ")
+            runner = headless.HeadlessRunner(
+                binary=binary, project_dir=tmp,
+                ghidra_home=self._fake_home(tmp))
+            self._program_in_project(tmp, runner.project_name)
+            headless.write_provenance(tmp, runner.project_name, binary)
+            command = runner.command()
+            self.assertIn("-process", command)
+            self.assertNotIn("-overwrite", command)
 
     def test_command_carries_the_port_to_the_script(self):
         """The script is told which port to serve on."""
@@ -198,6 +263,46 @@ class HeadlessStopTests(unittest.TestCase):
                     mock.patch.object(headless, "process_alive", return_value=True):
                 runner.stop()
             self.assertTrue(os.path.exists(lock))
+
+    def test_the_stop_flag_is_removed_after_a_kill(self):
+        """A run that was killed leaves no flag behind.
+
+        The flag would stop the next run on that port as soon as it starts.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            runner.instance.pid = 999999
+            runner.save = lambda: False
+            flag = headless.stop_file_path(runner.port)
+            os.makedirs(os.path.dirname(flag), exist_ok=True)
+            with open(flag, "w", encoding="utf-8") as handle:
+                handle.write("stop")
+            with mock.patch.object(headless, "process_is_ours", return_value=True), \
+                    mock.patch.object(runner, "_child_exited", return_value=False), \
+                    mock.patch("subprocess.run"):
+                runner.stop(timeout=1)
+            self.assertFalse(os.path.exists(flag))
+
+    def test_a_run_that_is_already_there_is_refused(self):
+        """A run that is still analysing keeps the port.
+
+        The API is not bound yet, so the port looks free - but the run is
+        there, and a second one would take its state and leave it
+        untracked.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = os.path.join(tmp, "cmd.exe")
+            with open(binary, "w", encoding="utf-8") as handle:
+                handle.write("MZ")
+            runner = headless.HeadlessRunner(
+                binary=binary, port=65432, project_dir=tmp, ghidra_home=tmp)
+            remembered = headless.HeadlessInstance(port=65432, pid=4242)
+            with mock.patch.object(headless, "load_state", return_value=remembered), \
+                    mock.patch.object(headless, "process_is_ours", return_value=True), \
+                    mock.patch.object(headless, "api_answers", return_value=False):
+                with self.assertRaises(headless.HeadlessError) as caught:
+                    runner.start(timeout=1)
+            self.assertEqual(caught.exception.code, "HEADLESS_ALREADY_RUNNING")
 
 
 class HeadlessDiscoveryTests(unittest.TestCase):
@@ -463,9 +568,50 @@ class ReportCommandTests(unittest.TestCase):
         ctx = self._Ctx({})
         self.assertEqual(report_cli.target_endpoint(ctx), ("127.0.0.1", 8192))
 
+    def test_a_port_of_zero_is_not_replaced(self):
+        """A port of 0 is a port that is not a port, and the runner says so."""
+        client = mock.Mock(host="192.168.0.10", port=8200)
+        ctx = self._Ctx({"client": client})
+        self.assertEqual(report_cli.target_endpoint(ctx, None, 0)[1], 0)
+
 
 class ReportTargetTests(unittest.TestCase):
     """Where the report goes, and what it leaves behind."""
+
+    def test_the_name_of_the_machine_is_local(self):
+        """The machine by its own name is this machine.
+
+        The server binds every interface, so a run started here answers to
+        the name of the machine as well.
+        """
+        import socket
+        self.assertTrue(report_module.is_local_host(socket.gethostname()))
+        self.assertTrue(report_module.is_local_host("localhost"))
+        self.assertFalse(report_module.is_local_host("192.0.2.1"))
+
+    def test_a_run_that_does_not_come_up_is_stopped(self):
+        """The analyzer of a start that failed is not left behind.
+
+        The command reports the failure and exits, but the analyzer was
+        already spawned - and it would keep the project busy and might
+        start serving later.
+        """
+        from click.testing import CliRunner
+        from ghydra.cli import headless as headless_cli
+
+        class _Formatter:
+            def format_error(self, exc):
+                return str(exc)
+
+        runner = mock.Mock()
+        runner.start.side_effect = headless.HeadlessError(
+            "the run ended", code="HEADLESS_DIED")
+        with mock.patch.object(headless_cli, "HeadlessRunner", return_value=runner):
+            result = CliRunner().invoke(
+                headless_cli.headless, ["start", "C:\\bin\\cmd.exe"],
+                obj={"formatter": _Formatter()})
+        self.assertEqual(result.exit_code, 1)
+        runner.stop.assert_called()
 
     def test_a_remote_target_does_not_start_a_run(self):
         """A headless run serves this machine, so a remote target is refused.

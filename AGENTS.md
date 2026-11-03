@@ -562,6 +562,16 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
   `C:\bin\cmd.exe` as the name - so the name of the file comes from `binary_name()`, which knows
   both separators, and the lookup in the index of the project finds the program that is already
   there instead of importing it again.
+- **A project remembers the binary it was built from.** The size and the time of the file are
+  written next to the project (`<project>.ghydra.json`), and a binary that changed is imported
+  again with `-overwrite` - otherwise the run would analyse the stored copy of a file that is not
+  there any more.
+- **A run that is still analysing keeps the port.** It has not bound the API yet, so the port
+  looks free - but the PID that is remembered is checked before anything is started, or a second
+  run would take the state of the first and leave it untracked.
+- **The stop flag is removed after a kill, and before a run starts.** A run that was killed before
+  the script could see the flag leaves it behind, and the next run on that port would stop as soon
+  as it started.
 - **The extension's jar is shaded.** Javalin, Jetty, SLF4J and Kotlin are inside `Ghydra.jar`, so
   the script's bundle finds them; a jar with only the compiled classes fails at runtime with
   `NoClassDefFoundError: io/javalin/http/Handler`. `scripts/make_uberjar.py` does the merge
