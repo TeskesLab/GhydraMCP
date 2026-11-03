@@ -69,6 +69,14 @@ public class GhidraHeadlessServer extends GhidraScript {
         }
         stop.delete();
 
+        // The server is stopped before the script returns. Its threads are
+        // not daemons, and a JVM with a live Jetty does not exit: the run
+        // would stay alive after the analyzer saved the program, and the
+        // launcher would have to kill it - which is the polite stop turned
+        // into the blunt one.
+        handle.stop();
+        System.out.println("[GhydraMCP] HTTP server stopped on port " + port);
+
         System.out.println("[GhydraMCP] HEADLESS STOPPED port=" + port);
         System.out.flush();
     }

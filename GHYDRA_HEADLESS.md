@@ -43,8 +43,19 @@ project, the log and the pid.
 ### `ghydra headless stop`
 
 Ends the run. The program is saved first, so the project holds the analysis and the program can be
-opened in Ghidra later. The answer says whether the save happened: a save the server refused is not
-reported as a save.
+opened in Ghidra later. The answer says whether the analysis is in the project.
+
+**The save is the analyzer's.** In a headless run the API cannot save the program: it is inside the
+transaction of the script that serves the API, and the server refuses with "Unable to lock due to
+active transaction". The analyzer saves the program when the script returns — which is what the
+stop file is for. So the answer is built from the project: Ghidra writes the content of the program
+under `<project>.rep/idata/`, in a file whose name starts with `db.`, and that is the witness of the
+save.
+
+The stop takes about a second. The script stops the server it started, the analyzer saves the
+program and closes the project, and the process exits. The server has to be stopped: the threads of
+a Jetty are not daemons, and a JVM with a live Jetty does not exit — so the run would stay alive
+after the analyzer had saved the program, and the launcher would have to kill it.
 
 The state of the run is erased only while it is still that run's state. A start that was refused
 before the analyzer was launched has no process of its own, and the state on disk belongs to a run
