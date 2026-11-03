@@ -10,6 +10,8 @@ import unittest
 import os
 import sys
 
+from ghydra.testing import instance_is_headless, skip_reason_headless
+
 # Default Ghidra server port
 DEFAULT_PORT = 8192
 
@@ -70,6 +72,10 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
                 self.skipTest("Ghidra server not running or not responding")
         except requests.exceptions.RequestException:
             self.skipTest("Ghidra server not running or not accessible")
+        # A headless instance has no window, and therefore no cursor: the
+        # endpoints that read it answer 503. The tests that need one are
+        # skipped there, instead of being reported as failures.
+        self.headless = instance_is_headless(BASE_URL)
 
     def test_info_endpoint(self):
         """Test the /info endpoint"""
@@ -672,6 +678,8 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
 
     def test_get_current_address(self):
         """Test the /address endpoint"""
+        if getattr(self, "headless", False):
+            self.skipTest(skip_reason_headless(self))
         response = requests.get(f"{BASE_URL}/address")
         self.assertEqual(response.status_code, 200)
         
@@ -700,6 +708,8 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
 
     def test_get_current_function(self):
         """Test the /function endpoint"""
+        if getattr(self, "headless", False):
+            self.skipTest(skip_reason_headless(self))
         response = requests.get(f"{BASE_URL}/function")
         self.assertEqual(response.status_code, 200)
         

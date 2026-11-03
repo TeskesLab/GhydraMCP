@@ -333,6 +333,10 @@ Timeout defaults are intentionally high for large binaries:
 - Decompilation timeout default: `1200s` (`GHYDRA_DECOMP_TIMEOUT`)
 - Incomplete decompilation responses include retry guidance (`retry_recommended`, `suggested_timeout_seconds`)
 
+The bridge answers in **text**, because a table is what an agent reads best. A machine that
+parses the answer can ask for the raw envelope instead with `GHYDRA_MCP_OUTPUT=json` — the
+response then arrives as one JSON document, with the same fields the text is built from.
+
 ## MCP Clients
 
 GhydraMCP works with any MCP-compatible client using **stdio transport**. It has been tested and confirmed working with:

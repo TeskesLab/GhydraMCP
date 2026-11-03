@@ -69,6 +69,12 @@ DEFAULT_DECOMPILATION_TIMEOUT = int(
 
 current_instance_port = DEFAULT_GHIDRA_PORT
 
+# The tools answer in text, because a table is what a human - or an LLM -
+# reads best. A machine wants the envelope itself, so GHYDRA_MCP_OUTPUT=json
+# hands it the raw response as one JSON document. The default stays text:
+# that is the contract the agents are written against.
+RAW_OUTPUT = os.environ.get("GHYDRA_MCP_OUTPUT", "").strip().lower() in ("json", "raw")
+
 # ================= HTTP session =================
 
 _http_local = threading.local()
@@ -2326,6 +2332,17 @@ def text_output(func):
         # If already a string, pass through
         if isinstance(response, str):
             return response
+
+        # GHYDRA_MCP_OUTPUT=json asks for the raw envelope instead of the
+        # text: a machine that parses the answer wants the structure - the
+        # id, the instance, the success flag and the result. The default
+        # stays text, because that is the contract the agents are written
+        # against.
+        if RAW_OUTPUT:
+            try:
+                return json.dumps(response, default=str)
+            except (TypeError, ValueError):
+                return str(response)
 
         # Check for error first
         if isinstance(response, dict) and not response.get("success", True):

@@ -13,9 +13,12 @@ import anyio
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from ghydra.testing import free_data_addresses, instance_is_headless
+
 # Get host and port from environment variables or use defaults
 GHYDRAMCP_TEST_HOST = os.getenv('GHYDRAMCP_TEST_HOST', 'localhost')
 GHYDRAMCP_TEST_PORT = int(os.getenv('GHYDRAMCP_TEST_PORT', '8192'))
+BASE_URL = f"http://{GHYDRAMCP_TEST_HOST}:{GHYDRAMCP_TEST_PORT}"
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -62,10 +65,15 @@ async def assert_standard_mcp_success_response(response_content, expected_result
 
 async def test_bridge():
     """Test the bridge using the MCP client"""
-    # Configure the server parameters
+    # Configure the server parameters.
+    # GHYDRA_MCP_OUTPUT=json asks the bridge for the raw envelope instead of
+    # the text the agents read. The test asserts on the envelope - the id,
+    # the instance, the success flag and the result - so it needs the
+    # structure, not the table.
     server_parameters = StdioServerParameters(
         command=sys.executable,
         args=["bridge_mcp_hydra.py"],
+        env={"GHYDRA_MCP_OUTPUT": "json"},
     )
 
     # Connect to the bridge
@@ -203,9 +211,17 @@ async def test_bridge():
                 decompile_result = await session.call_tool("functions_decompile", arguments={"address": func_address})
                 decompile_data = await assert_standard_mcp_success_response(decompile_result.content, expected_result_type=dict)
 
-                # Check for decompiled code (bridge adds 'decompiled_code' field)
-                assert "decompiled_code" in decompile_data, f"Decompile result missing decompiled_code field: {decompile_data}"
-                assert isinstance(decompile_data["decompiled_code"], str), "decompiled_code should be a string"
+                # Check for decompiled code. The server calls it 'decompilation'
+                # and the bridge adds 'decompiled_text' beside it, so either
+                # name carries the code.
+                decompiled = decompile_data.get("result", {})
+                code = None
+                for key in ("decompiled_text", "decompilation", "ccode", "decompiled"):
+                    if isinstance(decompiled.get(key), str):
+                        code = decompiled[key]
+                        break
+                assert code is not None, f"Decompile result carries no code: {decompile_data}"
+                assert code.strip(), "Decompiled code is empty"
                 logger.info(f"Decompile function result: {decompile_result}")
 
                 # Test functions_disassemble (no port needed)
@@ -214,16 +230,26 @@ async def test_bridge():
                 disassemble_data = json.loads(disassemble_result.content[0].text)
                 assert disassemble_data.get("success") is True, f"Disassemble failed: {disassemble_data}"
 
-                # Check for disassembly text (bridge adds 'disassembly_text' field)
-                assert "result" in disassemble_data and isinstance(disassemble_data["result"], dict), "Disassembly result missing 'result' object"
+                # Check the disassembly. The v3000 API hands the instruction
+                # list back as the result; the older API nested it under
+                # result["instructions"] and the bridge added a text form.
+                assert "result" in disassemble_data, f"Disassembly result missing 'result': {disassemble_data}"
                 result = disassemble_data["result"]
-                assert "disassembly_text" in result, f"Disassembly result missing disassembly_text field: {disassemble_data}"
-                assert isinstance(result["disassembly_text"], str), "disassembly_text should be a string"
-
-                # Check additional function info if present
-                if "name" in result:
-                    assert isinstance(result["name"], str), "function name should be a string"
-                if "address" in result:
+                if isinstance(result, dict):
+                    instructions = result.get("instructions") or []
+                    text = result.get("disassembly_text")
+                else:
+                    instructions = result if isinstance(result, list) else []
+                    text = None
+                assert instructions or (isinstance(text, str) and text.strip()), \
+                    f"Disassembly result carries no listing: {disassemble_data}"
+                if instructions:
+                    first = instructions[0]
+                    assert isinstance(first, dict), "An instruction is not a dict"
+                    for field in ("address", "mnemonic"):
+                        assert field in first, f"An instruction has no {field}: {first}"
+                    assert isinstance(first["address"], str), "The instruction address should be a string"
+                if isinstance(result, dict) and "address" in result:
                     assert isinstance(result["address"], str), "function address should be a string"
 
                 logger.info(f"Disassemble function result: {disassemble_result}")
@@ -316,43 +342,61 @@ async def test_bridge():
                     logger.info(f"Expected failure: comments_set properly rejected bad address via exception: {e}")
 
 
-                # Test ui_get_current_address (no port needed)
-                logger.info("Calling ui_get_current_address tool...")
-                current_addr_result = await session.call_tool("ui_get_current_address")
-                current_addr_data = await assert_standard_mcp_success_response(current_addr_result.content, expected_result_type=dict)
-                assert "address" in current_addr_data.get("result", {}), "Missing address in ui_get_current_address result"
-                assert isinstance(current_addr_data.get("result", {}).get("address", ""), str), "Address should be a string"
-                logger.info(f"Get current address result: {current_addr_result}")
+                # Test ui_get_current_address (no port needed).
+                # A headless instance has no cursor, and the tool answers 503
+                # there - so the test is skipped instead of failing.
+                if not instance_is_headless(BASE_URL):
+                    logger.info("Calling ui_get_current_address tool...")
+                    current_addr_result = await session.call_tool("ui_get_current_address")
+                    current_addr_data = await assert_standard_mcp_success_response(current_addr_result.content, expected_result_type=dict)
+                    assert "address" in current_addr_data.get("result", {}), "Missing address in ui_get_current_address result"
+                    assert isinstance(current_addr_data.get("result", {}).get("address", ""), str), "Address should be a string"
+                    logger.info(f"Get current address result: {current_addr_result}")
 
                 # Test ui_get_current_function (no port needed)
-                logger.info("Calling ui_get_current_function tool...")
-                current_func_result = await session.call_tool("ui_get_current_function")
-                current_func_data = await assert_standard_mcp_success_response(current_func_result.content, expected_result_type=dict)
-                result_data = current_func_data.get("result", {})
-                # Check if function exists at current location, might be null
-                if result_data:
-                    assert "name" in result_data, "Missing name in ui_get_current_function result"
-                    assert "address" in result_data, "Missing address in ui_get_current_function result"
-                    assert "signature" in result_data, "Missing signature in ui_get_current_function result"
-                else:
-                    logger.info("No function found at current UI location.")
-                logger.info(f"Get current function result: {current_func_result}")
+                if not instance_is_headless(BASE_URL):
+                    logger.info("Calling ui_get_current_function tool...")
+                    current_func_result = await session.call_tool("ui_get_current_function")
+                    current_func_data = await assert_standard_mcp_success_response(current_func_result.content, expected_result_type=dict)
+                    result_data = current_func_data.get("result", {})
+                    # Check if function exists at current location, might be null
+                    if result_data:
+                        assert "name" in result_data, "Missing name in ui_get_current_function result"
+                        assert "address" in result_data, "Missing address in ui_get_current_function result"
+                        assert "signature" in result_data, "Missing signature in ui_get_current_function result"
+                    else:
+                        logger.info("No function found at current UI location.")
+                    logger.info(f"Get current function result: {current_func_result}")
 
                 # Test memory_read functionality (no port needed)
                 logger.info(f"Calling memory_read with address: {func_address}")
                 read_memory_result = await session.call_tool("memory_read", arguments={"address": func_address, "length": 16})
                 read_memory_data = json.loads(read_memory_result.content[0].text)
                 assert read_memory_data.get("success") is True, f"Read memory failed: {read_memory_data}"
-                # Bridge simplification puts data directly in response
-                assert "hexBytes" in read_memory_data, "Missing hexBytes in memory_read result"
-                assert "rawBytes" in read_memory_data, "Missing rawBytes in memory_read result"
-                assert read_memory_data.get("address") == func_address, f"Wrong address in memory_read result: {read_memory_data.get('address')}"
+                # The bytes come back in the result: the API calls them
+                # "hex", and the bridge that flattens the result calls them
+                # "hexBytes". Either name carries the bytes.
+                memory = read_memory_data.get("result", read_memory_data)
+                bytes_hex = None
+                for key in ("hex", "hexBytes", "rawBytes"):
+                    if isinstance(memory.get(key), str):
+                        bytes_hex = memory[key]
+                        break
+                assert bytes_hex, f"Missing the bytes in memory_read result: {read_memory_data}"
+                assert read_memory_data.get("address") == func_address or \
+                    memory.get("address") == func_address, \
+                    f"Wrong address in memory_read result: {read_memory_data.get('address')}"
                 logger.info(f"Read memory result: {read_memory_result}")
 
                 # Test data operations (create, rename, change type, delete) using namespaced tools
                 logger.info("Testing data operations...")
-                # Use the specific address provided by the user
-                data_address = "0x20000fa0"
+                # The address has to be one where a data item fits: a fixed
+                # address answers with TRANSACTION_FAILED on a program whose
+                # image base is somewhere else.
+                free_addresses = free_data_addresses(BASE_URL, count=4)
+                data_address = free_addresses[0] if free_addresses else None
+                if not data_address:
+                    raise AssertionError("No free address found for the data operations test")
                 logger.info(f"Using address {data_address} for data operations test.")
 
                 # Wrap the entire data operations block to prevent failures from halting tests

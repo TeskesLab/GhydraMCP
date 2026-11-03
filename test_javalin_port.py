@@ -19,6 +19,8 @@ import unittest
 
 import requests
 
+from ghydra.testing import instance_is_headless
+
 DEFAULT_PORT = int(os.getenv("GHYDRAMCP_TEST_PORT") or "8192")
 BASE = os.getenv("GHYDRAMCP_TEST_HOST") or "localhost"
 URL = f"http://{BASE}:{DEFAULT_PORT}"
@@ -200,11 +202,15 @@ class JavalinPortTests(unittest.TestCase):
     # ---- UI endpoints ---------------------------------------------------
 
     def test_ui_address_endpoint(self):
+        if instance_is_headless(URL):
+            self.skipTest("the cursor endpoints need a window; this instance is headless")
         data = _as_json(requests.get(f"{URL}/address"))
         self.assertIn("address", data["result"])
 
     def test_ui_function_endpoint(self):
         # May 404 if cursor isn't in a function; skip in that case.
+        if instance_is_headless(URL):
+            self.skipTest("the cursor endpoints need a window; this instance is headless")
         r = requests.get(f"{URL}/function")
         if r.status_code == 404:
             self.skipTest("Cursor not in a function")

@@ -369,6 +369,11 @@ The bridge's env vars are a *different, asymmetric* set: `GHYDRA_HYDRA_HOST` > `
 plus `GHYDRA_TIMEOUT`, `GHYDRA_DECOMP_TIMEOUT`, `GHYDRA_ALLOWED_ORIGINS`. **The bridge never reads
 `GHYDRA_PORT`.**
 
+`GHYDRA_MCP_OUTPUT=json` is the exception to the rule that the bridge answers in **text**: it hands
+the raw envelope as one JSON document instead of the formatted table. The default stays text — that
+is the contract the agents are written against — and the mode exists for a machine that parses the
+answer (the MCP test suite drives the bridge this way).
+
 CLI multi-instance selection is in-process only — `ghydra instances use -p` mutates the client, and
 `instances unregister` is a documented no-op.
 
