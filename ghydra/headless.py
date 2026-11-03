@@ -326,6 +326,51 @@ def clear_state(port: int) -> None:
         pass
 
 
+def process_command_line(pid: int) -> str:
+    """The command line of a process, or an empty string.
+
+    It is what tells a headless run apart from any other process: a PID on
+    its own says nothing, because the operating system reuses them.
+    """
+    if not pid:
+        return ""
+    try:
+        if os.name == "nt":
+            command = (
+                "Get-CimInstance Win32_Process -Filter "
+                f"'ProcessId={int(pid)}' | Select-Object -ExpandProperty CommandLine"
+            )
+            output = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True, text=True, timeout=30,
+            ).stdout or ""
+        else:
+            output = subprocess.run(
+                ["ps", "-p", str(int(pid)), "-o", "command="],
+                capture_output=True, text=True, timeout=30,
+            ).stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return output.strip()
+
+
+def process_is_ours(pid: int, marker: str = SCRIPT_NAME) -> bool:
+    """Whether the process is the headless run this launcher started.
+
+    A run that crashed leaves its state file behind, and the operating
+    system hands its PID to somebody else. Signalling that process would
+    stop something that has nothing to do with the analysis, so the command
+    line is read and the process is only ours when it carries the marker of
+    the headless script.
+    """
+    if not pid:
+        return False
+    command = process_command_line(pid)
+    if not command:
+        return False
+    return marker.lower() in command.lower()
+
+
 def process_alive(pid: int) -> bool:
     """Whether the process of a run is still there."""
     if not pid:
@@ -441,6 +486,16 @@ class HeadlessRunner:
             raise HeadlessError(
                 f"no such binary: {self.binary}", code="HEADLESS_NO_FILE")
 
+        # A port that is already served is not this run's port. Starting
+        # anyway would make the wait accept the server that is already
+        # there, and the command would report a run that never bound the
+        # port - and that dies on its own a moment later.
+        if api_answers(self.host, self.port):
+            raise HeadlessError(
+                f"something is already serving the API on {self.host}:{self.port}. "
+                "Stop it first, or start this one on another port.",
+                code="HEADLESS_PORT_IN_USE")
+
         check_project_dir(self.project_dir)
         os.makedirs(self.project_dir, exist_ok=True)
         command = self.command()
@@ -520,10 +575,18 @@ class HeadlessRunner:
         The stop file is the polite way: the script returns, the analyzer
         saves the program and closes the project. The kill is the fallback
         for a run that does not come back.
+
+        A process that is not ours is left alone: the state of a run that
+        died is stale, and the PID it carries may belong to something else
+        entirely by now.
         """
         saved = self.save()
         pid = self.instance.pid or (self.process.pid if self.process else 0)
         if not pid:
+            clear_state(self.port)
+            return saved
+
+        if not process_is_ours(pid):
             clear_state(self.port)
             return saved
 
@@ -553,9 +616,9 @@ class HeadlessRunner:
             except (ProcessLookupError, PermissionError, OSError):
                 pass
             deadline = time.time() + timeout
-            while time.time() < deadline and process_alive(pid):
+            while time.time() < deadline and not self._child_exited(pid):
                 time.sleep(POLL_INTERVAL)
-            if process_alive(pid):
+            if not self._child_exited(pid):
                 try:
                     os.kill(int(pid), signal.SIGKILL)
                 except OSError:
@@ -582,12 +645,24 @@ class HeadlessRunner:
                 pass
 
     def _wait_for_exit(self, pid: int, timeout: int) -> bool:
-        """Whether the run ended on its own, within the timeout."""
+        """Whether the run ended on its own, within the timeout.
+
+        When the child is ours, it is polled rather than looked for: polling
+        reaps it, and a reaped child is gone - while a child that was never
+        reaped stays a zombie, and a zombie is still a process that
+        ``kill(pid, 0)`` finds alive.
+        """
         deadline = time.time() + max(1, int(timeout))
         while time.time() < deadline:
-            if not process_alive(pid):
+            if self._child_exited(pid):
                 return True
             time.sleep(POLL_INTERVAL)
+        return self._child_exited(pid)
+
+    def _child_exited(self, pid: int) -> bool:
+        """Whether the process is gone, reaping it when it is ours."""
+        if self.process is not None and self.process.pid == pid:
+            return self.process.poll() is not None
         return not process_alive(pid)
 
 

@@ -176,6 +176,38 @@ def collect_kuna(binary: str, request: ReportRequest) -> Dict[str, Any]:
     return out
 
 
+def collect_kuna_code(kuna_data: Dict[str, Any], chosen: List[Dict[str, Any]],
+                       limit: int) -> List[Dict[str, Any]]:
+    """The C that Kuna recovered, for the functions that were chosen.
+
+    The report puts the two decompilers side by side, so it needs what each
+    of them says - not only what Ghidra says. The C is read out of the
+    export on disk, the same way the index was.
+    """
+    directory = kuna_data.get("directory", "")
+    if not directory or not kuna_data.get("enabled"):
+        return []
+    records = kuna_functions_by_address(kuna_data.get("index") or [])
+    out: List[Dict[str, Any]] = []
+    for item in chosen[:limit]:
+        address = _hex(item.get("address"))
+        record = records.get(address)
+        if not record:
+            continue
+        try:
+            code = kuna.extract_c(directory, record, 8192)
+        except Exception:
+            code = None
+        if not code:
+            continue
+        out.append({
+            "address": address,
+            "name": record.get("name", ""),
+            "code": str(code),
+        })
+    return out
+
+
 def kuna_functions_by_address(records: List[dict]) -> Dict[str, dict]:
     """The Kuna index, keyed by the address it gives.
 
@@ -296,6 +328,39 @@ def build_annotations(binary: str, program: Dict[str, Any],
     }
 
 
+def _instance_binary(client: GhidraHTTPClient) -> str:
+    """The binary the instance has open, as the instance reports it.
+
+    An empty answer means the instance did not say, and the caller treats
+    that as "no reason to refuse it".
+    """
+    try:
+        response = client.get("/program")
+    except GhidraError:
+        return ""
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return ""
+    return str(result.get("path") or result.get("name") or "")
+
+
+def _serves_binary(client: GhidraHTTPClient, binary: str) -> bool:
+    """Whether the instance has the binary that was asked for.
+
+    The report labels its files with the binary that was asked for and
+    carries the addresses of the program the instance has - so an instance
+    with another file open would produce a report that says one thing and
+    shows another.
+    """
+    actual = _instance_binary(client)
+    if not actual:
+        return True
+    wanted = os.path.basename(binary).lower()
+    if not wanted:
+        return True
+    return os.path.basename(actual).lower() == wanted
+
+
 def build_report(request: ReportRequest) -> Dict[str, Any]:
     """Collect everything and put it together."""
     binary = os.path.abspath(os.path.expanduser(request.binary))
@@ -311,18 +376,27 @@ def build_report(request: ReportRequest) -> Dict[str, Any]:
                 f"no Ghidra instance is serving on {request.host}:{request.port}",
                 code="REPORT_NO_INSTANCE",
             )
-        runner = HeadlessRunner(
-            binary=binary,
-            port=request.port,
-            ghidra_home=request.ghidra_home,
-            java_home=request.java_home,
-            host=request.host,
-        )
         try:
+            runner = HeadlessRunner(
+                binary=binary,
+                port=request.port,
+                ghidra_home=request.ghidra_home,
+                java_home=request.java_home,
+                host=request.host,
+            )
             runner.start(timeout=request.timeout)
         except HeadlessError as exc:
             raise ReportError(str(exc), code=exc.code) from None
         started = True
+    else:
+        # An instance is already serving. It has to be serving THIS binary.
+        client = GhidraHTTPClient(host=request.host, port=request.port, timeout=request.timeout)
+        if not _serves_binary(client, binary):
+            raise ReportError(
+                f"the instance on {request.host}:{request.port} has another binary "
+                f"open, not {os.path.basename(binary)}",
+                code="REPORT_WRONG_BINARY",
+            )
 
     try:
         client = GhidraHTTPClient(host=request.host, port=request.port, timeout=request.timeout)
@@ -335,6 +409,7 @@ def build_report(request: ReportRequest) -> Dict[str, Any]:
         chosen = interesting_functions(ghidra, kuna_data, request.max_annotations)
         addresses = [item["address"] for item in chosen]
         decompiled = decompile_top(client, addresses, request.max_decompile)
+        kuna_code = collect_kuna_code(kuna_data, chosen, request.max_decompile)
 
         report = {
             "generated_at": time.time(),
@@ -343,6 +418,7 @@ def build_report(request: ReportRequest) -> Dict[str, Any]:
             "kuna": {key: value for key, value in kuna_data.items() if key != "index"},
             "functions": chosen,
             "decompiled": decompiled,
+            "kuna_code": kuna_code,
             "annotations": build_annotations(binary, ghidra.get("program") or {}, chosen),
         }
         return report

@@ -822,11 +822,15 @@ def apply_annotations(client: Client, annotations: Dict[str, Any],
 
     modules = parse_modules(client.call_tool("ListModules"))
     module = find_module(modules, binary) if binary else None
-    if module is None and modules:
-        module = modules[0]
     if module is None:
+        # No module matches the binary of the annotations. Falling back to
+        # the first module would translate every address with the base of a
+        # module that has nothing to do with the file - and the comments
+        # would land at addresses that mean nothing. There is no way to
+        # know the base without the module, so the annotations are refused.
         raise X64dbgError(
-            f"no loaded module matches the binary of the annotations ({binary})",
+            f"no loaded module matches the binary of the annotations ({binary}). "
+            "Load it in the debugger before applying them.",
             code="X64DBG_NO_MATCH")
 
     entries = annotations.get("annotations") or []
