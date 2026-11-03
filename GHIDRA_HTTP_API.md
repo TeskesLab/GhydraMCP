@@ -286,6 +286,32 @@ Provides information about the current cursor position and function in Ghidra's 
   }
   ```
 
+### 3.1 Address Inspection
+
+What is at this address, in one call.
+
+- **`GET /inspect/address/{address}`**: Everything the address holds. The pieces were all served
+  elsewhere — the symbol, the containing function, the data, the instruction, the comments and the
+  references — and an agent that landed on an address paid a round trip for each.
+  - The whole traversal happens in one read, so the answer is consistent.
+  - Every field but the address may be null: an address in the middle of nowhere has no symbol, no
+    data and no instruction.
+  ```json
+  // Example Response Fragment
+  "result": {
+    "address": "0x401000",
+    "addressSpace": "ram",
+    "symbol": { "name": "main", "address": "0x401000", "type": "Function", "isPrimary": true },
+    "function": { "name": "main", "address": "0x401000", "signature": "int main(int argc, char** argv)" },
+    "data": null,
+    "instruction": { "address": "0x401000", "bytes": "48895c2408", "mnemonic": "MOV", "operands": "qword ptr [RSP + 0x8], RCX" },
+    "comment": "the entry point",
+    "eolComment": null,
+    "xrefsTo": [ { "fromAddress": "0x402000", "toAddress": "0x401000", "refType": "UNCONDITIONAL_CALL", "fromFunction": "check_input" } ],
+    "xrefsFrom": []
+  }
+  ```
+
 ### 4. Functions
 
 Represents functions within the current program. Function names are **fully-qualified** (FQN), including the namespace path (e.g. `FOM::SharedMemory::ReadUInt`); functions in the global namespace are unprefixed (e.g. `main`).
@@ -331,6 +357,18 @@ Represents functions within the current program. Function names are **fully-qual
   { "name": "Crypto::calculate_checksum", "signature": "uint32_t calculate_checksum(uint8_t* buffer, size_t length)" }
   ```
 - **`DELETE /functions/{address}`**: Delete the function definition at the specified address.
+- **`POST /functions/decompile-batch`**: Decompile a list of functions in one call.
+  - Request body: `{ "targets": ["main", "0x401000"], "timeout": 60 }`. Each target is a function name or an address; `timeout` is the decompilation timeout per function, in seconds (default 60).
+  - The batch is capped at 200 targets.
+  ```json
+  // Example Response Fragment
+  "result": [
+    { "functionName": "main", "functionAddress": "00401000", "decompilation": "int main(void) {...}", "success": true, "errorMessage": null },
+    { "functionName": "nope", "functionAddress": null, "decompilation": null, "success": false, "errorMessage": "No function at that address or with that name" }
+  ],
+  "meta": { "requested": 2, "count": 2 }
+  ```
+  A target that resolves to nothing comes back as a failed entry: the other targets are still decompiled.
 
 #### Function Sub-Resources
 
@@ -732,6 +770,20 @@ Provides information about references to/from addresses.
     - `?from_addr=[address]`: Find references *from* this address or within the function/data at this address.
     - `?type=[CALL|READ|WRITE|DATA|POINTER|...]`: Filter by reference type.
 - **`GET /functions/{address}/xrefs`**: Convenience endpoint, equivalent to `GET /xrefs?to_addr={address}` and potentially `GET /xrefs?from_addr={address}` combined or linked.
+- **`GET /xrefs/to-name/{name}`**: Get the references to a symbol, found by name. The name is URL-encoded.
+  - A bare name matches every namespace; a qualified name (`NS::foo`) matches that namespace only.
+  - A name that resolves to nothing is a 404 with the code `SYMBOL_NOT_FOUND` — not an empty list.
+  ```json
+  // Example Response Fragment
+  "result": {
+    "name": "strlen",
+    "symbols": [ { "name": "strlen", "address": "08001cf0", "type": "Function", "isPrimary": true } ],
+    "references": [
+      { "fromAddress": "08002a40", "toAddress": "08001cf0", "refType": "UNCONDITIONAL_CALL", "fromFunction": "process_data" }
+    ],
+    "total": 1
+  }
+  ```
 
 ### 10. Analysis
 
@@ -802,6 +854,43 @@ Provides access to Ghidra's analysis results.
       },
       // ... more edges
     ]
+  }
+  ```
+
+- **`GET /analysis/callers/{address}`**: The functions that call the function at this address.
+- **`GET /analysis/callees/{address}`**: The functions the function at this address calls.
+  ```json
+  // Example Response Fragment
+  "result": [
+    { "name": "main", "address": "0x401000", "signature": "int main(int argc, char** argv)" }
+  ]
+  ```
+
+- **`GET /analysis/call-path`**: How one function reaches another. The call graph says who calls
+  whom; this says which chain of calls goes from A to B.
+  - Query Parameters:
+    - `?from=[address_or_name]`: Where the path starts (required).
+    - `?to=[address_or_name]`: Where the path must end (required).
+    - `?max_depth=[int]`: How many hops the search may take (default: 8, at most 16).
+  - Each end is an address or a function name; an address inside a function body resolves to the
+    function that holds it.
+  - The path returned is the **shortest** one Ghidra knows about. When there is none, the answer
+    says how many functions were explored and why the search gave up.
+  ```json
+  // Example Response
+  "result": {
+    "found": true,
+    "depth": 2,
+    "maxDepth": 8,
+    "from": { "name": "main", "address": "00401000" },
+    "to": { "name": "strcmp", "address": "08001cf0" },
+    "path": [
+      { "name": "main", "address": "00401000" },
+      { "name": "check_input", "address": "00401100" },
+      { "name": "strcmp", "address": "08001cf0" }
+    ],
+    "visited": 14,
+    "reason": null
   }
   ```
 

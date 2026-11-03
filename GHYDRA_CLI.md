@@ -178,6 +178,59 @@ ghydra functions set-comment --address 0x401000 --comment "Main entry point"
 > `update-variable`, which required `--address` and used `--variable-name`/`--new-data-type`,
 > was removed in 3.0.0 — use `set-variable`, which also accepts `--name`.)
 
+### The four composed commands
+
+Four commands that answer a question in one call, where the pieces were all there and the agent
+paid a call for each. They close the four native gaps against the REA — the comparison is in
+[REA_PARITY.md](REA_PARITY.md).
+
+```bash
+# Decompile a list of functions in one call
+ghydra functions decompile-batch --targets '["main","0x401000"]'
+ghydra functions decompile-batch --targets main,strcmp
+
+# The references to a name, resolved and collected
+ghydra xrefs find-by-name strlen
+ghydra xrefs find-by-name "FOM::Read"
+
+# What is at this address: the symbol, the function, the data, the code,
+# the comments and the references on both sides
+ghydra inspect-address 0x140001008
+
+# How does A reach B
+ghydra analysis trace-call-path --from main --to strcmp
+ghydra analysis trace-call-path --from 0x401000 --to 0x402000 --max-depth 12
+```
+
+| Command | Endpoint | Notes |
+| --- | --- | --- |
+| `ghydra functions decompile-batch --targets` | `POST /functions/decompile-batch` | the targets are JSON text, a comma-separated list or one name; a target that resolves to nothing is reported as a failed entry and the rest are still decompiled |
+| `ghydra xrefs find-by-name NAME` | `GET /xrefs/to-name/{name}` | a bare name matches every namespace, a qualified one matches that namespace; a name that resolves to nothing is a 404 |
+| `ghydra inspect-address ADDRESS` | `GET /inspect/address/{address}` | one traversal, one answer |
+| `ghydra analysis trace-call-path --from --to` | `GET /analysis/call-path` | the shortest path Ghidra knows about; `--max-depth` is at most 16 |
+
+And four more that came out of the same comparison with the REA — the composed calls:
+
+```bash
+# Who calls this function, and what does it call?
+ghydra analysis callers 0x140001008
+ghydra analysis callees 0x1400373f0
+
+# Everything about one function: the decompilation, the callers, the callees, the references
+ghydra functions analyze --address 0x140001008
+ghydra functions analyze --name main
+
+# What is this binary: what it is, how it is laid out, how much is in it, what it imports
+ghydra analysis overview
+```
+
+| Command | Endpoint | Notes |
+| --- | --- | --- |
+| `ghydra analysis callers ADDR` | `GET /analysis/callers/{address}` | the functions that reach this one |
+| `ghydra analysis callees ADDR` | `GET /analysis/callees/{address}` | the functions this one calls |
+| `ghydra functions analyze --name/--address` | several | one call that gathers the function, its decompilation, its callers, its callees and its references |
+| `ghydra analysis overview` | several | the program, its segments, its counts and its imports |
+
 ### Raw Image Commands
 
 Define raw image data so a captured framebuffer renders inline in the Listing view. Added in 3.0.0.

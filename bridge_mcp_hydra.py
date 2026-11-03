@@ -1442,6 +1442,319 @@ def format_dataflow(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def _xref_line(xref: dict) -> str:
+    """One cross-reference, as a line of text."""
+    from_addr = xref.get("fromAddress") or xref.get("from_addr", "???")
+    to_addr = xref.get("toAddress") or xref.get("to_addr", "")
+    ref_type = xref.get("refType", "???")
+    from_func = xref.get("fromFunction") or ""
+    if isinstance(from_func, dict):
+        from_func = from_func.get("name", "")
+
+    line = f"{from_addr}"
+    if to_addr:
+        line += f" -> {to_addr}"
+    line += f"  {ref_type:<18}"
+    if from_func:
+        line += f"  from {from_func}"
+    return line
+
+
+def format_batch_decompile(response: dict, **kwargs) -> str:
+    """Format a batch decompilation as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    items = response.get("result", [])
+    if not isinstance(items, list):
+        return "No decompilation results returned."
+
+    done = [i for i in items if isinstance(i, dict) and i.get("success")]
+    failed = [i for i in items if isinstance(i, dict) and not i.get("success")]
+
+    lines = [f"Batch decompile ({len(done)} of {len(items)} succeeded):", ""]
+
+    for item in done:
+        name = item.get("functionName") or item.get("function_name") or "???"
+        address = item.get("functionAddress") or item.get("function_address") or ""
+        code = item.get("decompilation") or ""
+        lines.append(f"=== {name}  {address}  ({len(code.splitlines())} lines) ===")
+        lines.append(code.rstrip())
+        lines.append("")
+
+    if failed:
+        lines.append("Failed:")
+        for item in failed:
+            name = item.get("functionName") or item.get("function_name") or "???"
+            reason = item.get("errorMessage") or item.get("error_message") or "unknown error"
+            lines.append(f"  {name}: {reason}")
+
+    return "\n".join(lines)
+
+
+def format_xrefs_by_name(response: dict, name: str | None = None, **kwargs) -> str:
+    """Format the references to a name as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    if not isinstance(result, dict):
+        return "No references found."
+
+    symbols = result.get("symbols") or []
+    references = result.get("references") or []
+    total = result.get("total", len(references))
+    label = result.get("name") or name or "?"
+
+    lines = [f"References to '{label}' ({len(references)} of {total}):", ""]
+
+    for symbol in symbols:
+        if not isinstance(symbol, dict):
+            continue
+        lines.append(f"  symbol: {symbol.get('name', '???')}  {symbol.get('address', '')}"
+                     f"  {symbol.get('type', '')}")
+
+    if not references:
+        lines.append("  (no references)")
+
+    for xref in references:
+        if isinstance(xref, dict):
+            lines.append("  " + _xref_line(xref))
+
+    return "\n".join(lines)
+
+
+def format_address_context(response: dict, **kwargs) -> str:
+    """Format what an address is, as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    if not isinstance(result, dict):
+        return "No address context returned."
+
+    address = result.get("address", "???")
+    symbol = result.get("symbol") or {}
+    function = result.get("function") or {}
+    data = result.get("data") or {}
+    instruction = result.get("instruction") or {}
+
+    lines = [f"Address {address} ({result.get('addressSpace', '?')}):"]
+
+    if symbol:
+        lines.append(f"  symbol:   {symbol.get('name', '???')}  ({symbol.get('type', '')})")
+
+    if function:
+        lines.append(f"  function: {function.get('name', '???')}  {function.get('address', '')}")
+        signature = function.get("signature")
+        if signature:
+            lines.append(f"            {signature}")
+
+    if instruction:
+        lines.append(f"  code:     {instruction.get('address', '')}  "
+                     f"{instruction.get('bytes', '')}  "
+                     f"{instruction.get('mnemonic', '')} {instruction.get('operands', '')}")
+
+    if data:
+        label = data.get("label") or ""
+        lines.append(f"  data:     {data.get('dataType', '???')}  "
+                     f"len={data.get('length', '?')}  {label}")
+
+    comment = result.get("comment")
+    if comment:
+        lines.append(f"  comment:  {comment}")
+
+    eol_comment = result.get("eolComment")
+    if eol_comment:
+        lines.append(f"  eol:      {eol_comment}")
+
+    xrefs_to = result.get("xrefsTo") or []
+    xrefs_from = result.get("xrefsFrom") or []
+
+    lines.append(f"  referenced by ({len(xrefs_to)}):")
+    for xref in xrefs_to:
+        if isinstance(xref, dict):
+            lines.append("    " + _xref_line(xref))
+
+    lines.append(f"  references ({len(xrefs_from)}):")
+    for xref in xrefs_from:
+        if isinstance(xref, dict):
+            lines.append("    " + _xref_line(xref))
+
+    return "\n".join(lines)
+
+
+def format_call_path(response: dict, **kwargs) -> str:
+    """Format a call path as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    if not isinstance(result, dict):
+        return "No call path returned."
+
+    source = result.get("from") or {}
+    target = result.get("to") or {}
+    source_name = source.get("name", "???")
+    target_name = target.get("name", "???")
+
+    if not result.get("found"):
+        reason = result.get("reason") or "no path found"
+        return f"No call path from {source_name} to {target_name}: {reason}"
+
+    path = result.get("path") or []
+    lines = [f"Call path from {source_name} to {target_name} "
+             f"({result.get('depth', '?')} hop(s), "
+             f"{result.get('visited', '?')} function(s) explored):", ""]
+
+    for index, fn in enumerate(path):
+        if not isinstance(fn, dict):
+            continue
+        arrow = "  " if index == 0 else "-> "
+        lines.append(f"  {arrow}{fn.get('name', '???')}  {fn.get('address', '')}")
+
+    return "\n".join(lines)
+
+
+def format_callers(response: dict, **kwargs) -> str:
+    """Format the callers of a function as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    items = response.get("result", [])
+    if not isinstance(items, list):
+        return "No callers found."
+
+    if not items:
+        return "Nobody calls it."
+
+    lines = [f"Callers ({len(items)}):", ""]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        lines.append(f"  {item.get('name', '???')}  {item.get('address', '')}")
+        signature = item.get("signature")
+        if signature:
+            lines.append(f"    {signature}")
+
+    return "\n".join(lines)
+
+
+def format_callees(response: dict, **kwargs) -> str:
+    """Format the callees of a function as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    items = response.get("result", [])
+    if not isinstance(items, list):
+        return "No callees found."
+
+    if not items:
+        return "It calls nothing."
+
+    lines = [f"Callees ({len(items)}):", ""]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        lines.append(f"  {item.get('name', '???')}  {item.get('address', '')}")
+        signature = item.get("signature")
+        if signature:
+            lines.append(f"    {signature}")
+
+    return "\n".join(lines)
+
+
+def format_function_analysis(response: dict, **kwargs) -> str:
+    """Format everything about one function as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    if not isinstance(result, dict):
+        return "Nothing to analyse."
+
+    function = result.get("function") or {}
+    lines = [f"{function.get('name', '???')}  {function.get('address', '')}"]
+
+    signature = function.get("signature")
+    if signature:
+        lines.append(f"  {signature}")
+
+    code = result.get("decompilation")
+    if code:
+        lines.append("")
+        lines.append(code.rstrip())
+    else:
+        reason = result.get("decompileError")
+        lines.append("")
+        lines.append(f"(no decompilation{f': {reason}' if reason else ''})")
+
+    for label, key in (("Callers", "callers"), ("Callees", "callees"), ("References", "xrefs")):
+        items = result.get(key) or []
+        lines.append("")
+        lines.append(f"{label} ({len(items)}):")
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if key == "xrefs":
+                lines.append("  " + _xref_line(item))
+            else:
+                lines.append(f"  {item.get('name', '???')}  {item.get('address', '')}")
+
+    return "\n".join(lines)
+
+
+def format_overview(response: dict, **kwargs) -> str:
+    """Format the overview of the loaded binary as plain text"""
+    if not response.get("success", False):
+        return format_error(response)
+
+    result = response.get("result", {})
+    if not isinstance(result, dict):
+        return "No overview available."
+
+    program = result.get("program") or {}
+    statistics = result.get("statistics") or {}
+
+    lines = [f"{program.get('name', '?')}"]
+    if program.get("path"):
+        lines.append(f"  path:     {program['path']}")
+    lines.append(f"  language: {program.get('language', '?')}")
+    lines.append(f"  base:     {program.get('imageBase', '?')}")
+
+    counts = []
+    if statistics.get("functions") is not None:
+        counts.append(f"{statistics['functions']} functions")
+    if statistics.get("symbols") is not None:
+        counts.append(f"{statistics['symbols']} symbols")
+    if statistics.get("imports") is not None:
+        counts.append(f"{statistics['imports']} imports")
+    if statistics.get("memoryBlocks") is not None:
+        counts.append(f"{statistics['memoryBlocks']} blocks")
+    if counts:
+        lines.append(f"  holds:    {', '.join(counts)}")
+
+    segments = result.get("segments") or []
+    if segments:
+        lines.append("")
+        lines.append(f"Segments ({len(segments)}):")
+        for segment in segments:
+            if not isinstance(segment, dict):
+                continue
+            lines.append(f"  {segment.get('name', '?'):<10} {segment.get('start', '?')}"
+                         f" - {segment.get('end', '?')}  {segment.get('size', '?')} bytes")
+
+    imports = result.get("imports") or []
+    if imports:
+        lines.append("")
+        lines.append(f"Imports ({len(imports)}):")
+        for item in imports:
+            if isinstance(item, dict):
+                lines.append(f"  {item.get('name', '?')}")
+
+    return "\n".join(lines)
+
+
 def format_structs_list(response: dict, offset: int = 0, **kwargs) -> str:
     """Format struct list as plain text"""
     if not response.get("success", False):
@@ -2263,9 +2576,12 @@ FORMATTERS = {
     "functions_get_next": format_functions_list,
     "functions_get_prev": format_functions_list,
     "functions_decompile": format_decompile,
+    "functions_batch_decompile": format_batch_decompile,
+    "functions_analyze": format_function_analysis,
     "functions_disassemble": format_disassembly,
     "functions_get_variables": format_variables,
     "xrefs_list": format_xrefs,
+    "xrefs_find_by_name": format_xrefs_by_name,
     "scalars_search": format_scalars,
     "data_list": format_data_list,
     "data_list_strings": format_strings,
@@ -2278,6 +2594,9 @@ FORMATTERS = {
     "structs_get": format_struct_info,
     "analysis_get_callgraph": format_callgraph,
     "analysis_get_dataflow": format_dataflow,
+    "analysis_trace_call_path": format_call_path,
+    "analysis_callers": format_callers,
+    "analysis_callees": format_callees,
     "analysis_status": format_generic_dict,
     "ui_get_current_address": format_generic_dict,
     "ui_get_current_function": format_function_info,
@@ -2286,6 +2605,7 @@ FORMATTERS = {
     "projects_get": format_generic_dict,
     "programs_list": format_generic_list,
     "programs_get": format_generic_dict,
+    "programs_overview": format_overview,
     "project_info": format_project_info,
     "project_list_files": format_project_files,
     "classes_list": format_classes_list,
@@ -2320,6 +2640,7 @@ FORMATTERS = {
     "x64dbg_target": format_x64dbg_target,
     "x64dbg_breakpoint_at": format_x64dbg_breakpoint_at,
     "x64dbg_go_to": format_x64dbg_go_to,
+    "inspect_address": format_address_context,
 }
 
 
@@ -3650,6 +3971,179 @@ def functions_decompile(name: str | None = None, address: str | None = None,
 
     return simplified
 
+
+def _targets_text(value: Any) -> Any:
+    """Take a list of targets as one piece of text.
+
+    A client that hands over a nested list flattens it, and every value of
+    the list arrives as a string. The text is the form nothing gets in the
+    way of, so the schema asks for it; a list is still accepted, for the
+    clients that deliver one.
+    """
+    if isinstance(value, (list, tuple, dict)):
+        return json.dumps(value)
+    return value
+
+
+# The targets of a batch, as JSON text. The schema says string on purpose.
+TargetsText = Annotated[str, BeforeValidator(_targets_text)]
+
+
+def _parse_targets(text: str) -> list[str]:
+    """The targets of a batch, from JSON text, from a bare name, or from a list.
+
+    Args:
+        text: JSON text ('["main", "0x401000"]'), a single name, several names
+              separated by commas or newlines, or the list itself.
+
+    Returns:
+        list[str]: The targets, in order, without the empty ones.
+
+    Raises:
+        ValueError: when the text is JSON that is not a list of names.
+    """
+    if isinstance(text, (list, tuple)):
+        return [str(item).strip() for item in text if str(item).strip()]
+
+    raw = str(text).strip()
+    if not raw:
+        return []
+
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        # Not JSON: a single name, or several separated by commas or newlines.
+        return [part.strip() for part in re.split(r"[,\n]", raw) if part.strip()]
+
+    if isinstance(parsed, list):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    if isinstance(parsed, str):
+        return [parsed.strip()] if parsed.strip() else []
+    raise ValueError("the targets must be a list of function names or addresses")
+
+
+@mcp.tool()
+@text_output
+def functions_batch_decompile(targets: TargetsText,
+                              timeout: int = DEFAULT_DECOMPILATION_TIMEOUT,
+                              port: int | None = None) -> dict:
+    """Decompile a list of functions in one call
+
+    Args:
+        targets: The functions to decompile, as JSON text (e.g. '["main","0x401000"]').
+                 A bare name or a comma-separated list is accepted too. Each target
+                 is a function name or an address.
+        timeout: Decompilation timeout per function, in seconds (default: 60)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: One entry per target, with the decompiled code or the reason it
+              failed. A target that resolves to nothing does not stop the batch.
+    """
+    port = _get_instance_port(port)
+
+    try:
+        wanted = _parse_targets(targets)
+    except ValueError as e:
+        return {
+            "success": False,
+            "error": {
+                "code": "INVALID_TARGETS",
+                "message": str(e)
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    if not wanted:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "The targets parameter is required — a list of function names or addresses"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    response = safe_post(port, "functions/decompile-batch",
+                         {"targets": wanted, "timeout": timeout})
+    return simplify_response(response)
+
+
+@mcp.tool()
+@text_output
+def functions_analyze(name: str | None = None, address: str | None = None,
+                      xref_limit: int = 50, port: int | None = None) -> dict:
+    """Everything about one function, in one call
+
+    The pieces were all there - the decompilation, the callers, the callees,
+    the references - and an agent that had just found a function paid a
+    round trip for each one.
+
+    Args:
+        name: The function name (fully-qualified)
+        address: The function address (hex)
+        xref_limit: How many references to return (default: 50)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The function, its decompilation, its callers, its callees and
+              the references to it
+    """
+    if not name and not address:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "Either name or address is required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    port = _get_instance_port(port)
+
+    if address:
+        info = safe_get(port, f"functions/{quote(address)}")
+    else:
+        info = safe_get(port, f"functions/by-name/{quote(name)}")
+
+    if not info.get("success", False):
+        return info
+
+    function = info.get("result") or {}
+    resolved = function.get("address") or address
+    if not resolved:
+        return {
+            "success": False,
+            "error": {
+                "code": "FUNCTION_NOT_FOUND",
+                "message": f"The function '{name or address}' has no address"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    decompile = safe_get(port, f"functions/{quote(resolved)}/decompile")
+    callers = safe_get(port, f"analysis/callers/{quote(resolved)}")
+    callees = safe_get(port, f"analysis/callees/{quote(resolved)}")
+    xrefs = safe_get(port, "xrefs", {"to_addr": resolved, "limit": xref_limit})
+
+    decompiled = decompile.get("result") or {}
+
+    def _result_of(response: dict) -> list:
+        payload = response.get("result")
+        return payload if isinstance(payload, list) else []
+
+    return {
+        "success": True,
+        "result": {
+            "function": function,
+            "decompilation": decompiled.get("decompilation"),
+            "decompileError": decompiled.get("errorMessage"),
+            "callers": _result_of(callers),
+            "callees": _result_of(callees),
+            "xrefs": _result_of(xrefs),
+        }
+    }
+
 @mcp.tool()
 @text_output
 def functions_disassemble(name: str | None = None, address: str | None = None, offset: int = 0, limit: int = 100, port: int | None = None) -> dict:
@@ -4137,14 +4631,54 @@ def xrefs_list(to_addr: str | None = None, from_addr: str | None = None, type: s
 
     response = safe_get(port, "xrefs", params)
     simplified = simplify_response(response)
-    
+
     # Ensure we maintain pagination metadata
     if isinstance(simplified, dict) and "error" not in simplified:
         simplified.setdefault("size", len(simplified.get("result", [])))
         simplified.setdefault("offset", offset)
         simplified.setdefault("limit", limit)
-    
+
     return simplified
+
+
+@mcp.tool()
+@text_output
+def xrefs_find_by_name(name: str, offset: int = 0, limit: int = 100,
+                       port: int | None = None) -> dict:
+    """Find the cross-references to a symbol, by name
+
+    The xrefs are addressed by address, so an agent holding a name had to
+    resolve it first and then ask again. This does both in one call.
+
+    Args:
+        name: The symbol name (e.g. "strlen"). A bare name matches every
+              namespace; a qualified name ("NS::strlen") matches that one.
+        offset: Pagination offset (default: 0)
+        limit: Maximum references to return (default: 100)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The symbols that carry the name, and the references to them
+    """
+    if not name:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "The name parameter is required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    port = _get_instance_port(port)
+
+    params = {
+        "offset": offset,
+        "limit": limit
+    }
+
+    response = safe_get(port, f"xrefs/to-name/{quote(name)}", params)
+    return simplify_response(response)
 
 # Data tools
 @mcp.tool()
@@ -4678,6 +5212,106 @@ def analysis_get_callgraph(name: str | None = None, address: str | None = None, 
         }
 
     response = safe_get(port, "analysis/callgraph", params)
+    return simplify_response(response)
+
+
+@mcp.tool()
+@text_output
+def analysis_trace_call_path(from_function: str, to_function: str,
+                             max_depth: int = 8, port: int | None = None) -> dict:
+    """Trace how one function reaches another
+
+    The call graph says who calls whom; this answers the question an agent
+    asks when it holds the two ends: how does A reach B.
+
+    Args:
+        from_function: Where the path starts — a function name or an address
+        to_function: Where the path must end — a function name or an address
+        max_depth: Maximum number of hops to look for (default: 8, the server
+            accepts at most 16)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The shortest call path found, or the reason there is none
+    """
+    if not from_function or not to_function:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "Both from_function and to_function are required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    port = _get_instance_port(port)
+
+    params = {
+        "from": from_function,
+        "to": to_function,
+        "max_depth": max_depth
+    }
+
+    response = safe_get(port, "analysis/call-path", params)
+    return simplify_response(response)
+
+
+@mcp.tool()
+@text_output
+def analysis_callers(address: str, port: int | None = None) -> dict:
+    """Get the functions that call this function
+
+    The call graph says who calls whom; this answers the one question an
+    agent asks about a single address: who reaches it.
+
+    Args:
+        address: The function address (hex)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The functions that call it
+    """
+    if not address:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "The address parameter is required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    port = _get_instance_port(port)
+
+    response = safe_get(port, f"analysis/callers/{quote(address)}")
+    return simplify_response(response)
+
+
+@mcp.tool()
+@text_output
+def analysis_callees(address: str, port: int | None = None) -> dict:
+    """Get the functions this function calls
+
+    Args:
+        address: The function address (hex)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The functions it calls
+    """
+    if not address:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "The address parameter is required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    port = _get_instance_port(port)
+
+    response = safe_get(port, f"analysis/callees/{quote(address)}")
     return simplify_response(response)
 
 @mcp.tool()
@@ -6919,6 +7553,55 @@ def programs_get(program_id: str = "current", port: int | None = None) -> dict:
 
 @mcp.tool()
 @text_output
+def programs_overview(import_limit: int = 25, port: int | None = None) -> dict:
+    """An overview of the loaded binary
+
+    What it is, how it is laid out, how much is in it, and what it pulls
+    in - the summary a triage pass starts from, instead of four calls.
+
+    Args:
+        import_limit: How many imports to list (default: 25)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The program, its segments, its counts and its imports
+    """
+    port = _get_instance_port(port)
+
+    program = safe_get(port, "program")
+    if not program.get("success", False):
+        # The program is the part the caller asked for: without it there is
+        # no overview to give.
+        return program
+
+    segments = safe_get(port, "segments")
+    imports = safe_get(port, "symbols/imports", {"limit": import_limit})
+
+    def _list_of(response: dict) -> list:
+        payload = response.get("result")
+        return payload if isinstance(payload, list) else []
+
+    meta = imports.get("meta") or {}
+    statistics = (program.get("result") or {}).get("statistics") or {}
+
+    return {
+        "success": True,
+        "result": {
+            "program": program.get("result") or {},
+            "segments": _list_of(segments),
+            "imports": _list_of(imports),
+            "statistics": {
+                "functions": statistics.get("functionCount"),
+                "symbols": statistics.get("symbolCount"),
+                "memoryBlocks": statistics.get("memoryBlockCount"),
+                "imports": meta.get("total"),
+            }
+        }
+    }
+
+
+@mcp.tool()
+@text_output
 def programs_delete(program_id: str = "current", port: int | None = None) -> dict:
     """Delete/close a program by program ID or 'current'
 
@@ -7032,6 +7715,41 @@ def analysis_status(port: int | None = None) -> dict:
 def _analysis_run_legacy(background: bool = True, port: int | None = None) -> dict:
     """Legacy helper retained for backward compatibility inside this module."""
     return analysis_run(port=port, background=background)
+
+
+# ================= Inspect =================
+
+@mcp.tool()
+@text_output
+def inspect_address(address: str, port: int | None = None) -> dict:
+    """Say what an address is, in one call
+
+    An agent that lands on an address has to ask four questions: what is
+    called here, what function is it in, what does it hold, and who refers
+    to it. This answers all four at once.
+
+    Args:
+        address: The address in hex format (e.g. "0x140001008")
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The symbol, the containing function, the data, the instruction,
+              the comments and the references on both sides of the address
+    """
+    if not address:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "The address parameter is required"
+            },
+            "timestamp": int(time.time() * 1000)
+        }
+
+    port = _get_instance_port(port)
+
+    response = safe_get(port, f"inspect/address/{quote(address)}")
+    return simplify_response(response)
 
 
 # ================= Classes, Symbols, Segments, Namespaces, Variables, DataTypes =================

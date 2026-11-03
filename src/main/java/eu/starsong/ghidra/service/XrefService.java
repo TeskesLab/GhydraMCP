@@ -1,5 +1,6 @@
 package eu.starsong.ghidra.service;
 
+import eu.starsong.ghidra.dto.SymbolDto;
 import eu.starsong.ghidra.dto.XrefDto;
 import eu.starsong.ghidra.util.GhidraSwing;
 import eu.starsong.ghidra.util.GhidraUtil;
@@ -8,10 +9,14 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceIterator;
 import ghidra.program.model.symbol.ReferenceManager;
+import ghidra.program.model.symbol.Symbol;
+import ghidra.program.model.symbol.SymbolTable;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Service for cross-reference operations.
@@ -110,6 +115,64 @@ public class XrefService {
         return getReferencesFrom(program, addressStr).stream()
             .filter(xref -> xref.refType().contains("CALL"))
             .toList();
+    }
+
+    /**
+     * The symbols that carry a name, and the references to each of them.
+     *
+     * @param symbols    every symbol found with that name, in any namespace
+     * @param references the references to those symbols, de-duplicated
+     */
+    public record NameReferences(List<SymbolDto> symbols, List<XrefDto> references) {
+    }
+
+    /**
+     * Get the references to a symbol, found by name.
+     *
+     * <p>The xrefs are addressed by address, so an agent holding a name had to
+     * resolve it first and then ask again — two calls, and the first one to
+     * guess the endpoint. This does both: it finds the symbols with that name
+     * in any namespace and collects the references to each.
+     *
+     * <p>A qualified name ("NS::foo") matches the qualified name; a bare one
+     * matches the simple name in every namespace.
+     */
+    public NameReferences getReferencesToName(Program program, String name) {
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("A symbol name is required");
+        }
+        String requested = name.trim();
+        boolean qualified = requested.contains("::");
+        String simple = qualified ? requested.substring(requested.lastIndexOf("::") + 2) : requested;
+
+        return GhidraSwing.runRead(() -> {
+            SymbolTable symbolTable = program.getSymbolTable();
+            ReferenceManager refMgr = program.getReferenceManager();
+
+            List<SymbolDto> symbols = new ArrayList<>();
+            List<XrefDto> references = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+
+            var iterator = symbolTable.getSymbols(simple);
+            while (iterator.hasNext()) {
+                Symbol symbol = iterator.next();
+                if (qualified && !requested.equals(symbol.getName(true))) {
+                    continue;
+                }
+                symbols.add(SymbolDto.from(symbol));
+
+                var refs = refMgr.getReferencesTo(symbol.getAddress());
+                while (refs.hasNext()) {
+                    XrefDto xref = XrefDto.from(refs.next(), program);
+                    String key = xref.fromAddress() + "->" + xref.toAddress() + ":" + xref.refType();
+                    if (seen.add(key)) {
+                        references.add(xref);
+                    }
+                }
+            }
+
+            return new NameReferences(symbols, references);
+        });
     }
 
     /**

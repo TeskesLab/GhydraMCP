@@ -26,6 +26,15 @@ import java.util.Map;
 
 public class FunctionResource implements Resource {
 
+    /**
+     * How many functions one batch may ask for.
+     *
+     * <p>Each decompilation is a real decompilation: a batch of a thousand
+     * would hold the request thread for minutes, and the caller can always
+     * ask for the rest.
+     */
+    private static final int MAX_BATCH_TARGETS = 200;
+
     private final FunctionService functionService;
     private final DecompilerService decompilerService;
 
@@ -48,6 +57,7 @@ public class FunctionResource implements Resource {
         app.patch("/functions/{address}", ctx -> update(contextFactory.apply(ctx)));
         app.delete("/functions/{address}", ctx -> delete(contextFactory.apply(ctx)));
         app.get("/functions/{address}/decompile", ctx -> decompile(contextFactory.apply(ctx)));
+        app.post("/functions/decompile-batch", ctx -> decompileBatch(contextFactory.apply(ctx)));
         app.get("/functions/{address}/disassembly", ctx -> disassembly(contextFactory.apply(ctx)));
         app.get("/functions/{address}/variables", ctx -> variables(contextFactory.apply(ctx)));
         app.patch("/functions/{address}/variables/{varName}", ctx -> updateVariable(contextFactory.apply(ctx)));
@@ -147,6 +157,47 @@ public class FunctionResource implements Resource {
         ctx.json(Response.ok(ctx.ctx(), ctx.port(), result)
             .self("/functions/{}/decompile", address)
             .link("function", "/functions/{}", address)
+            .build());
+    }
+
+    /**
+     * POST /functions/decompile-batch - Decompile a list of functions in one call
+     *
+     * <p>Each target is an address or a function name. A target that resolves
+     * to nothing comes back as a failed entry, so one wrong name does not
+     * cost the whole batch.
+     */
+    private void decompileBatch(GhidraContext ctx) {
+        var program = ctx.requireProgram();
+        BatchDecompileRequest req;
+        try {
+            req = ctx.bodyAsClass(BatchDecompileRequest.class);
+        } catch (Exception e) {
+            req = null;
+        }
+        if (req == null) {
+            throw new IllegalArgumentException(
+                "targets is required — a list of function names or addresses");
+        }
+
+        List<String> targets = req.targets != null ? req.targets : req.functions;
+        if (targets == null || targets.isEmpty()) {
+            throw new IllegalArgumentException(
+                "targets is required — a list of function names or addresses");
+        }
+        if (targets.size() > MAX_BATCH_TARGETS) {
+            throw new IllegalArgumentException("Too many targets: " + targets.size()
+                + " (the limit is " + MAX_BATCH_TARGETS + " — split the batch)");
+        }
+
+        int timeout = req.timeout != null ? req.timeout : 60;
+        List<DecompileResultDto> results = decompilerService.decompileBatch(program, targets, timeout);
+
+        ctx.json(Response.ok(ctx.ctx(), ctx.port(), results)
+            .meta("requested", targets.size())
+            .meta("count", results.size())
+            .self("/functions/decompile-batch")
+            .link("program", "/program")
             .build());
     }
 
@@ -436,5 +487,11 @@ public class FunctionResource implements Resource {
         public String name;
         public String dataType;
         public String data_type;  // bridge sends snake_case
+    }
+
+    private static class BatchDecompileRequest {
+        public List<String> targets;
+        public List<String> functions;  // alias: some callers spell it this way
+        public Integer timeout;
     }
 }

@@ -1,6 +1,7 @@
 """Cross-reference analysis commands."""
 
 import click
+from urllib.parse import quote
 
 from ..client.exceptions import GhidraError
 from ..utils import should_page, page_output, rich_echo, validate_address
@@ -56,6 +57,47 @@ def list_xrefs(ctx, to_addr, from_addr, type, offset, limit):
 
         response = client.get('xrefs', params=params)
         output = formatter.format_xrefs(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@xrefs.command('find-by-name')
+@click.argument('name')
+@click.option('--offset', type=int, default=0, help='Pagination offset')
+@click.option('--limit', type=int, default=100, help='Maximum results to return')
+@click.pass_context
+def find_by_name(ctx, name, offset, limit):
+    """Get the cross-references to a symbol, found by name.
+
+    The references are addressed by address, so a name had to be resolved
+    first and then asked about again. This does both in one call. A bare name
+    matches every namespace; a qualified name ("NS::foo") matches that one.
+
+    \b
+    Examples:
+        ghydra xrefs find-by-name strlen
+        ghydra xrefs find-by-name "FOM::Read"
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        params = {
+            'offset': offset,
+            'limit': limit
+        }
+
+        response = client.get(f'xrefs/to-name/{quote(name)}', params=params)
+        output = formatter.format_xrefs_by_name(response)
 
         if should_page(config, ctx.obj['output_json']):
             page_output(output, use_pager=config.page_output)

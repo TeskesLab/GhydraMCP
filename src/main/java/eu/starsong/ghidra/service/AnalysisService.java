@@ -1,15 +1,21 @@
 package eu.starsong.ghidra.service;
 
+import eu.starsong.ghidra.dto.CallPathDto;
 import eu.starsong.ghidra.dto.FunctionSummaryDto;
 import eu.starsong.ghidra.dto.XrefDto;
+import eu.starsong.ghidra.server.GhydraServer.NotFoundException;
 import eu.starsong.ghidra.util.GhidraSwing;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -23,6 +29,12 @@ import java.util.Set;
  * {@link XrefService} calls (which run their own reads) execute inline.
  */
 public class AnalysisService {
+
+    /** How many hops a call-path search may take. */
+    private static final int MAX_CALL_PATH_DEPTH = 16;
+
+    /** How many functions a call-path search may walk through. */
+    private static final int MAX_CALL_PATH_NODES = 5000;
 
     private final FunctionService functionService;
     private final XrefService xrefService;
@@ -131,6 +143,153 @@ public class AnalysisService {
             }
             return list;
         });
+    }
+
+    /**
+     * Find the shortest call path from one function to another.
+     *
+     * <p>The call graph says who calls whom; this answers the question an
+     * agent actually asks when it holds the two ends: how does A reach B.
+     *
+     * <p>The search is a breadth-first walk over the call edges, so the path
+     * it returns is the shortest one Ghidra knows about. It runs on the EDT
+     * like the rest of the graph traversals, and it is bounded: the depth
+     * limit and the visited cap keep one pathological program from turning
+     * the request into a freeze.
+     *
+     * @param fromRef  the starting function, by address or by name
+     * @param toRef    the function being looked for, by address or by name
+     * @param maxDepth how many hops the search may take
+     */
+    public CallPathDto callPath(Program program, String fromRef, String toRef, int maxDepth) {
+        int depth = Math.max(1, Math.min(maxDepth, MAX_CALL_PATH_DEPTH));
+
+        return GhidraSwing.runRead(() -> {
+            Function from = resolveFunction(program, fromRef);
+            Function to = resolveFunction(program, toRef);
+
+            FunctionSummaryDto fromDto = FunctionSummaryDto.from(from);
+            FunctionSummaryDto toDto = FunctionSummaryDto.from(to);
+
+            String fromAddr = from.getEntryPoint().toString();
+            String toAddr = to.getEntryPoint().toString();
+
+            if (fromAddr.equals(toAddr)) {
+                return new CallPathDto(true, 0, depth, fromDto, toDto, List.of(fromDto), 1, null);
+            }
+
+            Deque<CallPathNode> queue = new ArrayDeque<>();
+            Map<String, String> parent = new HashMap<>();
+            Set<String> visited = new HashSet<>();
+
+            queue.add(new CallPathNode(from, fromAddr, 0));
+            visited.add(fromAddr);
+
+            int explored = 0;
+            List<FunctionSummaryDto> path = null;
+
+            while (!queue.isEmpty() && path == null) {
+                CallPathNode current = queue.poll();
+                explored++;
+
+                if (current.depth() >= depth) {
+                    continue;
+                }
+
+                for (String calleeAddr : calleeAddresses(program, current.function())) {
+                    if (calleeAddr.equals(toAddr)) {
+                        path = buildPath(program, parent, current.address(), toAddr, fromDto, toDto);
+                        break;
+                    }
+                    if (!visited.add(calleeAddr)) {
+                        continue;
+                    }
+                    if (visited.size() >= MAX_CALL_PATH_NODES) {
+                        continue;
+                    }
+                    Function callee = functionService.findByAddress(program, calleeAddr);
+                    if (callee == null) {
+                        continue;
+                    }
+                    parent.put(calleeAddr, current.address());
+                    queue.add(new CallPathNode(callee, calleeAddr, current.depth() + 1));
+                }
+            }
+
+            if (path != null) {
+                return new CallPathDto(true, path.size() - 1, depth, fromDto, toDto, path, explored, null);
+            }
+
+            String reason = "No call path from " + fromDto.name() + " to " + toDto.name()
+                + " within " + depth + " hop(s) (" + explored + " function(s) explored)";
+            return new CallPathDto(false, 0, depth, fromDto, toDto, List.of(), explored, reason);
+        });
+    }
+
+    /**
+     * Resolve a function from an address or a name.
+     *
+     * <p>An address inside a function body resolves to the function that
+     * holds it, so the caller does not have to know the entry point.
+     */
+    private Function resolveFunction(Program program, String ref) {
+        if (ref == null || ref.isBlank()) {
+            throw new IllegalArgumentException("A function address or name is required");
+        }
+        String key = ref.trim();
+
+        Function fn = functionService.findByAddress(program, key);
+        if (fn == null) {
+            fn = functionService.findContaining(program, key);
+        }
+        if (fn == null) {
+            fn = functionService.findByName(program, key);
+        }
+        if (fn == null) {
+            throw new NotFoundException("No function at address or named '" + key + "'", "FUNCTION_NOT_FOUND");
+        }
+        return fn;
+    }
+
+    /** The entry points of the functions the given function calls. */
+    private Set<String> calleeAddresses(Program program, Function fn) {
+        Set<String> addresses = new LinkedHashSet<>();
+        for (XrefDto xref : xrefService.getCallsFromFunction(program, fn)) {
+            String calleeAddr = xref.toFunctionAddress();
+            if (calleeAddr != null) {
+                addresses.add(calleeAddr);
+            }
+        }
+        return addresses;
+    }
+
+    /** Rebuild the path from the parent map the search filled in. */
+    private List<FunctionSummaryDto> buildPath(Program program, Map<String, String> parent,
+            String lastHop, String toAddr, FunctionSummaryDto fromDto, FunctionSummaryDto toDto) {
+        List<FunctionSummaryDto> path = new ArrayList<>();
+        path.add(toDto);
+
+        String cursor = lastHop;
+        int guard = 0;
+        while (guard++ < 1024) {
+            String previous = parent.get(cursor);
+            if (previous == null) {
+                break;
+            }
+            Function fn = functionService.findByAddress(program, previous);
+            if (fn == null) {
+                break;
+            }
+            path.add(0, FunctionSummaryDto.from(fn));
+            cursor = previous;
+        }
+
+        path.add(0, fromDto);
+        return path;
+    }
+
+    /** A function in the search queue, with the depth it was reached at. */
+    private record CallPathNode(Function function, String address, int depth) {
     }
 
     private List<Map<String, Object>> buildCallTree(Program program, Function fn, int depth, boolean callers, Set<String> visited) {

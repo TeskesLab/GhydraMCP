@@ -34,7 +34,44 @@ Through it, an assistant can:
 
 GhydraMCP started as a fork of [GhidraMCP by Laurie Wired](https://github.com/LaurieWired/GhidraMCP/) and added multi-instance support, data manipulation, and a HATEOAS REST API.
 
-## What's new in 3.0.0
+## What's new
+
+### Where this stands against the REA
+
+The REA's tool catalogue was read off its own server, not off a document: 139 tools in the
+installed version. The comparison, by capability, is in [REA_PARITY.md](REA_PARITY.md) — what is
+covered, what is not, and the four native gaps worth closing.
+
+**Those four are closed now**, each on the three surfaces at once:
+
+| What an agent asks | REST API | Bridge tool | CLI |
+| --- | --- | --- | --- |
+| decompile a list of functions | `POST /functions/decompile-batch` | `functions_batch_decompile` | `ghydra functions decompile-batch --targets '["main","0x401000"]'` |
+| what refers to this *name* | `GET /xrefs/to-name/{name}` | `xrefs_find_by_name` | `ghydra xrefs find-by-name strlen` |
+| what is at this address | `GET /inspect/address/{address}` | `inspect_address` | `ghydra inspect-address 0x140001008` |
+| how does A reach B | `GET /analysis/call-path?from=&to=` | `analysis_trace_call_path` | `ghydra analysis trace-call-path --from main --to strcmp` |
+
+A batch reports each target separately — one name that resolves to nothing does not cost the other
+nine. An address answer holds the symbol, the containing function, the data, the instruction, both
+comments and the references on both sides, gathered in one traversal. A call path is the shortest
+one Ghidra knows about, and when there is none it says how many functions it looked at.
+
+Four more came out of the same comparison — the composed calls the REA has:
+
+| What an agent asks | Bridge tool | CLI |
+| --- | --- | --- |
+| who calls this function | `analysis_callers` | `ghydra analysis callers 0x401000` |
+| what does this function call | `analysis_callees` | `ghydra analysis callees 0x401000` |
+| everything about this function | `functions_analyze` | `ghydra functions analyze --address 0x401000` |
+| what is this binary | `programs_overview` | `ghydra analysis overview` |
+
+The first two were already in the REST API since 3.0.0 — the bridge and the CLI simply never
+exposed them. The other two are compositions of what was already there: one call that gathers the
+function, its decompilation, its callers, its callees and its references, and one that gathers the
+program, its layout, its counts and its imports.
+
+
+### 3.0.0
 
 `API_VERSION` is **3000** — see [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) for the full reference
 and [CHANGELOG.md](CHANGELOG.md) for the full list.
@@ -345,6 +382,15 @@ GhydraMCP works with any MCP-compatible client using **stdio transport**. It has
 - **Claude Code** - Anthropic's VS Code extension and CLI tool
 - **Cline** - Popular VS Code extension for AI-assisted coding
 
+The bridge exposes **99 tools in 24 namespaces**. The namespaces are:
+
+`analysis_*` · `classes_*` · `comments_*` · `data_*` · `datatypes_*` · `functions_*` ·
+`inspect_*` · `instances_*` · `kuna_*` · `memory_*` · `namespaces_*` · `programs_*` ·
+`project_*` · `projects_*` · `raw_image_*` · `scalars_*` · `scripts_*` · `segments_*` ·
+`structs_*` · `symbols_*` · `ui_*` · `variables_*` · `x64dbg_*` · `xrefs_*`
+
+The MCP client setup for Claude Desktop, Claude Code and Cline is in
+[Client Setup](#client-setup) below.
 See the [Client Setup](#client-setup) section below for detailed configuration instructions for each client.
 
 ## API Reference

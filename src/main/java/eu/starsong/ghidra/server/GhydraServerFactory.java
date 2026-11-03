@@ -101,6 +101,7 @@ public final class GhydraServerFactory {
             new UiResource(),
             new ScriptResource(),
             new RawImageResource(),
+            new InspectResource(),
             new DevResource(port)
         );
 

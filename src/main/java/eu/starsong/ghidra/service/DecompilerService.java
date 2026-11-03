@@ -8,6 +8,9 @@ import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.pcode.HighFunction;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Service for decompilation operations.
  */
@@ -92,6 +95,47 @@ public class DecompilerService {
         }
 
         return DecompileResultDto.success(functionName, functionAddress, decompilation);
+    }
+
+    /**
+     * Decompile a list of functions in one call.
+     *
+     * <p>A target is an address or a function name. A target that resolves to
+     * nothing comes back as a failed entry instead of aborting the batch: a
+     * triage pass wants to see which ones were wrong, not lose the other
+     * nine.
+     *
+     * <p>Decompiler work stays off the EDT — one DecompInterface is shared
+     * by the cache, and wrapping it would freeze the Ghidra UI for the whole
+     * batch.
+     */
+    public List<DecompileResultDto> decompileBatch(Program program, List<String> targets, int timeout) {
+        List<DecompileResultDto> results = new ArrayList<>();
+        if (targets == null) {
+            return results;
+        }
+        for (String target : targets) {
+            if (target == null || target.isBlank()) {
+                continue;
+            }
+            results.add(decompileTarget(program, target.trim(), timeout));
+        }
+        return results;
+    }
+
+    /**
+     * Decompile one target of a batch, by address or by name.
+     */
+    private DecompileResultDto decompileTarget(Program program, String target, int timeout) {
+        Function function = functionService.findByAddress(program, target);
+        if (function == null) {
+            function = functionService.findByName(program, target);
+        }
+        if (function == null) {
+            return DecompileResultDto.failure(target, null,
+                "No function at that address or with that name");
+        }
+        return decompileFunction(program, function, timeout);
     }
 
     /**

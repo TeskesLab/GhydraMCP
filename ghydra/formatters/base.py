@@ -84,6 +84,102 @@ class BaseFormatter(ABC):
         pass
 
     @abstractmethod
+    def format_xrefs_by_name(self, data: Dict[str, Any]) -> str:
+        """Format the references to a symbol name.
+
+        Args:
+            data: API response data with the symbols and their references
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_batch_decompile(self, data: Dict[str, Any]) -> str:
+        """Format a batch decompilation.
+
+        Args:
+            data: API response data with one entry per target
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_address_context(self, data: Dict[str, Any]) -> str:
+        """Format what an address holds.
+
+        Args:
+            data: API response data with the address context
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_call_path(self, data: Dict[str, Any]) -> str:
+        """Format a call path.
+
+        Args:
+            data: API response data with the path or the reason there is none
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_callers(self, data: Dict[str, Any]) -> str:
+        """Format the callers of a function.
+
+        Args:
+            data: API response data with the calling functions
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_callees(self, data: Dict[str, Any]) -> str:
+        """Format the callees of a function.
+
+        Args:
+            data: API response data with the called functions
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_function_analysis(self, data: Dict[str, Any]) -> str:
+        """Format everything known about one function.
+
+        Args:
+            data: API response data with the function and its relations
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_overview(self, data: Dict[str, Any]) -> str:
+        """Format the overview of the loaded binary.
+
+        Args:
+            data: API response data with the program, the segments and the imports
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
     def format_data_list(self, data: Dict[str, Any]) -> str:
         """Format data items list response.
 
