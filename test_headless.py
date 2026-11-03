@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -303,6 +304,230 @@ class HeadlessStopTests(unittest.TestCase):
                 with self.assertRaises(headless.HeadlessError) as caught:
                     runner.start(timeout=1)
             self.assertEqual(caught.exception.code, "HEADLESS_ALREADY_RUNNING")
+
+
+class HeadlessOwnershipTests(unittest.TestCase):
+    """Who owns the port, the state and the lock.
+
+    A start that was refused must not erase the state of the run that is
+    there, a port that is being claimed must not be claimed twice, and a
+    lock that a live Ghidra holds must survive the death of a run.
+    """
+
+    def _runner(self, tmp, port=65433):
+        binary = os.path.join(tmp, "cmd.exe")
+        with open(binary, "w", encoding="utf-8") as handle:
+            handle.write("MZ")
+        # A Ghidra installation with the launcher in it: a run that gets as
+        # far as the launcher is a run that was not refused before it.
+        support = os.path.join(tmp, "support")
+        os.makedirs(support, exist_ok=True)
+        name = "analyzeHeadless.bat" if os.name == "nt" else "analyzeHeadless"
+        with open(os.path.join(support, name), "w", encoding="utf-8") as handle:
+            handle.write("")
+        runner = headless.HeadlessRunner(
+            binary=binary, port=port, project_dir=tmp, project_name="cmd",
+            ghidra_home=tmp)
+        runner.instance.log = os.path.join(tmp, "run.log")
+        return runner
+
+    def test_a_refused_start_keeps_the_state_of_the_run_that_is_there(self):
+        """The state on disk belongs to the run that is running.
+
+        A start that was refused - because a run is already there - has no
+        PID of its own, and the cleanup of the failed command used to erase
+        the state of the run that was there: the next start would walk past
+        the guard that remembers it, and two analyzers would share a project.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            other = headless.HeadlessInstance(
+                port=runner.port, pid=4242, binary="other.exe",
+                project_dir=tmp, project_name="cmd")
+            with mock.patch.dict(os.environ, {"GHYDRA_STATE_DIR": tmp}):
+                headless.save_state(other)
+                runner.save = lambda: False
+                with mock.patch.object(headless, "process_is_ours", return_value=False):
+                    runner.stop()
+                remembered = headless.load_state(runner.port)
+            self.assertIsNotNone(remembered, "the state of the other run was erased")
+            self.assertEqual(remembered.pid, 4242)
+
+    def test_the_port_is_claimed_before_the_child_is_launched(self):
+        """Two starts that arrive together cannot both launch an analyzer.
+
+        The claim is written before the child is launched, so the second
+        start finds the port taken instead of finding it free - and the one
+        that binds the API first does not end up with the state of the other
+        one, which would combine the Ghidra data of one binary with the Kuna
+        data of another.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            claimed = []
+
+            def fake_popen(command, **kwargs):
+                remembered = headless.load_state(runner.port)
+                claimed.append(bool(remembered and remembered.reserved))
+                raise OSError("no launcher here")
+
+            with mock.patch.dict(os.environ, {"GHYDRA_STATE_DIR": tmp}), \
+                    mock.patch.object(headless, "api_answers", return_value=False), \
+                    mock.patch.object(headless.subprocess, "Popen", side_effect=fake_popen):
+                with self.assertRaises(headless.HeadlessError):
+                    runner.start(timeout=1)
+            self.assertEqual(claimed, [True], "the port was not claimed before the launch")
+            # The claim of a child that never came up is given back.
+            self.assertIsNone(headless.load_state(runner.port))
+
+    def test_a_claim_that_nobody_took_up_is_free_again(self):
+        """A claim of a process that died in between is not a claim."""
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            runner.instance.reserved = True
+            with mock.patch.dict(os.environ, {"GHYDRA_STATE_DIR": tmp}):
+                headless.save_state(runner.instance)
+                path = headless.state_path(runner.port)
+                old = time.time() - headless.RESERVATION_TTL - 10
+                os.utime(path, (old, old))
+                self.assertFalse(headless.reservation_is_live(runner.port))
+
+    def test_the_process_is_matched_to_its_port(self):
+        """The PID of a crashed run can belong to another run.
+
+        The marker of the script is not enough: another run of the same
+        script, on another port, would be stopped by mistake - and it would
+        leave a stop flag that the new run never sees.
+        """
+        with mock.patch.object(headless, "process_command_line",
+                               return_value="analyzeHeadless.bat proj cmd -postScript "
+                                           "GhidraHeadlessServer port=8193"):
+            self.assertTrue(headless.process_is_ours(4242, port=8193))
+            self.assertFalse(headless.process_is_ours(4242, port=8192))
+        with mock.patch.object(headless, "process_command_line",
+                               return_value="analyzeHeadless.bat proj cmd -postScript "
+                                           "GhidraHeadlessServer port=81920"):
+            # "port=8192" is not "port=81920".
+            self.assertFalse(headless.process_is_ours(4242, port=8192))
+
+    def test_the_lock_of_a_live_ghidra_survives(self):
+        """A CodeBrowser that has the project open holds the lock.
+
+        The run that was refused the project died because of that lock, and
+        removing it would let a second analyzer open the project beside the
+        CodeBrowser - and the project would be written by two of them.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            lock = os.path.join(tmp, "cmd.lock")
+            with open(lock, "w", encoding="utf-8") as handle:
+                handle.write("")
+            runner.instance.pid = 999999
+            runner.save = lambda: False
+            project = os.path.normcase(os.path.abspath(tmp)).replace("\\", "/").lower()
+            with mock.patch.object(headless, "process_is_ours", return_value=False), \
+                    mock.patch.object(headless, "process_alive", return_value=False), \
+                    mock.patch.object(headless, "live_processes", return_value=[
+                        (4242, "javaw.exe ghidra.Ghidra " + project + "/cmd")]):
+                runner.stop()
+            self.assertTrue(os.path.exists(lock))
+
+    def test_the_provenance_is_written_when_the_run_is_serving(self):
+        """The sidecar says which binary the project holds.
+
+        It is written when the run is serving: a run that failed before
+        that - an unexecutable launcher, a project that would not open -
+        must not leave the sidecar of a binary that is not in the project,
+        or the next run would analyse the old bytes again.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            with mock.patch.object(headless, "api_answers", return_value=False), \
+                    mock.patch.object(headless.subprocess, "Popen",
+                                      side_effect=OSError("no launcher here")):
+                with self.assertRaises(headless.HeadlessError):
+                    runner.start(timeout=1)
+            self.assertFalse(os.path.exists(headless.provenance_path(tmp, "cmd")))
+
+    def test_the_provenance_keeps_the_sub_second_part(self):
+        """A rebuild inside the same second is still a rebuild.
+
+        The size and the second can be the same, and the project would then
+        serve the old bytes while Kuna reads the new file.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = os.path.join(tmp, "cmd.exe")
+            with open(binary, "wb") as handle:
+                handle.write(b"MZ")
+            stamp = 1700000000
+            os.utime(binary, (stamp, stamp))
+            first = headless.binary_provenance(binary)
+            os.utime(binary, (stamp + 0.5, stamp + 0.5))
+            second = headless.binary_provenance(binary)
+            self.assertEqual(first["size"], second["size"])
+            self.assertEqual(first["mtime"], second["mtime"])
+            self.assertNotEqual(first["mtime_ns"], second["mtime_ns"])
+
+    def test_a_polite_stop_reports_the_save_it_got(self):
+        """A save the server refused is not a save.
+
+        The run ends on its own when it sees the flag, and the answer of
+        the save is the answer of the command: "saved: true" for a save
+        that did not happen is a lie the caller cannot see.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = self._runner(tmp)
+            runner.instance.pid = 4242
+            runner.save = lambda: False
+            with mock.patch.object(headless, "process_is_ours", return_value=True), \
+                    mock.patch.object(headless.HeadlessRunner, "_wait_for_exit",
+                                      return_value=True):
+                self.assertFalse(runner.stop())
+
+
+class HeadlessReportTargetTests(unittest.TestCase):
+    """Which machine and which file the report is about."""
+
+    def test_an_address_of_this_machine_is_local(self):
+        """The addresses of the machine are asked of the operating system.
+
+        A secondary address of a LAN card and an IPv6 address that the name
+        of the machine does not carry are both local, and neither is in the
+        DNS of the hostname - which is why the list of the interfaces is not
+        the answer.
+        """
+        self.assertTrue(report_module.address_is_local("127.0.0.1"))
+        self.assertFalse(report_module.address_is_local("203.0.113.7"))
+
+    def test_the_machine_by_one_of_its_addresses_is_this_machine(self):
+        """The name of the machine is not the only way to name it."""
+        for address in report_module.local_addresses():
+            if address not in ("127.0.0.1", "::1"):
+                self.assertTrue(report_module.address_is_local(address))
+                self.assertTrue(report_module.is_local_host(address))
+                return
+        self.skipTest("this machine has no address beyond the loopback")
+
+    def test_the_program_is_matched_by_its_full_path(self):
+        """Two files with the same name are two files.
+
+        A CodeBrowser that serves /a/foo.exe is not serving the /b/foo.exe
+        that the report asks about, and a report that combined the Ghidra
+        addresses of the first with the Kuna output of the second would be
+        about a file nobody has.
+        """
+
+        class _Client:
+            def __init__(self, path):
+                self.path = path
+
+            def get(self, endpoint, **kwargs):
+                return {"result": {"path": self.path}}
+
+        self.assertTrue(report_module._serves_binary(
+            _Client("/C:/bin/foo.exe"), "C:\\bin\\foo.exe"))
+        self.assertFalse(report_module._serves_binary(
+            _Client("/C:/a/foo.exe"), "C:\\b\\foo.exe"))
 
 
 class HeadlessDiscoveryTests(unittest.TestCase):
