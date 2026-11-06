@@ -21,25 +21,25 @@ public class ProjectService {
      * List all projects visible from this plugin context. In practice, Ghidra
      * plugins see exactly one active project, so this returns a list of
      * length 0 or 1.
+     *
+     * @param project the project, or null when there is none
      */
-    public List<ProjectDto> listAll(PluginTool tool) {
-        Project project = tool != null ? tool.getProject() : null;
+    public List<ProjectDto> listAll(Project project) {
         if (project == null) return new ArrayList<>();
         List<ProjectDto> out = new ArrayList<>();
         out.add(toDto(project));
         return out;
     }
 
-    public ProjectDto getByName(PluginTool tool, String name) {
-        for (ProjectDto p : listAll(tool)) {
+    public ProjectDto getByName(Project project, String name) {
+        for (ProjectDto p : listAll(project)) {
             if (name.equals(p.name())) return p;
         }
         throw new NotFoundException("Project not found: " + name, "PROJECT_NOT_FOUND");
     }
 
-    public ProjectDto getCurrent(PluginTool tool) {
-        Project project = requireProject(tool);
-        return toDto(project);
+    public ProjectDto getCurrent(Project project) {
+        return toDto(requireProject(project));
     }
 
     private ProjectDto toDto(Project project) {
@@ -62,9 +62,15 @@ public class ProjectService {
         return new ProjectDto(project.getName(), location, path, rootPath, fileCount, folderCount);
     }
 
-    public List<ProjectFileDto> listFiles(PluginTool tool, String folderPath, boolean recursive) {
-        Project project = requireProject(tool);
-        ProjectData data = project.getProjectData();
+    /**
+     * List the files of a folder.
+     *
+     * @param tool the CodeBrowser's tool, to tell which files are open. Null in
+     *             a headless instance, where nothing is open in a window.
+     */
+    public List<ProjectFileDto> listFiles(Project project, String folderPath, boolean recursive,
+            PluginTool tool) {
+        ProjectData data = requireProject(project).getProjectData();
         DomainFolder folder = data.getFolder(folderPath);
         if (folder == null) {
             throw new NotFoundException("Folder not found: " + folderPath, "FOLDER_NOT_FOUND");
@@ -83,8 +89,21 @@ public class ProjectService {
         return items;
     }
 
+    /**
+     * Open a project file in a CodeBrowser window.
+     *
+     * <p>Needs one, so it cannot run in a headless instance: there is no
+     * ProgramManager to open the file with.
+     */
     public OpenResult openFile(PluginTool tool, String filePath) {
-        Project project = requireProject(tool);
+        if (tool == null) {
+            // The dedicated exception, not a generic one: this is the
+            // server's limitation, and the client can tell it apart from a
+            // fault (503 HEADLESS_LIMITATION, not 500).
+            throw new eu.starsong.ghidra.server.GhydraServer.HeadlessException(
+                "Opening a file needs a CodeBrowser; this instance runs headless");
+        }
+        Project project = tool.getProject();
         ProjectData data = project.getProjectData();
         DomainFile file = data.getFile(filePath);
         if (file == null) {
@@ -103,8 +122,7 @@ public class ProjectService {
 
     public record OpenResult(String path, String name, boolean opened) {}
 
-    private Project requireProject(PluginTool tool) {
-        Project project = tool != null ? tool.getProject() : null;
+    private Project requireProject(Project project) {
         if (project == null) {
             throw new NoProjectException("No project is currently open");
         }
@@ -133,7 +151,7 @@ public class ProjectService {
 
         Boolean isOpen = null;
         if (isProgram) {
-            ProgramManager pm = tool.getService(ProgramManager.class);
+            ProgramManager pm = tool != null ? tool.getService(ProgramManager.class) : null;
             if (pm != null) {
                 for (Program p : pm.getAllOpenPrograms()) {
                     if (p.getDomainFile().equals(file)) {

@@ -245,7 +245,9 @@ public class FunctionResource implements Resource {
         try {
             boolean ok = functionService.updateLocalVariable(program, fn, varName, req.name, newType);
             if (!ok) {
-                throw new NotFoundException("Variable not found: " + varName, "VARIABLE_NOT_FOUND");
+                throw new NotFoundException("Variable not found: " + varName
+                        + " — a name the decompiler invented for a value it did not map is not a variable",
+                        "VARIABLE_NOT_FOUND");
             }
             FunctionRef ref = GhidraSwing.runRead(() -> {
                 return new FunctionRef(fn.getName(), fn.getEntryPoint().toString());

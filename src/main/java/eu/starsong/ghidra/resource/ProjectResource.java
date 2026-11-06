@@ -36,7 +36,7 @@ public class ProjectResource implements Resource {
     }
 
     private void listAll(GhidraContext ctx) {
-        List<ProjectDto> projects = service.listAll(ctx.tool());
+        List<ProjectDto> projects = service.listAll(ctx.project());
         ctx.json(eu.starsong.ghidra.hateoas.Response.ok(ctx.ctx(), ctx.port(), projects)
             .self("/projects")
             .link("project", "/project")
@@ -45,7 +45,7 @@ public class ProjectResource implements Resource {
 
     private void getByName(GhidraContext ctx) {
         String name = ctx.pathParam("name");
-        ProjectDto project = service.getByName(ctx.tool(), name);
+        ProjectDto project = service.getByName(ctx.project(), name);
         ctx.json(eu.starsong.ghidra.hateoas.Response.ok(ctx.ctx(), ctx.port(), project)
             .self("/projects/{}", name)
             .link("projects", "/projects")
@@ -54,7 +54,7 @@ public class ProjectResource implements Resource {
     }
 
     private void current(GhidraContext ctx) {
-        ProjectDto project = service.getCurrent(ctx.tool());
+        ProjectDto project = service.getCurrent(ctx.project());
         ctx.json(Response.ok(ctx.ctx(), ctx.port(), project)
             .self("/project")
             .link("files", "/project/files")
@@ -67,12 +67,12 @@ public class ProjectResource implements Resource {
         String folder = ctx.queryParam("folder", "/");
         boolean recursive = Boolean.parseBoolean(ctx.queryParam("recursive", "true"));
 
-        List<ProjectFileDto> items = service.listFiles(ctx.tool(), folder, recursive);
+        List<ProjectFileDto> items = service.listFiles(ctx.project(), folder, recursive, ctx.tool());
 
         String basePath = "/project/files?folder=" + folder + "&recursive=" + recursive;
         var result = Paginator.paginate(items, pagination, basePath);
         ctx.json(result.toResponse(ctx.ctx(), ctx.port())
-            .meta("project", ctx.tool().getProject().getName())
+            .meta("project", ctx.project() != null ? ctx.project().getName() : null)
             .meta("folder", folder)
             .meta("recursive", recursive)
             .link("project", "/project")

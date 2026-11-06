@@ -14,7 +14,9 @@ read from the plugin's own mcp_config.json.
 """
 
 import json
+import os
 import sys
+import time
 
 import click
 
@@ -412,3 +414,105 @@ def go_to(ctx, address):
         "binary": program.get("path") or "",
         "text": text,
     })
+
+
+@x64dbg.command('report')
+@click.option('--output', '-o', default=None,
+              help="Where the files go (default: the current directory)")
+@click.option('--name', default=None,
+              help="Name of the files (default: x64dbg-report)")
+@click.option('--instructions', type=int, default=16,
+              help="How many instructions to disassemble (default: 16)")
+@click.pass_context
+def report(ctx, output, name, instructions):
+    """Take a snapshot of the debugger and write it down.
+
+    The snapshot holds the state, the registers, the modules, the
+    breakpoints, the disassembly at the instruction pointer, the call stack
+    and the memory map - as two files, one to read and one to read with a
+    program.
+
+    \b
+    Examples:
+        ghydra x64dbg report --output out
+    """
+    try:
+        client = _client(ctx)
+    except x64dbg_helper.X64dbgError as exc:
+        _fail(ctx, exc)
+        return
+
+    try:
+        snapshot = x64dbg_helper.collect_snapshot(client, instructions)
+    except x64dbg_helper.X64dbgError as exc:
+        _fail(ctx, exc)
+        return
+
+    directory = os.path.abspath(os.path.expanduser(output)) if output else os.getcwd()
+    os.makedirs(directory, exist_ok=True)
+    stem = name or "x64dbg-report"
+    markdown_path = os.path.join(directory, f"{stem}.md")
+    json_path = os.path.join(directory, f"{stem}.json")
+
+    snapshot["taken_at"] = time.time()
+    with open(markdown_path, "w", encoding="utf-8") as handle:
+        handle.write(x64dbg_helper.render_snapshot(snapshot))
+    with open(json_path, "w", encoding="utf-8") as handle:
+        json.dump(snapshot, handle, indent=2, ensure_ascii=False)
+
+    payload = {
+        "success": True,
+        "result": {
+            "message": f"The snapshot is in {directory}",
+            "markdown": markdown_path,
+            "json": json_path,
+            "modules": len(snapshot.get("modules") or []),
+            "errors": snapshot.get("errors") or [],
+        },
+    }
+    click.echo(ctx.obj['formatter'].format_simple_result(payload))
+
+
+@x64dbg.command('annotate')
+@click.argument('annotations', type=click.Path(exists=True, dir_okay=False))
+@click.option('--mode', type=click.Choice(['Comment', 'Label']), default='Comment',
+              help="What to put at the address (default: Comment)")
+@click.option('--bookmarks', is_flag=True,
+              help="Also set a bookmark at every address")
+@click.option('--limit', type=int, default=0,
+              help="How many annotations to apply (default: all of them)")
+@click.pass_context
+def annotate(ctx, annotations, mode, bookmarks, limit):
+    """Put the annotations of a report into the debugger.
+
+    The file is the one the report writes. The addresses in it are the ones
+    in the binary; they are translated into the addresses of the live
+    process before they are set.
+
+    \b
+    Examples:
+        ghydra x64dbg annotate cmd-x64dbg.json --bookmarks
+    """
+    try:
+        client = _client(ctx)
+    except x64dbg_helper.X64dbgError as exc:
+        _fail(ctx, exc)
+        return
+
+    try:
+        loaded = x64dbg_helper.load_annotations(annotations)
+        result = x64dbg_helper.apply_annotations(
+            client, loaded, mode=mode, bookmarks=bookmarks, limit=limit)
+    except x64dbg_helper.X64dbgError as exc:
+        _fail(ctx, exc)
+        return
+
+    payload = {
+        "success": True,
+        "result": {
+            "message": (f"{len(result['applied'])} annotations applied, "
+                        f"{len(result['failed'])} failed"),
+            **result,
+        },
+    }
+    click.echo(ctx.obj['formatter'].format_simple_result(payload))

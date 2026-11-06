@@ -59,9 +59,9 @@ public class ScriptResource implements Resource {
 
         ScriptService.RunResult result;
         if (req.name != null && !req.name.isEmpty()) {
-            result = service.runByName(ctx.tool(), ctx.program(), req.name, args);
+            result = service.runByName(ctx.tool(), ctx.project(), ctx.program(), req.name, args);
         } else if (req.source != null && !req.source.isEmpty()) {
-            result = service.runSource(ctx.tool(), ctx.program(), req.source, args);
+            result = service.runSource(ctx.tool(), ctx.project(), ctx.program(), req.source, args);
         } else {
             throw new IllegalArgumentException(
                 "Provide 'name' (an existing script) or 'source' (ad-hoc GhidraScript source)");

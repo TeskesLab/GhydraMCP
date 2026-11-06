@@ -369,6 +369,11 @@ The bridge's env vars are a *different, asymmetric* set: `GHYDRA_HYDRA_HOST` > `
 plus `GHYDRA_TIMEOUT`, `GHYDRA_DECOMP_TIMEOUT`, `GHYDRA_ALLOWED_ORIGINS`. **The bridge never reads
 `GHYDRA_PORT`.**
 
+`GHYDRA_MCP_OUTPUT=json` is the exception to the rule that the bridge answers in **text**: it hands
+the raw envelope as one JSON document instead of the formatted table. The default stays text — that
+is the contract the agents are written against — and the mode exists for a machine that parses the
+answer (the MCP test suite drives the bridge this way).
+
 CLI multi-instance selection is in-process only — `ghydra instances use -p` mutates the client, and
 `instances unregister` is a documented no-op.
 
@@ -500,6 +505,124 @@ plugin API, so it changes neither `API_VERSION` nor the Java side.
 - **The logic is duplicated**, like the Kuna helpers: the bridge is a standalone script and must
   not import the `ghydra` package, so `ghydra/x64dbg.py` and the bridge's x64dbg section carry
   the same client, the same error taxonomy and the same retry rules.
+
+## Headless mode (no window)
+
+The same API, served by a headless Ghidra run: the binary is imported, analysed, and the API
+answers for that analysis, with nobody watching. `ghydra headless start|status|stop`, and
+`ghydra report build` for the report. See `GHYDRA_HEADLESS.md`.
+
+- **The bootstrap lives in `server/GhydraServerFactory`**, not in the plugin. Both paths - the
+  CodeBrowser plugin and the headless run - go through it, so the same twenty-one resources are
+  registered in both. A resource added to one and not the other answers 404 in one instance and
+  200 in the other; that is the bug this factory exists to prevent.
+- **The headless context holds one fixed program and one fixed project**
+  (`server/GhidraContext.java`). `ctx.program()` and `ctx.project()` prefer them. The endpoints
+  that need the GUI's cursor - `/address` and `/function` - answer 503 `HEADLESS_LIMITATION`,
+  because there is no cursor without a window. The HTTP test suites that exercise them need the
+  CodeBrowser; every other endpoint behaves the same in both.
+- **A Ghidra script has to import the class it extends**: `import ghidra.app.script.GhidraScript;`.
+  Ghidra only adds that import to the template it writes for a *new* script; an existing one has
+  to carry it. Without it the script does not compile, and the error says nothing about the import
+  - "cannot find symbol" on the class and on everything the class brings with it
+  (`currentProgram`, `state`, `getScriptArgs()`). Measured: the same failure happens for a script
+  inside a Ghidra module and for one outside every module, so it is not about where the script
+  lives.
+- **A Ghidra project path may not hold an element that starts with a dot.** `analyzeHeadless`
+  refuses it ("Path element starting with '.' is not permitted"), so the project cannot live under
+  `~/.ghidra`. The launcher uses `ghidra_projects` in the home directory.
+- **The run is stopped politely.** The launcher leaves `~/.ghidra/headless-<port>.stop` behind and
+  the script returns when it sees it; the headless analyzer then saves the program and closes the
+  project, and the project is left unlocked. Killing the process instead leaves the lock file
+  behind, and the next run refuses to open the project.
+- **A headless run has to stop the server it started.** The threads of a Jetty are not daemons, and
+  a JVM with a live Jetty does not exit: the run stayed alive after the analyzer had saved the
+  program, and the launcher had to kill it - the polite stop turned into the blunt one, and the
+  analysis of a program that was being saved was lost. The script stops the server before it
+  returns.
+- **The save of a headless run is the analyzer's, not the API's.** The program is inside the
+  transaction of the script that serves the API, so `POST /program/save` is refused with "Unable to
+  lock due to active transaction"; the analyzer saves the program when the script returns. The
+  answer is built from the project instead: Ghidra writes the content of the program under
+  `<project>.rep/idata/` in a file whose name starts with `db.`, and that is the witness of the
+  save.
+- **The launcher is cross-platform**: `support/analyzeHeadless` on POSIX,
+  `support/analyzeHeadless.bat` on Windows. The JDK comes from `JAVA_HOME`, and Ghidra 12 needs a
+  JDK 21 or newer - the machine's default is often an older one.
+- **A program that is already in the project is processed again; one that is not is imported.**
+  Importing a program that is already there fails, and the run never reaches the script that
+  starts the server. The index of the project (`<project>.rep/idata/~index.dat`) is plain text and
+  says which files are in it.
+- **Ghidra identifies a program by its file name.** Two binaries with the same name in different
+  directories are two programs that cannot live in the same project, so the default project name
+  carries a short digest of the absolute path (`cmd-3f2a1b9c`). Without it the second run reuses
+  the project of the first and is served the analysis of a file nobody asked about.
+- **`POST /dev/shutdown` guards the headless program too.** The unsaved-changes probe asks the
+  ProgramManager, and a headless instance has none - so the program the instance serves is asked
+  as well, and an exit cannot throw the analysis away.
+- **The save is checked before it is reported.** `requests.post` does not raise on a 4xx, so the
+  launcher looks at the answer before it says `saved: true`; the reason goes to the log of the run.
+  `headless stop` reports the save it got, and a save that was refused is not reported as a save.
+- **The lock of a run that died is cleaned up.** A crashed analyzer leaves `<project>.lock`
+  behind and every later start refuses the project, so stopping a run that is gone removes the
+  lock. The lock of a live process that is not ours is left alone - and the lock file of a
+  project carries no owner that can be read, so the processes are asked instead: a CodeBrowser
+  that has the project open holds the lock, and that lock is never removed.
+- **The state of a run is erased only while it is that run's state.** A start that was refused
+  before the child was launched has no PID of its own, and the state on disk belongs to a run
+  that is still there - erasing it would leave that run untracked, and the next start would
+  walk past the guard that remembers it.
+- **The report goes to the instance the CLI chose.** The command takes the host and the port from
+  the client the root command built - the configuration, the environment or `--host/--port` - and
+  not from a request of its own.
+- **The program is matched by its full path.** Ghidra identifies a program by its file name, so
+  the report compares the full path of the executable and falls back to the name only when one
+  of the two paths is not known - otherwise a CodeBrowser serving `/a/foo.exe` answers for
+  `/b/foo.exe`, and the report combines the addresses of the first with the output of the
+  second.
+- **A headless run serves this machine.** The run is started here, so a report pointed at another
+  machine that is not serving the API is refused (`REPORT_NO_INSTANCE`) instead of starting a run
+  that cannot answer it - and a run that does not come up is stopped, not left behind.
+- **An address of this machine is local even without the DNS.** The question is asked of the
+  operating system and not of the name of the machine: a socket that binds to the address is
+  accepted, and one that binds to an address of somebody else is refused. A secondary address of
+  a LAN card and an IPv6 address that the hostname does not carry are both local.
+- **The port is checked before anything is started.** The script falls back to 8192 for a port it
+  cannot use, so a port of 0, a negative one or one above 65535 is refused with
+  `HEADLESS_BAD_PORT` instead of waiting on a port that was never bound.
+- **The backslash is a separator everywhere.** On POSIX, `os.path.basename()` takes the whole
+  `C:\bin\cmd.exe` as the name - so the name of the file comes from `binary_name()`, which knows
+  both separators, and the lookup in the index of the project finds the program that is already
+  there instead of importing it again.
+- **A project remembers the binary it was built from.** The size and the time of the file are
+  written next to the project (`<project>.ghydra.json`), and a binary that changed is imported
+  again with `-overwrite` - otherwise the run would analyse the stored copy of a file that is not
+  there any more. The time keeps its sub-second part, because a rebuild inside the same second
+  is a different file; and the sidecar is written when the run is serving, not before it - a run
+  that failed left behind the sidecar of a binary that was never in the project.
+- **A run that is still analysing keeps the port.** It has not bound the API yet, so the port
+  looks free - but the PID that is remembered is checked before anything is started, or a second
+  run would take the state of the first and leave it untracked.
+- **The port is claimed before the child is launched.** Two starts that arrive together both
+  find the port free, and both launch an analyzer: the one that binds the API first answers
+  both waits, and the state file ends up naming the loser - so one report can combine the
+  Ghidra data of one binary with the Kuna data of another. The claim carries a token that says
+  which runner made it, and a claim that nobody took up is given back after a minute.
+- **The PID is matched to its port.** The PID of a run that crashed is reused by another run
+  of the same script - on another port, with another project - and stopping that one would kill
+  a live analysis. The command line has to carry `port=<n>` as well as the marker.
+- **The stop flag is removed after a kill, and before a run starts.** A run that was killed before
+  the script could see the flag leaves it behind, and the next run on that port would stop as soon
+  as it started.
+- **The extension's jar is shaded.** Javalin, Jetty, SLF4J and Kotlin are inside `Ghydra.jar`, so
+  the script's bundle finds them; a jar with only the compiled classes fails at runtime with
+  `NoClassDefFoundError: io/javalin/http/Handler`. `scripts/make_uberjar.py` does the merge
+  without Maven.
+- **The registry of the instances holds a snapshot, not a handle.** The `/instances` route knows
+  two things: the plugin of a CodeBrowser, and a map that carries the snapshot of the program.
+  A headless run has no plugin - so what it registers is the map, and the file, the project,
+  the executable, the architecture and the image base are there for the clients that pick an
+  instance.
 
 ## Ghidra API gotchas
 

@@ -17,6 +17,8 @@ import requests
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from ghydra.testing import instance_is_headless
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("comment_test")
 
@@ -81,6 +83,9 @@ async def test_bridge_comments():
             )
 
             logger.info("Getting current address...")
+            if instance_is_headless("http://localhost:8192"):
+                logger.info("Headless instance: the cursor-based comment tests are skipped")
+                return
             addr_result = await session.call_tool("ui_get_current_address")
             addr_data = json.loads(addr_result.content[0].text)
 

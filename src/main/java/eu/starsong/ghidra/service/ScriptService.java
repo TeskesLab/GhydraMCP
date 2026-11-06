@@ -5,6 +5,7 @@ import ghidra.app.script.GhidraScript;
 import ghidra.app.script.GhidraScriptProvider;
 import ghidra.app.script.GhidraScriptUtil;
 import ghidra.app.script.GhidraState;
+import ghidra.framework.model.Project;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
 import ghidra.program.util.ProgramLocation;
@@ -58,12 +59,13 @@ public class ScriptService {
     }
 
     /** Run an existing script by file name (e.g. "FixupNoReturnFunctionsScript.java"). */
-    public RunResult runByName(PluginTool tool, Program program, String name, String[] args) {
+    public RunResult runByName(PluginTool tool, Project project, Program program,
+            String name, String[] args) {
         ResourceFile file = GhidraScriptUtil.findScriptByName(name);
         if (file == null) {
             throw new IllegalArgumentException("Script not found: " + name);
         }
-        return run(tool, program, file, args);
+        return run(tool, project, program, file, args);
     }
 
     /**
@@ -71,7 +73,8 @@ public class ScriptService {
      * temp source. The source must declare {@code public class &lt;Name&gt; extends GhidraScript};
      * the file is named to match so the provider can compile it.
      */
-    public RunResult runSource(PluginTool tool, Program program, String source, String[] args) {
+    public RunResult runSource(PluginTool tool, Project project, Program program,
+            String source, String[] args) {
         Matcher m = CLASS_NAME.matcher(source);
         if (!m.find()) {
             throw new IllegalArgumentException(
@@ -82,7 +85,7 @@ public class ScriptService {
         File scriptFile = new File(dir, className + ".java");
         try {
             Files.writeString(scriptFile.toPath(), source);
-            return run(tool, program, new ResourceFile(scriptFile), args);
+            return run(tool, project, program, new ResourceFile(scriptFile), args);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -92,7 +95,8 @@ public class ScriptService {
         }
     }
 
-    private RunResult run(PluginTool tool, Program program, ResourceFile file, String[] args) {
+    private RunResult run(PluginTool tool, Project project, Program program,
+            ResourceFile file, String[] args) {
         StringWriter sw = new StringWriter();
         PrintWriter writer = new PrintWriter(sw);
         try {
@@ -107,8 +111,14 @@ public class ScriptService {
             }
             ProgramLocation location =
                 program != null ? new ProgramLocation(program, program.getMinAddress()) : null;
+            // The project comes from the tool when there is one, and from
+            // the context when there is not: a headless instance has no
+            // tool, but it does have the project the analysed program
+            // belongs to, and a script that asks for the current project
+            // needs it.
+            Project effective = project != null ? project : (tool != null ? tool.getProject() : null);
             GhidraState state = new GhidraState(
-                tool, tool != null ? tool.getProject() : null, program, location, null, null);
+                tool, effective, program, location, null, null);
             script.execute(state, TaskMonitor.DUMMY, writer);
             writer.flush();
             return new RunResult(file.getName(), sw.toString(), true, null);

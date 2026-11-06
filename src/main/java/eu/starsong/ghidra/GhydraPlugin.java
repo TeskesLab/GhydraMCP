@@ -3,6 +3,7 @@ package eu.starsong.ghidra;
 import eu.starsong.ghidra.api.ApiConstants;
 import eu.starsong.ghidra.resource.*;
 import eu.starsong.ghidra.server.GhydraServer;
+import eu.starsong.ghidra.server.GhydraServerFactory;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.services.ProgramManager;
 import ghidra.framework.main.ApplicationLevelPlugin;
@@ -39,8 +40,7 @@ public class GhydraPlugin extends Plugin implements ApplicationLevelPlugin {
     public static final Map<Integer, GhydraPlugin> activeInstances = new ConcurrentHashMap<>();
     private static final Object baseInstanceLock = new Object();
 
-    private GhydraServer server;
-    private eu.starsong.ghidra.service.DecompilerService decompilerService;
+    private GhydraServerFactory.Handle handle;
     private int port;
     private boolean isBaseInstance = false;
 
@@ -69,46 +69,14 @@ public class GhydraPlugin extends Plugin implements ApplicationLevelPlugin {
 
     private void startServer() {
         try {
-            server = new GhydraServer(tool, port, castActiveInstances(), isBaseInstance);
-
-            // One shared decompiler service per plugin instance: one native decompiler
-            // process + one program listener, disposed in dispose() below.
-            var functionService = new eu.starsong.ghidra.service.FunctionService();
-            decompilerService = new eu.starsong.ghidra.service.DecompilerService(functionService);
-
-            server.register(
-                new RootResource(isBaseInstance),
-                new FunctionResource(functionService, decompilerService),
-                new SymbolResource(),
-                new DataResource(),
-                new MemoryResource(),
-                new SegmentResource(),
-                new XrefResource(),
-                new ProgramResource(),
-                new InstanceResource(),
-                new AnalysisResource(),
-                new StructResource(),
-                new DataTypeResource(),
-                new ScalarResource(new eu.starsong.ghidra.service.ScalarService()),
-                new VariableResource(new eu.starsong.ghidra.service.VariableService(decompilerService)),
-                new ClassResource(),
-                new NamespaceResource(),
-                new ProjectResource(),
-                new UiResource(),
-                new ScriptResource(),
-                new RawImageResource(),
-                new DevResource(port)
-            );
-
-            server.start();
-
+            handle = GhydraServerFactory.startForTool(tool, port, castActiveInstances(), isBaseInstance);
             System.out.println("[GhydraMCP] HTTP server started on port " + port);
 
         } catch (Exception e) {
             // Deregister so clients don't discover a registered-but-dead instance,
             // and so the port frees up for a later retry.
             activeInstances.remove(port);
-            server = null;
+            handle = null;
             Msg.error(this, "Failed to start HTTP server on port " + port + "; instance deregistered", e);
             System.err.println("[GhydraMCP] Failed to start HTTP server: " + e.getMessage());
         }
@@ -123,14 +91,11 @@ public class GhydraPlugin extends Plugin implements ApplicationLevelPlugin {
     public void dispose() {
         // Deregister first so /instances stops advertising a dying server.
         activeInstances.remove(port);
-        if (server != null) {
-            server.stop();
-            System.out.println("[GhydraMCP] HTTP server stopped on port " + port);
-        }
-        if (decompilerService != null) {
+        if (handle != null) {
+            handle.stop();
             // Kills the native decompiler process and removes the program listener.
-            decompilerService.dispose();
-            decompilerService = null;
+            handle = null;
+            System.out.println("[GhydraMCP] HTTP server stopped on port " + port);
         }
         super.dispose();
     }

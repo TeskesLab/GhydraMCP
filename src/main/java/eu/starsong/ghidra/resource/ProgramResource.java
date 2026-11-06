@@ -42,7 +42,7 @@ public class ProgramResource implements Resource {
         boolean all = "true".equalsIgnoreCase(ctx.queryParam("all"));
         try {
             Object result = all
-                ? saveService.saveAllChanged(ctx.tool())
+                ? saveService.saveAllChanged(ctx.tool(), ctx.program())
                 : saveService.save(ctx.requireProgram());
             ctx.json(Response.ok(ctx.ctx(), ctx.port(), result)
                 .self("/program/save")
@@ -119,6 +119,11 @@ public class ProgramResource implements Resource {
             d.put("statistics", stats);
             return d;
         });
+
+        // A headless instance has no window: the endpoints that read the
+        // cursor answer 503, and a client has to be able to tell that from a
+        // fault. The flag is what says it.
+        data.put("headless", ctx.isHeadless());
 
         ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
             .self("/program")

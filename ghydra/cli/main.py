@@ -105,6 +105,8 @@ from . import (
     raw_image,
     kuna,
     x64dbg,
+    headless,
+    report,
 )
 
 cli.add_command(instances.instances)
@@ -128,6 +130,8 @@ cli.add_command(datatypes.datatypes)
 cli.add_command(raw_image.raw_image)
 cli.add_command(kuna.kuna)
 cli.add_command(x64dbg.x64dbg)
+cli.add_command(headless.headless)
+cli.add_command(report.report)
 
 
 @cli.command('version')

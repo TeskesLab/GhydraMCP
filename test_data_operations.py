@@ -23,6 +23,8 @@ from urllib.parse import quote
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from ghydra.testing import free_data_addresses
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("data_test")
@@ -51,35 +53,20 @@ def wait_for_program_loaded(port=GHIDRA_PORT, timeout=20):
     return False
 
 def find_valid_addresses(port=GHIDRA_PORT) -> list:
-    """Find valid memory addresses for testing by checking memory map."""
-    try:
-        response = requests.get(f"http://localhost:{port}/memory")
-        memory_info = json.loads(response.text)
+    """Find addresses where a data item can be defined.
 
-        memory_blocks = memory_info.get("result", [])
-        valid_addresses = []
+    The memory map alone is not enough: an address that already holds a
+    data item, or that is inside a function, refuses to be defined again.
+    So every candidate is asked about - the data items and the functions
+    that cover it - before it is handed out.
+    """
+    base_url = f"http://localhost:{port}"
+    free = free_data_addresses(base_url)
+    if free:
+        return free
 
-        # First try to find a RAM block
-        for block in memory_blocks:
-            if "start" in block and "name" in block and "RAM" in block["name"].upper():
-                addr_base = int(block["start"], 16)
-                for i in range(10):
-                    valid_addresses.append(f"{addr_base + i*4:08x}")
-                return valid_addresses
-
-        # If no RAM blocks, try any memory block
-        for block in memory_blocks:
-            if "start" in block:
-                addr_base = int(block["start"], 16)
-                for i in range(10):
-                    valid_addresses.append(f"{addr_base + i*4:08x}")
-                return valid_addresses
-
-    except Exception as e:
-        logger.error(f"Error getting memory map: {e}")
-
-    # Fallback addresses if cannot determine from memory map
-    return ["08000100", "08000104", "08000108", "0800010c", "08000110"]
+    logger.error("No free address found for the data tests")
+    return []
 
 def test_http_data_create():
     """Test creating data items with different types using HTTP API."""
@@ -98,9 +85,8 @@ def test_http_data_create():
         address = addresses[i % len(addresses)]
         logger.info(f"Testing data type: {data_type} at address {address}")
 
-        url = f"http://localhost:{GHIDRA_PORT}/data"
+        url = f"http://localhost:{GHIDRA_PORT}/data/{address}"
         payload = {
-            "address": address,
             "type": data_type,
             "newName": f"TEST_{data_type.upper()}"
         }
@@ -113,7 +99,7 @@ def test_http_data_create():
             response = requests.post(url, json=payload)
             logger.info(f"Status: {response.status_code}")
             logger.info(f"Response: {response.text}")
-            if response.status_code == 200 and json.loads(response.text).get("success", False):
+            if response.status_code in (200, 201) and json.loads(response.text).get("success", False):
                 success_count += 1
                 logger.info(f"Success with data type {data_type}")
         except Exception as e:
@@ -133,30 +119,29 @@ def test_http_data_rename():
     test_name = f"TEST_RENAME_{int(time.time())}"
 
     # First create a data item to rename
-    create_url = f"http://localhost:{GHIDRA_PORT}/data"
+    create_url = f"http://localhost:{GHIDRA_PORT}/data/{test_address}"
     create_payload = {
-        "address": test_address,
         "type": "int",
         "newName": "TEST_BEFORE_RENAME"
     }
 
     try:
         create_response = requests.post(create_url, json=create_payload)
-        if create_response.status_code != 200:
+        if create_response.status_code not in (200, 201):
             logger.warning("Failed to create test data for rename test")
             return False
 
         # Rename the data
+        rename_url = f"http://localhost:{GHIDRA_PORT}/data/{test_address}"
         rename_payload = {
-            "address": test_address,
             "newName": test_name
         }
 
-        rename_response = requests.post(create_url, json=rename_payload)
+        rename_response = requests.patch(rename_url, json=rename_payload)
         logger.info(f"Rename response: {rename_response.status_code}")
         logger.info(f"Rename response: {rename_response.text}")
 
-        return rename_response.status_code == 200 and json.loads(rename_response.text).get("success", False)
+        return rename_response.status_code in (200, 201) and json.loads(rename_response.text).get("success", False)
     except Exception as e:
         logger.error(f"Error in rename test: {e}")
         return False
@@ -170,31 +155,29 @@ def test_http_data_type_change():
     test_address = addresses[1]
 
     # First create a data item
-    create_url = f"http://localhost:{GHIDRA_PORT}/data"
+    create_url = f"http://localhost:{GHIDRA_PORT}/data/{test_address}"
     create_payload = {
-        "address": test_address,
         "type": "uint",
         "newName": "TEST_TYPE_CHANGE"
     }
 
     try:
         create_response = requests.post(create_url, json=create_payload)
-        if create_response.status_code != 200:
+        if create_response.status_code not in (200, 201):
             logger.warning("Failed to create test data for type change test")
             return False
 
         # Change the type
-        type_url = f"http://localhost:{GHIDRA_PORT}/data/type"
+        type_url = f"http://localhost:{GHIDRA_PORT}/data/{test_address}/type"
         type_payload = {
-            "address": test_address,
             "type": "byte"
         }
 
-        type_response = requests.post(type_url, json=type_payload)
+        type_response = requests.patch(type_url, json=type_payload)
         logger.info(f"Type change response: {type_response.status_code}")
         logger.info(f"Type change response: {type_response.text}")
 
-        return type_response.status_code == 200 and json.loads(type_response.text).get("success", False)
+        return type_response.status_code in (200, 201) and json.loads(type_response.text).get("success", False)
     except Exception as e:
         logger.error(f"Error in type change test: {e}")
         return False
@@ -208,31 +191,26 @@ def test_http_data_delete():
     test_address = addresses[2]
 
     # First create a data item to delete
-    create_url = f"http://localhost:{GHIDRA_PORT}/data"
+    create_url = f"http://localhost:{GHIDRA_PORT}/data/{test_address}"
     create_payload = {
-        "address": test_address,
         "type": "int",
         "newName": "TEST_DELETE_ME"
     }
 
     try:
         create_response = requests.post(create_url, json=create_payload)
-        if create_response.status_code != 200:
+        if create_response.status_code not in (200, 201):
             logger.warning("Failed to create test data for delete test")
             return False
 
         # Delete the data
-        delete_url = f"http://localhost:{GHIDRA_PORT}/data/delete"
-        delete_payload = {
-            "address": test_address,
-            "action": "delete"
-        }
+        delete_url = f"http://localhost:{GHIDRA_PORT}/data/{test_address}"
 
-        delete_response = requests.post(delete_url, json=delete_payload)
+        delete_response = requests.delete(delete_url)
         logger.info(f"Delete response: {delete_response.status_code}")
         logger.info(f"Delete response: {delete_response.text}")
 
-        return delete_response.status_code == 200 and json.loads(delete_response.text).get("success", False)
+        return delete_response.status_code in (200, 201) and json.loads(delete_response.text).get("success", False)
     except Exception as e:
         logger.error(f"Error in delete test: {e}")
         return False
@@ -246,32 +224,30 @@ def test_http_combined_operations():
     test_address = addresses[3]
 
     # First create a data item
-    create_url = f"http://localhost:{GHIDRA_PORT}/data"
+    create_url = f"http://localhost:{GHIDRA_PORT}/data/{test_address}"
     create_payload = {
-        "address": test_address,
         "type": "int",
         "newName": "TEST_COMBINED_ORIG"
     }
 
     try:
         create_response = requests.post(create_url, json=create_payload)
-        if create_response.status_code != 200:
+        if create_response.status_code not in (200, 201):
             logger.warning("Failed to create test data for combined update test")
             return False
 
         # Update both name and type in one operation
-        update_url = f"http://localhost:{GHIDRA_PORT}/data"
+        update_url = f"http://localhost:{GHIDRA_PORT}/data/{test_address}"
         update_payload = {
-            "address": test_address,
             "newName": "TEST_COMBINED_NEW",
             "type": "uint"
         }
 
-        update_response = requests.post(update_url, json=update_payload)
+        update_response = requests.patch(update_url, json=update_payload)
         logger.info(f"Combined update response: {update_response.status_code}")
         logger.info(f"Combined update response: {update_response.text}")
 
-        return update_response.status_code == 200 and json.loads(update_response.text).get("success", False)
+        return update_response.status_code in (200, 201) and json.loads(update_response.text).get("success", False)
     except Exception as e:
         logger.error(f"Error in combined update test: {e}")
         return False
@@ -309,8 +285,9 @@ async def test_mcp_data_operations():
                     "data_create",
                     arguments={"address": test_address, "data_type": "uint"}
                 )
-                create_data = json.loads(create_result.content[0].text)
-                assert create_data.get("success", False), "data_create failed"
+                create_data = create_result.content[0].text
+                assert not create_data.startswith("Error"), \
+                    f"data_create failed: {create_data}"
                 logger.info("data_create passed")
 
                 # Test data_rename
@@ -320,8 +297,9 @@ async def test_mcp_data_operations():
                     "data_rename",
                     arguments={"address": test_address, "name": test_name}
                 )
-                rename_data = json.loads(rename_result.content[0].text)
-                assert rename_data.get("success", False), "data_rename failed"
+                rename_data = rename_result.content[0].text
+                assert not rename_data.startswith("Error"), \
+                    f"data_rename failed: {rename_data}"
                 logger.info("data_rename passed")
 
                 # Test data_set_type
@@ -330,8 +308,9 @@ async def test_mcp_data_operations():
                     "data_set_type",
                     arguments={"address": test_address, "data_type": "byte"}
                 )
-                set_type_data = json.loads(set_type_result.content[0].text)
-                assert set_type_data.get("success", False), "data_set_type failed"
+                set_type_data = set_type_result.content[0].text
+                assert not set_type_data.startswith("Error"), \
+                    f"data_set_type failed: {set_type_data}"
                 logger.info("data_set_type passed")
 
                 # Test memory_read on the data
@@ -340,9 +319,11 @@ async def test_mcp_data_operations():
                     "memory_read",
                     arguments={"address": test_address, "length": 4}
                 )
-                read_data = json.loads(read_result.content[0].text)
-                assert read_data.get("success", False), "memory_read failed"
-                assert "hexBytes" in read_data, "memory_read response missing hexBytes"
+                read_data = read_result.content[0].text
+                assert not read_data.startswith("Error"), \
+                    f"memory_read failed: {read_data}"
+                assert "Memory at" in read_data, \
+                    f"memory_read response is not a hex dump: {read_data}"
                 logger.info("memory_read passed")
 
                 # Test data_delete
@@ -351,8 +332,9 @@ async def test_mcp_data_operations():
                     "data_delete",
                     arguments={"address": test_address}
                 )
-                delete_data = json.loads(delete_result.content[0].text)
-                assert delete_data.get("success", False), "data_delete failed"
+                delete_data = delete_result.content[0].text
+                assert not delete_data.startswith("Error"), \
+                    f"data_delete failed: {delete_data}"
                 logger.info("data_delete passed")
 
                 logger.info("All MCP data operations passed")

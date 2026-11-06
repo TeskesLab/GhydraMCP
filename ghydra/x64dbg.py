@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
@@ -691,3 +692,208 @@ def to_runtime(static_addr: int, image_base: int, module_base: int) -> int:
 def to_static(runtime_addr: int, image_base: int, module_base: int) -> int:
     """The static address of a runtime one."""
     return int(runtime_addr) - int(module_base) + int(image_base)
+
+
+def collect_snapshot(client: Client, instruction_count: int = 16) -> Dict[str, Any]:
+    """The state of the debugger, as it is right now.
+
+    The plugin answers with prose, so the text is kept as it came and the
+    parts that can be read are read: the modules, with their bases, are the
+    ones the address model needs.
+
+    A debugger without a session is not an error: the state says so, and the
+    rest is simply not there.
+    """
+    snapshot: Dict[str, Any] = {"errors": []}
+
+    def read(name: str, tool: str, arguments: Optional[dict] = None) -> str:
+        try:
+            return client.call_tool(tool, arguments or {})
+        except X64dbgError as exc:
+            snapshot["errors"].append(f"{name}: {exc}")
+            return ""
+
+    state = read("state", "GetDebugState")
+    snapshot["state"] = state
+    snapshot["modules_text"] = read("modules", "ListModules")
+    snapshot["modules"] = parse_modules(snapshot["modules_text"])
+    snapshot["registers"] = read("registers", "GetAllRegisters")
+    snapshot["breakpoints"] = read("breakpoints", "ListBreakpoints")
+    snapshot["disassembly"] = read(
+        "disassembly", "Disassemble", {"count": int(instruction_count)})
+    snapshot["memory_map"] = read("memory_map", "GetMemoryMap")
+    snapshot["call_stack"] = read("call_stack", "GetCallStack")
+    return snapshot
+
+
+def render_snapshot(snapshot: Dict[str, Any], title: str = "x64dbg session") -> str:
+    """The snapshot as a document a human reads.
+
+    The plugin answers with prose, so the prose is what goes in. The modules
+    are also tabulated, because their bases are what the address model is
+    made of.
+    """
+    out: List[str] = [f"# {title}\n"]
+    out.append(f"- Taken: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+
+    state = (snapshot.get("state") or "").strip()
+    out.append("## State\n")
+    out.append("```\n" + (state or "_the debugger answered nothing_") + "\n```\n")
+
+    modules = snapshot.get("modules") or []
+    if modules:
+        out.append("## Modules\n")
+        out.append("| Base | Size | Path |")
+        out.append("|---|---|---|")
+        for module in modules:
+            out.append(f"| {hex(module.get('base', 0))} | {hex(module.get('size', 0))} "
+                       f"| {module.get('path', '')} |")
+        out.append("")
+
+    for title_text, key in (
+        ("Registers", "registers"),
+        ("Breakpoints", "breakpoints"),
+        ("Disassembly", "disassembly"),
+        ("Call stack", "call_stack"),
+        ("Memory map", "memory_map"),
+    ):
+        text = (snapshot.get(key) or "").strip()
+        if not text:
+            continue
+        out.append(f"## {title_text}\n")
+        out.append("```\n" + text + "\n```\n")
+
+    errors = snapshot.get("errors") or []
+    if errors:
+        out.append("## What could not be read\n")
+        for error in errors:
+            out.append(f"- {error}")
+        out.append("")
+
+    return "\n".join(out)
+
+
+def load_annotations(path: str) -> Dict[str, Any]:
+    """The annotations of a report, as they were written.
+
+    The file is the one the report writes: the binary, the image base and the
+    annotations themselves.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except OSError as exc:
+        raise X64dbgError(
+            f"could not read the annotations: {exc}", code="X64DBG_NO_FILE") from None
+    except ValueError as exc:
+        raise X64dbgError(
+            f"the annotations are not JSON: {exc}", code="X64DBG_BAD_ARGS") from None
+    if not isinstance(data, dict) or not isinstance(data.get("annotations"), list):
+        raise X64dbgError(
+            "the file holds no annotations", code="X64DBG_BAD_ARGS")
+    return data
+
+
+def apply_annotations(client: Client, annotations: Dict[str, Any],
+                      mode: str = "Comment", bookmarks: bool = False,
+                      limit: int = 0, passes: int = 2) -> Dict[str, Any]:
+    """Put the annotations into the debugger.
+
+    The addresses in the file are the ones in the binary; the debugger works
+    on the live process, where the module was loaded wherever the loader put
+    it. The module that matches the binary gives the base, and the constant
+    between the two follows from it.
+
+    Every annotation becomes a comment (or a label) at the runtime address,
+    and a bookmark when asked for.
+
+    A failed annotation is tried again. Setting a comment and setting a
+    bookmark are the same operation twice over, so repeating them is safe -
+    and the local network stack resets a loopback connection every now and
+    then, which is what makes a call fail without the debugger having done
+    anything wrong.
+    """
+    binary = str(annotations.get("binary") or "")
+    image_base = parse_int(annotations.get("image_base"))
+    if image_base is None:
+        raise X64dbgError(
+            "the annotations carry no image base, so the addresses cannot be "
+            "translated", code="X64DBG_BAD_ARGS")
+
+    modules = parse_modules(client.call_tool("ListModules"))
+    module = find_module(modules, binary) if binary else None
+    if module is None:
+        # No module matches the binary of the annotations. Falling back to
+        # the first module would translate every address with the base of a
+        # module that has nothing to do with the file - and the comments
+        # would land at addresses that mean nothing. There is no way to
+        # know the base without the module, so the annotations are refused.
+        raise X64dbgError(
+            f"no loaded module matches the binary of the annotations ({binary}). "
+            "Load it in the debugger before applying them.",
+            code="X64DBG_NO_MATCH")
+
+    entries = annotations.get("annotations") or []
+    if limit:
+        entries = entries[:limit]
+
+    applied: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+
+    # What is left to do, and what was already done: a failed annotation is
+    # tried again, and the record of it is replaced rather than duplicated.
+    pending: List[Dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        static = parse_int(entry.get("address"))
+        if static is None:
+            continue
+        runtime = to_runtime(static, image_base, module["base"])
+        pending.append({
+            "static_address": hex(static),
+            "runtime_address": hex(runtime),
+            "name": entry.get("name") or "",
+            "comment": str(entry.get("comment") or entry.get("name") or ""),
+        })
+
+    for _attempt in range(max(1, int(passes))):
+        still_failing: List[Dict[str, Any]] = []
+        for record in pending:
+            try:
+                if record["comment"]:
+                    client.call_tool("CommentOrLabelAtAddress", {
+                        "address": record["runtime_address"],
+                        "value": record["comment"],
+                        "mode": mode,
+                    })
+                if bookmarks:
+                    # The plugin's own SetBookmark runs "bookmarkadd", which
+                    # x64dbg does not know: the commands are "bookmarkset"
+                    # (alias "bookmark"), "bookmarkdel" and "bookmarklist".
+                    # The command is run directly, so the bookmark lands.
+                    client.call_tool("ExecuteDebuggerCommand", {
+                        "command": f"bookmarkset {record['runtime_address']}",
+                    })
+                record["ok"] = True
+                record.pop("error", None)
+                applied.append(record)
+            except X64dbgError as exc:
+                record["ok"] = False
+                record["error"] = str(exc)
+                still_failing.append(record)
+        if not still_failing:
+            break
+        pending = still_failing
+    failed = [record for record in pending if record.get("ok") is False]
+
+    return {
+        "binary": binary,
+        "image_base": hex(image_base),
+        "module_base": hex(module["base"]),
+        "module_path": module.get("path", ""),
+        "mode": mode,
+        "bookmarks": bookmarks,
+        "applied": applied,
+        "failed": failed,
+    }

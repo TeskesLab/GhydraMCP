@@ -45,8 +45,23 @@ public class SaveService {
 
     /** Save every open program that has unsaved changes. */
     public List<SaveResult> saveAllChanged(PluginTool tool) {
+        return saveAllChanged(tool, null);
+    }
+
+    /**
+     * Save every open program that has unsaved changes.
+     *
+     * @param fallback the program to save when there is no CodeBrowser to ask
+     *                 for the open ones. A headless instance has exactly one
+     *                 program, and saving it is what makes the analysis
+     *                 outlive the run.
+     */
+    public List<SaveResult> saveAllChanged(PluginTool tool, Program fallback) {
         List<SaveResult> results = new ArrayList<>();
         if (tool == null) {
+            if (fallback != null && fallback.isChanged()) {
+                results.add(save(fallback));
+            }
             return results;
         }
         ProgramManager pm = tool.getService(ProgramManager.class);

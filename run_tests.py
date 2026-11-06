@@ -185,6 +185,31 @@ def run_x64dbg_tests():
         return False
 
 
+def run_headless_tests():
+    """Run the headless runner, report and annotation tests."""
+    print_header("Running Headless Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_headless.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running headless tests: {str(e)}")
+        return False
+
+
 def run_all_tests():
     """Run all tests"""
     print_header("GhydraMCP Test Suite")
@@ -197,6 +222,7 @@ def run_all_tests():
     port_tests_success = run_port_tests()
     kuna_success = run_kuna_tests()
     x64dbg_success = run_x64dbg_tests()
+    headless_success = run_headless_tests()
 
     # Print a summary
     print_header("Test Summary")
@@ -207,11 +233,12 @@ def run_all_tests():
     print(f"Javalin Port Edge-Case Tests: {'PASSED' if port_tests_success else 'FAILED'}")
     print(f"Kuna Tests: {'PASSED' if kuna_success else 'FAILED'}")
     print(f"x64dbg Tests: {'PASSED' if x64dbg_success else 'FAILED'}")
-    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success) else 'FAILED'}")
+    print(f"Headless Tests: {'PASSED' if headless_success else 'FAILED'}")
+    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success) else 'FAILED'}")
 
     return (http_api_success and mcp_bridge_success and data_tests_success
             and comment_tests_success and port_tests_success and kuna_success
-            and x64dbg_success)
+            and x64dbg_success and headless_success)
 
 if __name__ == "__main__":
     # Check if we have the required dependencies
@@ -245,9 +272,12 @@ if __name__ == "__main__":
         elif sys.argv[1] == "--x64dbg":
             # Run only the x64dbg integration tests
             success = run_x64dbg_tests()
+        elif sys.argv[1] == "--headless":
+            # Run only the headless runner, report and annotation tests
+            success = run_headless_tests()
         else:
             print(f"Unknown argument: {sys.argv[1]}")
-            print("Usage: python run_tests.py [--http|--mcp|--data|--comments|--port|--kuna|--x64dbg]")
+            print("Usage: python run_tests.py [--http|--mcp|--data|--comments|--port|--kuna|--x64dbg|--headless]")
             sys.exit(1)
     else:
         # Run all tests
