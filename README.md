@@ -228,8 +228,6 @@ run. There is no cursor without a window. Every other endpoint behaves the same 
 The debugger is a different matter: the x64dbg plugin drives it without a human, but the debugger
 is a program with a window, and there is no build of it that runs without one.
 
-
-
 # The x64dbg integration
 
 The [x64dbg MCP server](https://github.com/duty1g/x64dbg-mcp-server) is a plugin that lives inside
@@ -650,8 +648,7 @@ The bridge exposes **99 tools in 24 namespaces**. The namespaces are:
 `structs_*` · `symbols_*` · `ui_*` · `variables_*` · `x64dbg_*` · `xrefs_*`
 
 The MCP client setup for Claude Desktop, Claude Code, Cline and 5ire is in
-[Client Setup](#client-setup) below.
-See the [Client Setup](#client-setup) section below for detailed configuration instructions for each client.
+[Client Setup](#client-setup) below, with detailed configuration instructions for each client.
 
 ## API Reference
 
