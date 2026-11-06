@@ -106,8 +106,6 @@ side by side in one report and writes the annotations for the debugger, so a hum
 finds the interesting functions already marked. Full reference:
 [GHYDRA_HEADLESS.md](GHYDRA_HEADLESS.md).
 
-
-
 ### The x64dbg integration
 
 The assistant can now drive a live debugger, with the static analysis and the dynamic one sharing

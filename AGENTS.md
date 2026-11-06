@@ -27,7 +27,7 @@ decompilation, annotation, and data manipulation.
 ## Layout
 
 ```
-bridge_mcp_hydra.py              # ALL MCP tools + formatters live here (4400+ lines)
+bridge_mcp_hydra.py              # ALL MCP tools + formatters live here (8300+ lines)
 ghydra/                          # standalone Click CLI — does NOT import the bridge
   kuna.py                        # Kuna CLI driver (local, opt-in)
   cli/ client/ config/ formatters/ utils/
