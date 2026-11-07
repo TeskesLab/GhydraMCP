@@ -66,8 +66,8 @@ GhydraMCP started as a fork of [GhidraMCP by Laurie Wired](https://github.com/La
 ### Where this stands against the REA
 
 The REA's tool catalogue was read off its own server, not off a document: 139 tools in the
-installed version. The comparison, by capability, is in [REA_PARITY.md](REA_PARITY.md) — what is
-covered, what is not, and the four native gaps worth closing.
+installed version. The comparison by capability covers what is implemented, what is not, and
+the four native gaps worth closing.
 
 **Those four are closed now**, each on the three surfaces at once:
 

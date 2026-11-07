@@ -181,8 +181,8 @@ ghydra functions set-comment --address 0x401000 --comment "Main entry point"
 ### The four composed commands
 
 Four commands that answer a question in one call, where the pieces were all there and the agent
-paid a call for each. They close the four native gaps against the REA — the comparison is in
-[REA_PARITY.md](REA_PARITY.md).
+paid a call for each. They close the four native gaps found by comparing the two tool catalogues
+by capability.
 
 ```bash
 # Decompile a list of functions in one call
