@@ -195,6 +195,11 @@ The bridge and the CLI duplicate all request logic, so one endpoint means **six*
 
 Name tools `resource_verb` (`functions_get_cfg`, `data_create`).
 
+**Every text answer ends with a `Next:` line** (I8): `text_output` translates the envelope's
+`_links` into the bridge call that follows them (`functions_decompile(address="0x…")`, the next
+page for a paginated listing). The hrefs carry real values, so the suggestion is directly
+callable; a link that does not map to a registered tool is left out rather than guessed.
+
 **A tool parameter must not be called `arguments`.** That is the name of the container the MCP
 protocol uses for a tool's parameters, so a client that re-encodes the container loses the value
 — the call goes through with no arguments and the tool does something else instead of failing. It
