@@ -12,22 +12,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   requiring `extends GhidraScript`, so Python 3 source answered `BAD_REQUEST`.
   `POST /scripts/run`, `scripts_run` and `ghydra scripts run` now accept an explicit
   `language` (`java`/`python`) and `filename`; a `.py` name (or `language=python`)
-  writes a temporary `.py` file so Ghidra selects the PyGhidra provider, and a
-  missing provider names the `pyghidraRun` remedy. Java support and the existing
+  runs a temporary `.py` file with the PyGhidra provider explicitly selected,
+  independent of Jython defaults or script metadata. Unique temporary directories
+  keep existing user scripts and concurrent requests with the same filename intact;
+  a missing provider names the `pyghidraRun` remedy. Java support and the existing
   execution opt-in are unchanged. `skills/ghydra-cli/SKILL.md` no longer teaches the
   removed `script execute` / `script capabilities` commands.
+- **Python script failures:** capture the script error writer as well as stdout.
+  PyGhidra versions that print uncaught exceptions instead of throwing them now
+  return a failed result with the traceback and keep output produced before failure.
 - **The script tools lost their output**: `scripts_list` and `scripts_run` had no
   `@text_output` and no `FORMATTERS` entry, so the script catalogue and the captured
   `output` degraded to a bare `"Done"`. Both are formatted now, and `scripts_run`'s
   `args` is one piece of text instead of a list that some MCP clients flatten.
-- **Ad-hoc scripts no longer touch the user's script directory**: source is written
-  into a unique temporary subdirectory (removed recursively afterwards), so a
-  caller-supplied `filename` can never truncate and delete an existing script and
-  concurrent runs cannot overwrite one another. Python 3 ad-hoc source is also
-  bound explicitly to the provider whose runtime is `PyGhidra`, instead of relying
-  on `GhidraScriptUtil.getProvider` — which can resolve a bare `.py` file to Jython
-  when both runtimes are installed. When no PyGhidra provider exists the answer
-  names the `pyghidraRun` remedy. (Addresses the two Codex review findings.)
+- **Java ad-hoc compatibility:** Java sources remain at the script root because
+  Ghidra interprets a subdirectory as a package. Existing Java sources are refused
+  atomically rather than overwritten or deleted; Python uses isolated directories.
 
 ## [3.1.0] - 2026-11-06
 

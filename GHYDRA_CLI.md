@@ -135,7 +135,8 @@ ghydra scripts run --filename probe.py --language python --code "println('hi')"
 `--language` accepts `java` (default) or `python`. A `.py` `--file`/`--filename`
 also selects Python 3 and is forwarded so the server preserves the extension —
 sending only the source text used to lose it and produce a `.java` file. Python
-3 requires PyGhidra (`pyghidraRun` / the PyGhidra extension, Ghidra 11.x+).
+3 requires Ghidra launched through `pyghidraRun`; installing the extension alone
+does not initialize the Python runtime.
 
 ### Functions Commands
 

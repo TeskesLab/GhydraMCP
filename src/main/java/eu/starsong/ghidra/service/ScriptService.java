@@ -17,6 +17,9 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.FileVisitResult;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -106,16 +109,11 @@ public class ScriptService {
     }
 
     /**
-     * Write ad-hoc source into an isolated temporary directory inside the user
-     * script directory, run it, then remove that whole directory. Java source
-     * must declare {@code public class &lt;Name&gt; extends GhidraScript};
-     * Python 3 source is written as {@code .py} and bound explicitly to the
-     * PyGhidra provider.
-     *
-     * <p>The directory is unique per call. A caller-supplied filename is only a
-     * display name: mapping it onto the user script directory would let a
-     * request truncate and then delete a real script the user keeps there, and
-     * two concurrent ad-hoc runs would overwrite each other's source.
+     * Run Python source in a unique temporary directory with PyGhidra explicitly
+     * selected. Java source must declare a GhidraScript class and is written at
+     * the script root, because a subdirectory is interpreted as a Java package.
+     * Existing Java source files are refused rather than overwritten. Only files
+     * owned by this invocation are removed afterwards.
      */
     public RunResult runSource(PluginTool tool, Project project, Program program,
             String source, String[] args) {
@@ -141,17 +139,22 @@ public class ScriptService {
         }
 
         File dir = GhidraScriptUtil.getUserScriptDirectory().getFile(false);
-        Path tempDir;
+        Path temporaryDirectory = null;
+        File scriptFile = null;
         try {
             Files.createDirectories(dir.toPath());
-            tempDir = Files.createTempDirectory(dir.toPath(), "ghydra_adhoc_");
-        } catch (IOException e) {
-            throw new IllegalStateException(
-                "Failed to create a temporary script directory: " + e.getMessage(), e);
-        }
-
-        File scriptFile = new File(tempDir.toFile(), stem + extensionFor(lang));
-        try {
+            // Python filenames must not overwrite scripts in the user's directory,
+            // and simultaneous requests with the same filename need separate files.
+            if ("python".equals(lang)) {
+                temporaryDirectory = Files.createTempDirectory(dir.toPath(), "ghydra_python_");
+            }
+            File target = new File(
+                temporaryDirectory != null ? temporaryDirectory.toFile() : dir,
+                stem + extensionFor(lang));
+            if (temporaryDirectory == null) {
+                Files.createFile(target.toPath());
+            }
+            scriptFile = target;
             Files.writeString(scriptFile.toPath(), source);
             return run(tool, project, program, new ResourceFile(scriptFile), args, lang);
         } catch (RuntimeException e) {
@@ -159,23 +162,39 @@ public class ScriptService {
         } catch (Exception e) {
             throw new RuntimeException("Failed to run ad-hoc script: " + e.getMessage(), e);
         } finally {
-            deleteTree(tempDir);
+            if (temporaryDirectory != null) {
+                try {
+                    deleteTemporaryDirectory(temporaryDirectory);
+                } catch (IOException e) {
+                    throw new RuntimeException("Failed to remove ad-hoc Python script directory", e);
+                }
+            } else if (scriptFile != null) {
+                scriptFile.delete();
+            }
         }
     }
 
-    /** Best-effort removal of the temp directory, including compiled .class files. */
-    private static void deleteTree(Path root) {
-        try (java.util.stream.Stream<Path> walk = Files.walk(root)) {
-            walk.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
-                try {
-                    Files.deleteIfExists(path);
-                } catch (IOException ignored) {
-                    // A leftover temp file is harmless; never fail the run for it.
+    private static void deleteTemporaryDirectory(Path directory) throws IOException {
+        // PyGhidra also writes __pycache__; remove only this request's owned tree.
+        // walkFileTree does not follow symbolic links.
+        Files.walkFileTree(directory, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
+                    throws IOException {
+                Files.delete(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path path, IOException error)
+                    throws IOException {
+                if (error != null) {
+                    throw error;
                 }
-            });
-        } catch (IOException ignored) {
-            // best effort
-        }
+                Files.delete(path);
+                return FileVisitResult.CONTINUE;
+            }
+        });
     }
 
     /** A safe file stem: no directories, no punctuation the script loader rejects. */
@@ -217,6 +236,8 @@ public class ScriptService {
             ResourceFile file, String[] args, String language) {
         StringWriter sw = new StringWriter();
         PrintWriter writer = new PrintWriter(sw);
+        StringWriter errors = new StringWriter();
+        PrintWriter errorWriter = new PrintWriter(errors);
         try {
             GhidraScriptProvider provider = providerFor(file, language);
             if (provider == null) {
@@ -227,7 +248,12 @@ public class ScriptService {
                 throw new IllegalArgumentException(
                     "No script provider for " + file.getName() + " (unsupported extension?)." + hint);
             }
-            GhidraScript script = provider.getScriptInstance(file, writer);
+            GhidraScript script = provider.getScriptInstance(file, errorWriter);
+            if (script == null) {
+                throw new IllegalArgumentException(
+                    "Could not initialize " + provider.getRuntimeEnvironmentName()
+                    + " script runtime. For Python 3, launch Ghidra with pyghidraRun.");
+            }
             if (args != null && args.length > 0) {
                 script.setScriptArgs(args);
             }
@@ -240,13 +266,50 @@ public class ScriptService {
             Project effective = project != null ? project : (tool != null ? tool.getProject() : null);
             GhidraState state = new GhidraState(
                 tool, effective, program, location, null, null);
-            script.execute(state, TaskMonitor.DUMMY, writer);
+            executeScript(script, state, writer, errorWriter);
             writer.flush();
-            return new RunResult(file.getName(), sw.toString(), true, null);
+            errorWriter.flush();
+            // Older PyGhidra runners report uncaught Python exceptions through
+            // printerr instead of propagating them to Java.
+            String diagnostic = errors.toString();
+            boolean success = diagnostic.isBlank();
+            return new RunResult(file.getName(), sw.toString(), success,
+                success ? null : diagnostic);
         } catch (Exception e) {
             writer.flush();
+            errorWriter.flush();
             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-            return new RunResult(file.getName(), sw.toString(), false, msg);
+            String diagnostic = errors.toString();
+            return new RunResult(file.getName(), sw.toString(), false,
+                diagnostic.isBlank() ? msg : diagnostic + "\n" + msg);
+        }
+    }
+
+    private static void executeScript(GhidraScript script, GhidraState state,
+            PrintWriter writer, PrintWriter errorWriter) throws Exception {
+        Class<?> controlsClass;
+        try {
+            controlsClass = Class.forName("ghidra.app.script.ScriptControls");
+        } catch (ClassNotFoundException legacyGhidra) {
+            // Ghidra 11 has no separate script error writer.
+            script.execute(state, TaskMonitor.DUMMY, writer);
+            return;
+        }
+        Object controls = controlsClass
+            .getConstructor(PrintWriter.class, PrintWriter.class, TaskMonitor.class)
+            .newInstance(writer, errorWriter, TaskMonitor.DUMMY);
+        try {
+            GhidraScript.class.getMethod("execute", GhidraState.class, controlsClass)
+                .invoke(script, state, controls);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception exception) {
+                throw exception;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new RuntimeException(cause);
         }
     }
 }

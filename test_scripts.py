@@ -1,126 +1,233 @@
 #!/usr/bin/env python3
-"""Regression tests for ad-hoc Java/Python script execution (PyGhidra fix).
+"""Consumer-visible scripting regressions, without Ghidra or PyGhidra.
 
-v3.0.0's merge removed /script/execute; the replacement always wrote a .java
-file and demanded "extends GhidraScript", so ad-hoc Python 3 stopped working.
-These tests need neither Ghidra nor PyGhidra: they check the language plumbing
-on all three surfaces plus the pure argument parser. The live Python run is
-covered by src/test/ghidra/TestPyGhidraScript.java under analyzeHeadless.
+A bounded loopback REST fixture runs only the Python snippets defined here in
+isolated subprocesses. It models the script service's captured output and
+nested execution outcome, not Ghidra's Python provider or program bindings.
+MCP calls and CLI commands use their real HTTP transports and formatters.
 
-Run with:  python test_scripts.py
+Run with: python test_scripts.py
 """
 
-import inspect
+import asyncio
+import hashlib
+import json
 import os
+import subprocess
 import sys
+import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import cast
+from unittest import mock
+
+from click.testing import CliRunner
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import bridge_mcp_hydra as bridge
-
-ROOT = os.path.dirname(os.path.abspath(__file__))
-JAVA = "src/main/java/eu/starsong/ghidra"
+from ghydra.cli.main import cli
 
 
-def _read(path):
-    with open(os.path.join(ROOT, path), encoding="utf-8") as handle:
-        return handle.read()
+OUTPUT_SOURCE = 'print("PYTHON_RESULT", 6 * 7)\nprint("second line: café 雪")'
+ARGS_SOURCE = (
+    'import hashlib, json, sys\n'
+    'args = sys.argv[1:]\n'
+    'data = json.dumps(args, ensure_ascii=False).encode("utf-8")\n'
+    'print("argc=" + str(len(args)))\n'
+    'print("sha256=" + hashlib.sha256(data).hexdigest())'
+)
+ERROR_SOURCE = 'print("before failure")\nraise RuntimeError("script exploded: 雪")'
+SCRIPT_SOURCES = {OUTPUT_SOURCE, ARGS_SOURCE, ERROR_SOURCE}
 
 
-class RestContractTests(unittest.TestCase):
-    def test_service_selects_the_runtime_and_keeps_the_extension(self):
-        service = _read(f"{JAVA}/service/ScriptService.java")
-        self.assertIn("normalizeLanguage(String language, String filename)", service)
-        self.assertIn("extensionFor(String language)", service)
-        self.assertIn('"python"', service)
-        self.assertIn('stem + extensionFor(lang)', service)
-        self.assertIn("PyGhidra", service)
-        self.assertIn("language=python", service)
-
-    def test_ad_hoc_source_never_overwrites_user_scripts(self):
-        """Codex P1: a supplied filename must not map to a persistent script path."""
-        service = _read(f"{JAVA}/service/ScriptService.java")
-        self.assertIn("Files.createTempDirectory(dir.toPath(), \"ghydra_adhoc_\")", service)
-        self.assertIn("new File(tempDir.toFile(), stem + extensionFor(lang))", service)
-        self.assertIn("deleteTree(tempDir)", service)
-        self.assertIn("Files.walk(root)", service)
-        self.assertNotIn("new File(dir, stem + extensionFor(lang))", service)
-
-    def test_python_is_bound_to_the_pyghidra_provider(self):
-        """Codex P2: .py alone can resolve to Jython when both runtimes exist."""
-        service = _read(f"{JAVA}/service/ScriptService.java")
-        self.assertIn("providerFor(file, language)", service)
-        self.assertIn("GhidraScriptUtil.getProviders()", service)
-        self.assertIn("getRuntimeEnvironmentName()", service)
-        self.assertIn('runtime.toLowerCase(Locale.ROOT).contains("pyghidra")', service)
-        self.assertIn("No PyGhidra provider is available", service)
-
-    def test_resource_forwards_language_and_filename(self):
-        resource = _read(f"{JAVA}/resource/ScriptResource.java")
-        self.assertIn("public String language;", resource)
-        self.assertIn("public String filename;", resource)
-        self.assertIn("req.language, req.filename", resource)
-
-    def test_live_python_regression_script_exists(self):
-        path = os.path.join(ROOT, "src/test/ghidra/TestPyGhidraScript.java")
-        self.assertTrue(os.path.isfile(path))
-        text = _read("src/test/ghidra/TestPyGhidraScript.java")
-        self.assertIn('"python", "probe.py"', text)
-        self.assertIn('endsWith(".py")', text)
-        self.assertIn("PYGHIDRA_OK", text)
-        self.assertIn("SKIP", text)
+class _ScriptHTTPServer(ThreadingHTTPServer):
+    allow_scripts = True
 
 
-class BridgeContractTests(unittest.TestCase):
-    def test_scripts_run_exposes_language_and_filename(self):
-        sig = inspect.signature(bridge.scripts_run.__wrapped__)
-        for name in ("language", "filename", "args"):
-            self.assertIn(name, sig.parameters)
+class _ScriptHandler(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(3)
 
-    def test_args_is_text_not_a_nested_object(self):
-        """Some MCP clients flatten nested lists; the schema must ask for text."""
-        annotation = inspect.signature(bridge.scripts_run.__wrapped__).parameters["args"].annotation
-        text = str(annotation)
-        self.assertNotIn("list", text)
-        self.assertIn("Annotated[str", text)
-        self.assertIn("BeforeValidator", text)
+    def log_message(self, format: str, *args: object) -> None:
+        pass
 
-    def test_both_script_tools_are_actually_wrapped_by_text_output(self):
-        # Without @text_output the FORMATTERS entries are dead and the answer is
-        # a raw dict instead of the formatted text/error envelope.
-        for name in ("scripts_list", "scripts_run"):
-            with self.subTest(tool=name):
-                fn = getattr(bridge, name)
-                self.assertTrue(hasattr(fn, "__wrapped__"),
-                                f"{name} is missing @text_output")
-                self.assertIn(name, bridge.FORMATTERS)
+    def _reply(self, status, response):
+        body = json.dumps(response, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-    def test_parse_script_args(self):
-        parse = bridge._parse_script_args
-        self.assertEqual([], parse(None))
-        self.assertEqual([], parse(""))
-        self.assertEqual(["a", "b"], parse('["a","b"]'))
-        self.assertEqual(["a", "b"], parse("a, b"))
-        self.assertEqual(["one"], parse("one"))
-        self.assertEqual(["1"], parse("[1]"))
+    def _error(self, status, code, message):
+        self._reply(status, {
+            "success": False,
+            "error": {"code": code, "message": message},
+        })
+
+    def do_GET(self):
+        if self.path != "/scripts":
+            self._error(404, "NOT_FOUND", "Unknown endpoint")
+            return
+        self._reply(200, {"success": True, "result": [
+            {"name": "Probe.py", "path": "/scripts/Probe.py", "category": "Tests"},
+            {"name": "Rename.java", "path": "/scripts/Rename.java", "category": "Tests"},
+        ]})
+
+    def do_POST(self):
+        if self.path != "/scripts/run":
+            self._error(404, "NOT_FOUND", "Unknown endpoint")
+            return
+        if not cast(_ScriptHTTPServer, self.server).allow_scripts:
+            self._error(403, "SCRIPTS_DISABLED", "Script execution is disabled")
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        if not 0 < length <= 16384:
+            self._error(400, "BAD_REQUEST", "Invalid request size")
+            return
+        request = json.loads(self.rfile.read(length))
+        source = request.get("source")
+        filename = request.get("filename", "adhoc.java")
+        language = request.get("language")
+        if language not in ("python", "python3") and not (
+                language is None and filename.endswith(".py")):
+            self._error(400, "INVALID_LANGUAGE", "Python source needs a Python runtime")
+            return
+        if source not in SCRIPT_SOURCES:
+            self._error(400, "INVALID_SOURCE", "Only fixture snippets are executable")
+            return
+        args = request.get("args", [])
+        if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+            self._error(400, "INVALID_ARGS", "Script arguments must be an array of strings")
+            return
+        # No shell, no arbitrary source, bounded runtime and fixed-size output.
+        run = subprocess.run(
+            [sys.executable, "-I", "-X", "utf8", "-c", source, *args],
+            capture_output=True, text=True, encoding="utf-8", timeout=3,
+        )
+        error = run.stderr.strip().splitlines()[-1] if run.returncode else None
+        self._reply(200, {"success": True, "result": {
+            "script": filename,
+            "output": run.stdout,
+            "success": run.returncode == 0,
+            "error": error,
+        }})
 
 
-class CliContractTests(unittest.TestCase):
-    def test_cli_offers_language_filename_and_inline_code(self):
-        cli = _read("ghydra/cli/scripts.py")
-        for needle in ("--language", "--filename", "--code", "os.path.basename",
-                       "endswith('.py')", "payload['language']", "payload['filename']"):
-            with self.subTest(needle=needle):
-                self.assertIn(needle, cli)
+class ScriptServer:
+    def __enter__(self):
+        self.server = _ScriptHTTPServer(("127.0.0.1", 0), _ScriptHandler)
+        self.server.daemon_threads = True
+        self.server.allow_scripts = True
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        return self
 
-    def test_skill_no_longer_teaches_removed_pyghidra_commands(self):
-        skill = _read("skills/ghydra-cli/SKILL.md")
-        self.assertNotIn("ghydra script execute", skill)
-        self.assertNotIn("ghydra script capabilities", skill)
-        self.assertIn("ghydra scripts run", skill)
-        self.assertIn("--language python", skill)
-        self.assertIn("pyghidraRun", skill)
+    def __exit__(self, *_exc):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+
+class ScriptProtocolTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = self.enterContext(ScriptServer())
+        self.enterContext(mock.patch.dict(bridge.active_instances, {
+            self.fixture.port: {"url": f"http://127.0.0.1:{self.fixture.port}"},
+        }))
+        self.enterContext(mock.patch.object(bridge, "RAW_OUTPUT", False))
+
+    def call(self, tool="scripts_run", **arguments):
+        content = asyncio.run(bridge.mcp.call_tool(tool, {
+            "port": self.fixture.port, **arguments,
+        }))
+        return "\n".join(
+            item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")
+            for item in content
+        )
+
+    def test_python_output_survives_mcp_text_formatting(self):
+        for runtime in ({"language": "python"}, {"filename": "probe.py"}):
+            with self.subTest(runtime=runtime):
+                text = self.call(source=OUTPUT_SOURCE, **runtime)
+                self.assertIn("PYTHON_RESULT 42\nsecond line: café 雪\n", text)
+
+    def test_json_arguments_reach_the_executing_script_without_splitting_or_loss(self):
+        cases = [
+            (["a,b", "雪 café", "", 'a"b', "two\nlines"], "json"),
+            (["a,b", "雪 café", ""], "array"),
+            ([], "json"),
+            ([""], "json"),
+        ]
+        for args, shape in cases:
+            with self.subTest(args=args, shape=shape):
+                supplied = json.dumps(args, ensure_ascii=False) if shape == "json" else args
+                text = self.call(source=ARGS_SOURCE, language="python", args=supplied)
+                digest = hashlib.sha256(json.dumps(args, ensure_ascii=False).encode("utf-8")).hexdigest()
+                self.assertIn(f"argc={len(args)}\nsha256={digest}\n", text)
+
+    def test_empty_and_legacy_comma_arguments_remain_usable(self):
+        for supplied, expected in ((None, []), ("", []), (" alpha, beta ,, ", ["alpha", "beta"])):
+            with self.subTest(args=supplied):
+                arguments = {} if supplied is None else {"args": supplied}
+                text = self.call(source=ARGS_SOURCE, language="python", **arguments)
+                digest = hashlib.sha256(json.dumps(expected).encode("utf-8")).hexdigest()
+                self.assertIn(f"argc={len(expected)}\nsha256={digest}\n", text)
+
+    def test_execution_error_keeps_partial_output_and_diagnostic(self):
+        text = self.call(source=ERROR_SOURCE, language="python")
+        self.assertIn("before failure\n", text)
+        self.assertIn("RuntimeError: script exploded: 雪", text)
+        self.assertNotIn("Done", text)
+
+    def test_disabled_script_execution_reports_rest_error(self):
+        self.fixture.server.allow_scripts = False
+        text = self.call(source=OUTPUT_SOURCE, language="python")
+        self.assertIn("SCRIPTS_DISABLED", text)
+        self.assertIn("Script execution is disabled", text)
+
+    def test_missing_source_reports_actionable_error(self):
+        text = self.call()
+        self.assertIn("MISSING_PARAMETER", text)
+        self.assertIn("Either name or source is required", text)
+
+    def test_script_catalogue_is_readable_mcp_text(self):
+        text = self.call("scripts_list")
+        self.assertIn("Probe.py", text)
+        self.assertIn("Rename.java", text)
+
+
+class ScriptCliTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = self.enterContext(ScriptServer())
+        self.runner = CliRunner()
+        # Keep user configuration and terminal styling out of command results.
+        self.home = self.enterContext(tempfile.TemporaryDirectory())
+
+    def invoke(self, *arguments):
+        options = ["--host", "127.0.0.1", "--port", str(self.fixture.port), "--no-color"]
+        return self.runner.invoke(cli, [*options, "scripts", "run", *arguments], env={
+            "HOME": self.home, "XDG_CONFIG_HOME": self.home, "NO_COLOR": "1",
+        })
+
+    def test_python_file_selects_runtime_and_prints_captured_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "probe.py")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(OUTPUT_SOURCE)
+            result = self.invoke("--file", path)
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("PYTHON_RESULT 42\nsecond line: café 雪\n", result.output)
+
+    def test_script_failure_exits_nonzero_and_preserves_output_and_error(self):
+        result = self.invoke("--code", ERROR_SOURCE, "--language", "python")
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn("before failure\n", result.output)
+        self.assertIn("script exploded: 雪", result.output)
 
 
 if __name__ == "__main__":

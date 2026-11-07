@@ -7915,9 +7915,9 @@ def scripts_run(name: str | None = None, source: str | None = None,
     (e.g. mass rename, signature transfer). Provide EITHER name OR source.
 
     For ad-hoc source, choose the runtime explicitly: language="python" (or a .py
-    filename) writes a .py file so Ghidra selects PyGhidra/Python 3; language="java"
-    (the default) writes a .java GhidraScript. Python 3 requires Ghidra launched via
-    pyghidraRun / the PyGhidra extension.
+    filename) runs a temporary .py file with PyGhidra/Python 3 explicitly selected;
+    language="java" (the default) runs a .java GhidraScript. Python 3 requires
+    Ghidra launched via pyghidraRun, not just the installed extension.
 
     WARNING: this is arbitrary code execution. It requires the server started with
     -Dghydra.dev.allowScripts=true (or GHYDRA_ALLOW_SCRIPTS=1); otherwise returns 403.

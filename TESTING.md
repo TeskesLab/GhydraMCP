@@ -27,7 +27,7 @@ python run_tests.py --data       # data operations tests
 python run_tests.py --comments   # comment tests
 python run_tests.py --port       # Javalin port edge-case tests
 python run_tests.py --kuna       # Kuna integration tests
-python run_tests.py --scripts    # ad-hoc Java/Python script contract
+python run_tests.py --scripts    # MCP/CLI scripting behavior with a local HTTP fixture
 ```
 
 > **Every suite skips itself when Ghidra is not running.** Each `setUp` calls
@@ -217,6 +217,14 @@ analyzeHeadless /tmp/RawImageTest RawImageTest \
   ARGB8888 / 1bpp, single-address cleanup, whole-program sweeps, idempotency, the
   refuse-to-clear-non-RawImage guard, and that every bad input raises
   `IllegalArgumentException` (which the HTTP layer maps to `400`, not `500`).
+- `TestPyGhidraScript` — executes real Java and Python 3 source, arguments and error
+  diagnostics; checks language precedence, existing-script preservation and cleanup
+  including Python bytecode caches. Run it from the Script Manager in a Ghidra
+  instance launched with `pyghidraRun` and this extension installed. A plain
+  `analyzeHeadless` run can exercise Java but skips Python when its runtime is not
+  initialized; a Python skip is not proof that the regression passed.
+  Capture assertions require Ghidra 12+; Ghidra 11 reports an explicit skip because
+  its script API has no separate error writer.
 
 Each script throws on the first failed assertion, so headless reports `SCRIPT ERROR` and a
 non-zero exit — usable as a CI gate:

@@ -190,10 +190,11 @@ ghydra scripts run --file ./probe.py                     # .py selects Python 3
 ghydra scripts run --code "print(currentProgram.getName())" --language python
 ```
 
-`--language python` (or a `.py` `--file` / `--filename`) writes a temporary
-`.py` file so Ghidra selects the PyGhidra provider; `--language java` is the
-default and needs a `class <Name> extends GhidraScript`. Python 3 requires
-Ghidra launched via `pyghidraRun` or the PyGhidra extension (Ghidra 11.x+).
+`--language python` (or a `.py` `--file` / `--filename`) runs a temporary
+`.py` file with the PyGhidra provider explicitly selected; `--language java` is
+the default and needs a `class <Name> extends GhidraScript`. Python 3 requires
+Ghidra launched via `pyghidraRun`; installing the extension alone does not
+initialize the Python runtime.
 
 ### Raw Image Data
 
