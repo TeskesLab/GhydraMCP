@@ -22,6 +22,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Dead CLI command**: the duplicate `inspect-address` in `ghydra/cli/inspect.py` is gone.
 
 ### Added
+- **Capability negotiation (`GET /capabilities`)**: the plugin now describes its versions
+  (plugin/API/Ghidra/Java), whether it is headless, which feature flags are actually enabled
+  and its limits. The bridge prefers it at `register_instance`, falls back to
+  `/plugin-version` on older plugins (the endpoint is additive, `API_VERSION` stays 3000), and
+  reports an API mismatch with both versions, the runtime and the remedy instead of a generic
+  "No active Ghidra instance". Exposed on all three surfaces: `instances_capabilities`,
+  `ghydra instances capabilities`, and `format_capabilities` on all three formatters.
+  `test_capabilities.py` (`python run_tests.py --capabilities`) proves the contract without Ghidra.
 - **`--require-live`**: `python run_tests.py --require-live` probes `/plugin-version` and
   refuses to run when no Ghidra is serving, so a green summary cannot be made of skips.
 - **The doctor:** `ghydra doctor` checks the Ghidra installation, the JDK it needs, the extension and the version it was built for, the port, the project directory, the API, Kuna and the x64dbg plugin — and every problem comes with the command that solves it. The JDK is the part that bites: Ghidra 11.x wants a JDK 21 and Ghidra 12.2 wants a JDK 25, and the installation's own VM arguments carry flags that only the newer JVMs take, so a run with the wrong one dies with a message about a flag instead of about the JDK.

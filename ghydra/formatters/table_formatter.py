@@ -789,6 +789,33 @@ class TableFormatter(BaseFormatter):
 
         return self._capture(table)
 
+    def format_capabilities(self, data: Dict[str, Any]) -> str:
+        """Format the capability negotiation payload as a panel."""
+        result = data.get("result", data)
+        if not isinstance(result, dict):
+            return self._capture(str(result))
+
+        lines = [
+            f"[cyan]Plugin:[/cyan] {result.get('plugin_version', '?')}",
+            f"[cyan]API:[/cyan] {result.get('api_version', '?')}",
+            f"[cyan]Ghidra:[/cyan] {result.get('ghidra_version', 'unknown')}",
+            f"[cyan]Java:[/cyan] {result.get('java_version', 'unknown')}",
+            f"[cyan]Headless:[/cyan] {result.get('headless', False)}",
+        ]
+        features = result.get("features") or {}
+        if features:
+            on = ", ".join(sorted(k for k, v in features.items() if v)) or "none"
+            off = ", ".join(sorted(k for k, v in features.items() if not v)) or "none"
+            lines.append(f"[cyan]Features on:[/cyan] {on}")
+            lines.append(f"[cyan]Features off:[/cyan] {off}")
+        limits = result.get("limits") or {}
+        if limits:
+            lines.append("[cyan]Limits:[/cyan] " + ", ".join(
+                f"{k}={v}" for k, v in sorted(limits.items())))
+
+        return self._capture(Panel("\n".join(lines), title="Capabilities",
+                                   border_style="blue"))
+
     def format_simple_result(self, data: Dict[str, Any]) -> str:
         """Format simple success/info response."""
         result = data.get("result", {})

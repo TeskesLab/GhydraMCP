@@ -252,6 +252,18 @@ class BaseFormatter(ABC):
         pass
 
     @abstractmethod
+    def format_capabilities(self, data: Dict[str, Any]) -> str:
+        """Format a capability negotiation response.
+
+        Args:
+            data: API response with versions, feature flags and limits
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
     def format_simple_result(self, data: Dict[str, Any]) -> str:
         """Format simple success/info response.
 

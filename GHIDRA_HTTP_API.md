@@ -115,7 +115,7 @@ List endpoints support pagination using query parameters:
 ## Meta Endpoints
 
 ### `GET /plugin-version`
-Returns the version of the running Ghidra plugin and its API. Essential for compatibility checks by clients like the MCP bridge, which require an exact match against `REQUIRED_API_VERSION` (currently `3000`) at instance-registration time.
+Returns the version of the running Ghidra plugin and its API. Kept for older clients: the MCP bridge requires an exact match against `REQUIRED_API_VERSION` (currently `3000`) at instance-registration time, but prefers `GET /capabilities` and falls back to this endpoint when it is absent.
 ```json
 {
   "id": "req-meta-ver",
@@ -131,6 +131,53 @@ Returns the version of the running Ghidra plugin and its API. Essential for comp
   }
 }
 ```
+
+### `GET /capabilities`
+Capability negotiation: versions, runtime, the feature flags actually in effect, and the limits a
+client must respect. **Additive** — `API_VERSION` stays `3000`; a client that gets a 404 here
+(an older plugin) falls back to `GET /plugin-version` and simply treats the optional features as
+unavailable. The bridge uses this at `register_instance` time, so an `API_VERSION` mismatch is
+reported with both versions, the Ghidra/Java runtime and the remedy instead of surfacing later as
+"No active Ghidra instance".
+
+```json
+{
+  "id": "req-meta-caps",
+  "instance": "http://localhost:8192",
+  "success": true,
+  "result": {
+    "plugin_version": "v3.0.0",
+    "api_version": 3000,
+    "ghidra_version": "12.1.2",
+    "java_version": "21.0.13",
+    "java_feature": 21,
+    "headless": false,
+    "port": 8192,
+    "port_range": { "first": 8192, "last": 8447 },
+    "features": {
+      "scripts": false, "dev_shutdown": false, "decompiler": true,
+      "raw_image": true, "inspect_address": true, "batch_decompile": true,
+      "call_path": true, "xrefs_by_name": true, "ui_cursor": true,
+      "capabilities": true
+    },
+    "limits": {
+      "max_batch_targets": 200,
+      "max_port_attempts": 256,
+      "read_timeout_seconds": 900
+    }
+  },
+  "_links": {
+    "self": { "href": "/capabilities" },
+    "root": { "href": "/" },
+    "info": { "href": "/info" },
+    "plugin-version": { "href": "/plugin-version" }
+  }
+}
+```
+
+`features.scripts` / `features.dev_shutdown` reflect the same opt-in flags as
+`POST /scripts/run` and `POST /dev/shutdown`. `features.ui_cursor` is false for a headless
+instance, where `/address` and `/function` answer `503 HEADLESS_LIMITATION`.
 
 ### `GET /info`
 Returns information about the current plugin instance, including details about the loaded program and project.

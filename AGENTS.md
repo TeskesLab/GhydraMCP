@@ -15,7 +15,7 @@ decompilation, annotation, and data manipulation.
   subsequent instances walk up to `MAX_PORT_ATTEMPTS` = 256 ports (8192–8447).
 - The bridge auto-discovers instances on startup and on a daemon timer, but `QUICK_DISCOVERY_RANGE`
   only scans **8192–8201**. Instances above 8202 need `instances_register` / the CLI.
-- 110 MCP tools in 28 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
+- 111 MCP tools in 28 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
   `doctor_*`, `evidence_*`, `functions_*`, `headless_*`, `inspect_*`, `instances_*`, `kuna_*`,
   `memory_*`, `namespaces_*`, `programs_*`, `project_*`, `projects_*`, `raw_image_*`, `scalars_*`,
   `scripts_*`, `segments_*`, `session_*`, `structs_*`, `symbols_*`, `ui_*`, `variables_*`,
@@ -240,9 +240,11 @@ whole release preparation (CHANGELOG section + versions) in one step.
 
 `API_VERSION` / `REQUIRED_API_VERSION` only move for breaking API changes and are
 never touched by `--set`. The bridge enforces it
-in exactly one place — `register_instance`, by exact equality against `3000` — and never
-per-request, so a mismatch surfaces later as a generic "No active Ghidra instance". The CLI never
-checks it.
+in exactly one place — `register_instance` — by exact equality against `3000`, and never
+per-request. It negotiates through `GET /capabilities` (falling back to `/plugin-version` on
+older plugins), so a mismatch is reported immediately with both versions, the Ghidra/Java
+runtime and the remedy. Optional features are discovered from that payload's `features` map;
+they are additive and never require an `API_VERSION` bump. The CLI never checks the version.
 
 SemVer: patch for fixes, minor for features, major for breaking.
 

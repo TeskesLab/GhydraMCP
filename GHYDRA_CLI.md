@@ -114,6 +114,10 @@ ghydra instances use --port 8195
 # Get current instance info
 ghydra instances current
 
+# Capability negotiation: versions, runtime, feature flags and limits.
+# Falls back to /plugin-version on an older plugin.
+ghydra instances capabilities
+
 # Unregister an instance
 ghydra instances unregister --port 8195
 ```

@@ -118,6 +118,10 @@ class JSONFormatter(BaseFormatter):
         """Format instances list as JSON."""
         return self._format_json(data)
 
+    def format_capabilities(self, data: Dict[str, Any]) -> str:
+        """Format capabilities as JSON."""
+        return self._format_json(data)
+
     def format_simple_result(self, data: Dict[str, Any]) -> str:
         """Format simple result as JSON."""
         return self._format_json(data)

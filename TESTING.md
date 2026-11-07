@@ -33,14 +33,15 @@ python run_tests.py --evidence   # evidence ledger and sessions
 python run_tests.py --triage     # target triage
 python run_tests.py --rea        # REA parity
 python run_tests.py --surface    # global tool/formatter contract
+python run_tests.py --capabilities # capability negotiation contract
 ```
 
 > **Every suite skips itself when Ghidra is not running.** Each `setUp` calls
 > `skipTest("Ghidra not running")`, so a green summary does not prove anything unless the
 > tests actually executed — check the output for skips before trusting a pass.
 >
-> `--kuna`, `--x64dbg` and `--surface` are the exceptions: they need neither Ghidra nor
-> their respective binaries, so they always run and always give a signal. `--rea` is
+> `--kuna`, `--x64dbg`, `--surface` and `--capabilities` are the exceptions: they need
+> neither Ghidra nor their respective binaries, so they always run and always give a signal. `--rea` is
 > half contract (no Ghidra) and half live. `python run_tests.py --require-live`
 > probes `/plugin-version` first and refuses to run without a live instance, so a
 > green summary cannot be made of skipped suites.

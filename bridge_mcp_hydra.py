@@ -2716,6 +2716,36 @@ def format_triage(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_capabilities(response: dict, **kwargs) -> str:
+    """Show what an instance can do: versions, flags and limits, not a bare dict."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+
+    lines = [
+        f"GhydraMCP {result.get('plugin_version', '?')} "
+        f"(API {result.get('api_version', '?')})",
+        f"  Ghidra: {result.get('ghidra_version', 'unknown')}  "
+        f"Java: {result.get('java_version', 'unknown')}",
+        f"  port: {result.get('port', '?')}  "
+        f"headless: {result.get('headless', False)}",
+    ]
+    features = result.get("features") or {}
+    if features:
+        on = sorted(name for name, enabled in features.items() if enabled)
+        off = sorted(name for name, enabled in features.items() if not enabled)
+        lines.append("  features on: " + (", ".join(on) or "none"))
+        if off:
+            lines.append("  features off: " + ", ".join(off))
+    limits = result.get("limits") or {}
+    if limits:
+        lines.append("  limits: " + ", ".join(
+            f"{name}={value}" for name, value in sorted(limits.items())))
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -2737,6 +2767,7 @@ FORMATTERS = {
     "instances_list": format_instances,
     "instances_discover": format_instances,
     "instances_current": format_instance_info,
+    "instances_capabilities": format_capabilities,
     "structs_list": format_structs_list,
     "structs_get": format_struct_info,
     "analysis_get_callgraph": format_callgraph,
@@ -2974,6 +3005,44 @@ def simplify_response(response: dict) -> dict:
     
     return result
 
+def negotiate_capabilities(result: dict, url: str = "") -> tuple[dict | None, str | None]:
+    """Normalise a /capabilities (or /plugin-version) result and check compatibility.
+
+    The old check compared API_VERSION by exact equality and let a mismatch
+    surface much later as "No active Ghidra instance". This returns the
+    normalised capability info plus an error that names both versions, the
+    runtime and what to do about it. A plugin that only has /plugin-version
+    still works: the missing keys get honest defaults.
+
+    Args:
+        result: The ``result`` object of the plugin's HATEOAS envelope.
+        url: Instance URL, used in the mismatch message.
+
+    Returns:
+        tuple: ``(info, None)`` when compatible, ``(None, error_message)`` when not.
+    """
+    info = {
+        "plugin_version": result.get("plugin_version", ""),
+        "api_version": result.get("api_version", 0),
+        "ghidra_version": result.get("ghidra_version", "unknown"),
+        "java_version": result.get("java_version", "unknown"),
+        "headless": bool(result.get("headless", False)),
+        "features": result.get("features") or {},
+        "limits": result.get("limits") or {},
+    }
+    if info["api_version"] != REQUIRED_API_VERSION:
+        return None, (
+            f"API version mismatch at {url or 'the instance'}: plugin reports API "
+            f"{info['api_version']}, but bridge {BRIDGE_VERSION} requires "
+            f"{REQUIRED_API_VERSION} (plugin {info['plugin_version'] or 'unknown'}, "
+            f"Ghidra {info['ghidra_version']}, Java {info['java_version']}). "
+            "Install a GhydraMCP extension built for this bridge, or rebuild the "
+            "bridge against this API version. Optional features are discovered "
+            "through GET /capabilities; an older plugin simply lacks them."
+        )
+    return info, None
+
+
 def register_instance(port: int, url: str | None = None) -> str:
     """Register a new Ghidra instance
     
@@ -2988,9 +3057,12 @@ def register_instance(port: int, url: str | None = None) -> str:
         url = f"http://{ghidra_host}:{port}"
 
     try:
-        # Check for HATEOAS API by checking plugin-version endpoint
-        test_url = f"{url}/plugin-version"
-        response = _http_session().get(test_url, timeout=2)
+        # Prefer /capabilities for negotiation. An older plugin answers 404
+        # there, so fall back to /plugin-version: the endpoint is additive and
+        # API_VERSION does not move.
+        response = _http_session().get(f"{url}/capabilities", timeout=2)
+        if response.status_code == 404:
+            response = _http_session().get(f"{url}/plugin-version", timeout=2)
         
         if not response.ok:
             return f"Error: Instance at {url} is not responding properly to HATEOAS API"
@@ -3010,12 +3082,14 @@ def register_instance(port: int, url: str | None = None) -> str:
                         project_info["plugin_version"] = plugin_version
                         project_info["api_version"] = api_version
                         
-                        # Verify API version compatibility
-                        if api_version != REQUIRED_API_VERSION:
-                            error_msg = f"API version mismatch: Plugin reports version {api_version}, but bridge requires version {REQUIRED_API_VERSION}"
+                        # Verify API version compatibility, with the versions and
+                        # runtime in the message instead of a generic failure later.
+                        negotiated, error_msg = negotiate_capabilities(result, url)
+                        if error_msg:
                             print(error_msg, file=sys.stderr)
                             return error_msg
-                        
+                        project_info["capabilities"] = negotiated
+
                         print(f"Connected to Ghidra plugin version {plugin_version} with API version {api_version}")
             except Exception as e:
                 print(f"Error parsing plugin version: {e}", file=sys.stderr)
@@ -3949,6 +4023,33 @@ def instances_current() -> dict:
         dict: Details about the current instance including port, program, and project
     """
     return ghidra_instance(port=current_instance_port)
+
+
+@mcp.tool()
+@text_output
+def instances_capabilities(port: int | None = None) -> dict:
+    """Describe what a Ghidra instance can do, for capability negotiation.
+
+    Returns the plugin, API, Ghidra and Java versions, whether the instance is
+    headless, which feature flags are actually enabled, and the limits a client
+    must respect. Older plugins that only have /plugin-version are answered
+    with the subset that endpoint provides.
+
+    Args:
+        port: Specific Ghidra instance port (optional). Defaults to the current instance.
+
+    Returns:
+        dict: Capability payload with plugin_version, api_version, ghidra_version,
+              java_version, headless, features and limits.
+    """
+    port = _get_instance_port(port)
+    response = safe_get(port, "capabilities")
+    if not response.get("success", False):
+        # Additive endpoint: an older plugin has no /capabilities route.
+        legacy = simplify_response(safe_get(port, "plugin-version"))
+        if legacy.get("success", False):
+            return legacy
+    return simplify_response(response)
 
 # Function tools
 @mcp.tool()
