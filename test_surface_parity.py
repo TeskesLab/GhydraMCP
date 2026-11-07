@@ -58,6 +58,18 @@ class SurfaceParityTests(unittest.TestCase):
                     f"{name} is called as fn(response, **tool_kwargs)",
                 )
 
+    def test_every_tool_actually_applies_its_formatter(self):
+        """A FORMATTERS entry on an unwrapped tool is dead: text_output applies it."""
+        for name in _registered_tools():
+            fn = getattr(bridge, name, None)
+            if fn is None:
+                continue
+            with self.subTest(tool=name):
+                self.assertTrue(
+                    hasattr(fn, "__wrapped__"),
+                    f"{name} is missing @text_output; FORMATTERS[{name}] is never used",
+                )
+
     def test_no_tool_declares_a_reserved_parameter(self):
         """'arguments' is the MCP container's own name; a flattened client loses it."""
         for name in _registered_tools():

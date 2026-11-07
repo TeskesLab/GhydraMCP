@@ -8,6 +8,7 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.DataTypeComponent;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Parameter;
@@ -25,6 +26,7 @@ import ghidra.program.model.symbol.SymbolType;
 import ghidra.util.Msg;
 import ghidra.util.task.TaskMonitor;
 
+import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -438,6 +440,36 @@ public class GhidraUtil {
         } catch (Exception e) {
             Msg.error(GhidraUtil.class, "Error setting function signature: " + e.getMessage(), e);
             return false;
+        }
+    }
+
+    /**
+     * Rename a structure field, across Ghidra versions.
+     *
+     * <p>The return type changed: 11.x / 12.0-12.1 declare
+     * {@code void setFieldName(String)}, 12.2 declares
+     * {@code DataTypeComponent setFieldName(String)}. The return type is part of
+     * the JVM method descriptor, so a direct call compiled against one series
+     * fails on the other with {@code NoSuchMethodError} — an {@code Error},
+     * invisible to every {@code catch (Exception)} on the way out. Resolving the
+     * method by name at runtime removes that descriptor from the call site.
+     *
+     * @throws IllegalArgumentException when the name clashes (11.x throws a
+     *         checked {@code DuplicateNameException}, which 12.x dropped)
+     * @throws IncompatibleGhidraBuildException when neither series' method exists
+     */
+    public static void setFieldName(DataTypeComponent component, String name) {
+        try {
+            component.getClass().getMethod("setFieldName", String.class).invoke(component, name);
+        } catch (NoSuchMethodException e) {
+            throw new IncompatibleGhidraBuildException(
+                "This Ghidra build has no DataTypeComponent.setFieldName(String)", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalArgumentException(
+                "Field name already exists or invalid: " + name, e.getCause());
+        } catch (ReflectiveOperationException e) {
+            throw new IncompatibleGhidraBuildException(
+                "Could not rename a structure field on this Ghidra build", e);
         }
     }
 

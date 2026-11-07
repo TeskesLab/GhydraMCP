@@ -20,8 +20,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `port` field the envelope never emits; `AGENTS.md` names the bridge env vars correctly
   (`GHIDRA_*`).
 - **Dead CLI command**: the duplicate `inspect-address` in `ghydra/cli/inspect.py` is gone.
+- **Ad-hoc Python 3 execution (PyGhidra regression from v3.0.0)**: the merge that removed
+  `/script/execute` left `ScriptService.runSource` writing only `.java` files and demanding
+  `extends GhidraScript`, so Python source answered `BAD_REQUEST`. `POST /scripts/run`, the
+  bridge's `scripts_run` and `ghydra scripts run` now take an explicit `language`
+  (`java`/`python`) and `filename`; a `.py` name (or `language=python`) writes a temporary
+  `.py` file so Ghidra selects the PyGhidra provider, and a missing provider names the
+  `pyghidraRun` remedy. Java support and the existing execution opt-in are unchanged.
+  `skills/ghydra-cli/SKILL.md` no longer teaches the removed `ghydra script execute` /
+  `script capabilities` commands. `scripts_list`/`scripts_run` also gained the missing
+  `@text_output` decorator (their formatters were dead), and `scripts_run`'s `args` is now
+  one piece of text instead of a list some MCP clients flatten.
+- **Ghidra 11.x/12.2 compatibility (`I3`)**: `DataTypeComponent.setFieldName` is resolved
+  reflectively (its return type changed in 12.2, and a direct call site produced
+  `NoSuchMethodError` — an `Error` that escaped every `catch (Exception)` and every Javalin
+  handler, giving an empty 500). `TransactionHelper` now catches `Throwable`, converts
+  `LinkageError` into `IncompatibleGhidraBuildException`, and the server answers a structured
+  `500 INCOMPATIBLE_GHIDRA_BUILD` with a remedy. `CompatibilityService` probes the runtime
+  signatures at startup and publishes them in `/capabilities`.
 
 ### Added
+- **Version 3.1.0**: all five version locations moved together via `scripts/version.py --set`;
+  `API_VERSION` stays `3000`.
+- **Live Python regression coverage**: `src/test/ghidra/TestPyGhidraScript.java` runs a `.py`
+  probe under `analyzeHeadless` (skips cleanly without PyGhidra), `ScriptServiceTest` and
+  `CompatibilityServiceTest` cover the pure Java logic, and `test_scripts.py` /
+  `test_compatibility.py` cover the three-surface contracts without Ghidra.
 - **Capability negotiation (`GET /capabilities`)**: the plugin now describes its versions
   (plugin/API/Ghidra/Java), whether it is headless, which feature flags are actually enabled
   and its limits. The bridge prefers it at `register_instance`, falls back to

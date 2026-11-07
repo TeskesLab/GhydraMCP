@@ -61,10 +61,11 @@ public class ScriptResource implements Resource {
         if (req.name != null && !req.name.isEmpty()) {
             result = service.runByName(ctx.tool(), ctx.project(), ctx.program(), req.name, args);
         } else if (req.source != null && !req.source.isEmpty()) {
-            result = service.runSource(ctx.tool(), ctx.project(), ctx.program(), req.source, args);
+            result = service.runSource(ctx.tool(), ctx.project(), ctx.program(), req.source, args,
+                req.language, req.filename);
         } else {
             throw new IllegalArgumentException(
-                "Provide 'name' (an existing script) or 'source' (ad-hoc GhidraScript source)");
+                "Provide 'name' (an existing script) or 'source' (ad-hoc Java/Python source)");
         }
         ctx.json(Response.ok(ctx.ctx(), ctx.port(), result)
             .self("/scripts/run")
@@ -89,5 +90,9 @@ public class ScriptResource implements Resource {
         public String name;
         public String source;
         public String[] args;
+        /** "java" (default) or "python"/"python3"/"pyghidra". */
+        public String language;
+        /** Original source filename; a .py extension selects Python 3. */
+        public String filename;
     }
 }

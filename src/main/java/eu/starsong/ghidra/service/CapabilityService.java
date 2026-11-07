@@ -59,6 +59,7 @@ public final class CapabilityService {
         limits.put("max_port_attempts", ApiConstants.MAX_PORT_ATTEMPTS);
         limits.put("read_timeout_seconds", intProperty("ghidra.mcp.read.timeout", 900));
         data.put("limits", limits);
+        data.put("compatibility", CompatibilityService.report((String) data.get("ghidra_version")));
         return data;
     }
 
@@ -66,7 +67,7 @@ public final class CapabilityService {
      * Ghidra's own version, resolved reflectively so the plugin compiles against
      * both 11.x and 12.x without pinning one distribution's class layout.
      */
-    private static String ghidraVersion() {
+    public static String ghidraVersion() {
         try {
             Class<?> application = Class.forName("ghidra.framework.Application");
             Object version = application.getMethod("getApplicationVersion").invoke(null);

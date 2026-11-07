@@ -4,6 +4,8 @@ import eu.starsong.ghidra.api.ApiConstants;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.middleware.CorsHandler;
 import eu.starsong.ghidra.middleware.ErrorHandler;
+import eu.starsong.ghidra.service.CompatibilityService;
+import eu.starsong.ghidra.util.IncompatibleGhidraBuildException;
 import eu.starsong.ghidra.util.TransactionHelper;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.util.Msg;
@@ -92,6 +94,10 @@ public class GhydraServer {
         configureMiddleware();
 
         registerResources();
+
+        // Detect the running Ghidra series and the signatures of the APIs that
+        // moved between 11.x and 12.2, before any request can hit them.
+        CompatibilityService.logAtStartup();
 
         // Bind interface is configurable. Default keeps the historical all-interfaces
         // behaviour so cross-host setups (e.g. bridge in WSL -> Ghidra on Windows) keep
@@ -193,6 +199,20 @@ public class GhydraServer {
         app.exception(com.google.gson.JsonSyntaxException.class, (e, ctx) -> {
             ctx.status(HttpStatus.BAD_REQUEST);
             ctx.json(Response.error(ctx, port, "INVALID_JSON", "Malformed JSON body: " + e.getMessage()).build());
+        });
+
+        // A jar built against the wrong Ghidra series throws NoSuchMethodError —
+        // an Error, which Javalin cannot register a handler for (its exception()
+        // API is bounded by Exception). TransactionHelper converts it to this
+        // unchecked exception so the answer is a structured 500 with a body and
+        // a remedy, instead of an empty 500 with nothing in the log.
+        app.exception(IncompatibleGhidraBuildException.class, (e, ctx) -> {
+            Msg.error(this, "Incompatible Ghidra build at " + ctx.path(), e);
+            ctx.status(HttpStatus.INTERNAL_SERVER_ERROR);
+            ctx.json(Response.error(ctx, port, "INCOMPATIBLE_GHIDRA_BUILD",
+                e.getMessage() + " Rebuild the extension with GHIDRA_HOME pointing at the "
+                + "installed Ghidra and -Dghidra.version=<that series>, so the deployed jar "
+                + "matches the API it is loaded into.").build());
         });
 
         app.exception(Exception.class, new ErrorHandler(port));

@@ -17,6 +17,7 @@ import java.io.StringWriter;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -69,20 +70,74 @@ public class ScriptService {
     }
 
     /**
-     * Write ad-hoc GhidraScript source into the user script directory, run it, then delete the
-     * temp source. The source must declare {@code public class &lt;Name&gt; extends GhidraScript};
-     * the file is named to match so the provider can compile it.
+     * Resolve the runtime for an ad-hoc script.
+     *
+     * <p>A {@code .py} filename selects Python 3 even when no language was sent,
+     * so callers that forward a real source file keep its extension. Explicit
+     * {@code language=python} (or {@code python3}/{@code pyghidra}) does the same
+     * for inline source. Java remains the default, preserving v3.0.0 behaviour.
+     */
+    public static String normalizeLanguage(String language, String filename) {
+        // An explicit choice wins; the filename is the fallback that preserves
+        // the extension of a real source file when no language was sent.
+        if (language != null && !language.isBlank()) {
+            String l = language.trim().toLowerCase(Locale.ROOT);
+            return switch (l) {
+                case "java" -> "java";
+                case "python", "python3", "py", "pyghidra" -> "python";
+                default -> throw new IllegalArgumentException(
+                    "Unsupported script language '" + language + "' (want java or python)");
+            };
+        }
+        if (filename != null && !filename.isBlank()) {
+            String lower = filename.toLowerCase(Locale.ROOT);
+            if (lower.endsWith(".py")) {
+                return "python";
+            }
+            if (lower.endsWith(".java")) {
+                return "java";
+            }
+        }
+        return "java";
+    }
+
+    /** The extension the script provider uses to pick Java or PyGhidra. */
+    public static String extensionFor(String language) {
+        return "python".equals(language) ? ".py" : ".java";
+    }
+
+    /**
+     * Write ad-hoc source into the user script directory with the extension its
+     * runtime needs, run it, then delete the temp source. Java source must
+     * declare {@code public class &lt;Name&gt; extends GhidraScript}; Python 3
+     * source is written as {@code .py} so Ghidra selects the PyGhidra provider.
      */
     public RunResult runSource(PluginTool tool, Project project, Program program,
             String source, String[] args) {
-        Matcher m = CLASS_NAME.matcher(source);
-        if (!m.find()) {
-            throw new IllegalArgumentException(
-                "Source must declare 'public class <Name> extends GhidraScript' with a run() method");
+        return runSource(tool, project, program, source, args, null, null);
+    }
+
+    public RunResult runSource(PluginTool tool, Project project, Program program,
+            String source, String[] args, String language, String filename) {
+        String lang = normalizeLanguage(language, filename);
+        String stem;
+        if ("python".equals(lang)) {
+            stem = filename != null && !filename.isBlank()
+                ? stripExtension(new File(filename).getName())
+                : "adhoc_python_" + System.currentTimeMillis();
+        } else {
+            Matcher m = CLASS_NAME.matcher(source);
+            if (!m.find()) {
+                throw new IllegalArgumentException(
+                    "Java source must declare 'public class <Name> extends GhidraScript' with a "
+                    + "run() method. For Python 3 pass language=python (or a .py filename).");
+            }
+            stem = m.group(1);
         }
-        String className = m.group(1);
+
         File dir = GhidraScriptUtil.getUserScriptDirectory().getFile(false);
-        File scriptFile = new File(dir, className + ".java");
+        // getName() strips any directory component the caller put in filename.
+        File scriptFile = new File(dir, stem + extensionFor(lang));
         try {
             Files.writeString(scriptFile.toPath(), source);
             return run(tool, project, program, new ResourceFile(scriptFile), args);
@@ -95,6 +150,14 @@ public class ScriptService {
         }
     }
 
+    /** A safe file stem: no directories, no punctuation the script loader rejects. */
+    private static String stripExtension(String name) {
+        int dot = name.lastIndexOf('.');
+        String base = dot > 0 ? name.substring(0, dot) : name;
+        String safe = base.replaceAll("[^A-Za-z0-9_]", "_");
+        return safe.isEmpty() ? "adhoc_python" : safe;
+    }
+
     private RunResult run(PluginTool tool, Project project, Program program,
             ResourceFile file, String[] args) {
         StringWriter sw = new StringWriter();
@@ -102,8 +165,12 @@ public class ScriptService {
         try {
             GhidraScriptProvider provider = GhidraScriptUtil.getProvider(file);
             if (provider == null) {
+                String hint = file.getName().toLowerCase(Locale.ROOT).endsWith(".py")
+                    ? " Python 3 needs PyGhidra: launch Ghidra with pyghidraRun, or install "
+                      + "the PyGhidra extension (Ghidra 11.x+)."
+                    : "";
                 throw new IllegalArgumentException(
-                    "No script provider for " + file.getName() + " (unsupported extension?)");
+                    "No script provider for " + file.getName() + " (unsupported extension?)." + hint);
             }
             GhidraScript script = provider.getScriptInstance(file, writer);
             if (args != null && args.length > 0) {

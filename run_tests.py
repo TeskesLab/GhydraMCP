@@ -335,6 +335,56 @@ def run_capabilities_tests():
         return False
 
 
+def run_compatibility_tests():
+    """Run the 11.x/12.2 compatibility contract tests (no Ghidra needed)."""
+    print_header("Running Ghidra Compatibility Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_compatibility.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running Ghidra compatibility tests: {str(e)}")
+        return False
+
+
+def run_scripts_tests():
+    """Run the ad-hoc Java/Python script execution contract tests (no Ghidra)."""
+    print_header("Running Script Execution Contract Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_scripts.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running script execution tests: {str(e)}")
+        return False
+
+
 def require_live_ghidra():
     """Refuse a run that would be a green summary made of skipped suites."""
     host = os.environ.get("GHYDRAMCP_TEST_HOST", "localhost")
@@ -364,6 +414,8 @@ def run_all_tests():
     rea_parity_success = run_rea_parity_tests()
     surface_parity_success = run_surface_parity_tests()
     capabilities_success = run_capabilities_tests()
+    scripts_success = run_scripts_tests()
+    compatibility_success = run_compatibility_tests()
 
     # Print a summary
     print_header("Test Summary")
@@ -380,13 +432,15 @@ def run_all_tests():
     print(f"REA Parity Tests: {'PASSED' if rea_parity_success else 'FAILED'}")
     print(f"Surface Parity Tests: {'PASSED' if surface_parity_success else 'FAILED'}")
     print(f"Capability Negotiation Tests: {'PASSED' if capabilities_success else 'FAILED'}")
-    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success and surface_parity_success and capabilities_success) else 'FAILED'}")
+    print(f"Script Execution Contract Tests: {'PASSED' if scripts_success else 'FAILED'}")
+    print(f"Ghidra Compatibility Tests: {'PASSED' if compatibility_success else 'FAILED'}")
+    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success and surface_parity_success and capabilities_success and scripts_success and compatibility_success) else 'FAILED'}")
 
     return (http_api_success and mcp_bridge_success and data_tests_success
             and comment_tests_success and port_tests_success and kuna_success
             and x64dbg_success and headless_success and evidence_success
             and triage_success and rea_parity_success and surface_parity_success
-            and capabilities_success)
+            and capabilities_success and scripts_success and compatibility_success)
 
 if __name__ == "__main__":
     # Check if we have the required dependencies
@@ -438,6 +492,12 @@ if __name__ == "__main__":
         elif sys.argv[1] == "--capabilities":
             # Run only the capability negotiation contract tests
             success = run_capabilities_tests()
+        elif sys.argv[1] == "--scripts":
+            # Run only the ad-hoc script execution contract tests
+            success = run_scripts_tests()
+        elif sys.argv[1] == "--compatibility":
+            # Run only the 11.x/12.2 compatibility contract tests
+            success = run_compatibility_tests()
         elif sys.argv[1] == "--require-live":
             # Run all suites, but refuse a run with no live Ghidra behind them
             if not require_live_ghidra():
@@ -447,7 +507,7 @@ if __name__ == "__main__":
             success = run_all_tests()
         else:
             print(f"Unknown argument: {sys.argv[1]}")
-            print("Usage: python run_tests.py [--http|--mcp|--data|--comments|--port|--kuna|--x64dbg|--headless|--evidence|--triage|--rea|--surface|--capabilities|--require-live]")
+            print("Usage: python run_tests.py [--http|--mcp|--data|--comments|--port|--kuna|--x64dbg|--headless|--evidence|--triage|--rea|--surface|--capabilities|--scripts|--compatibility|--require-live]")
             sys.exit(1)
     else:
         # Run all tests
