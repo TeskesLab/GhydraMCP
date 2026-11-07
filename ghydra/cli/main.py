@@ -1,6 +1,8 @@
 """Main CLI entry point for ghydra command."""
 
+import os
 import sys
+
 import click
 
 from .. import __version__
@@ -9,10 +11,30 @@ from ..config import ConfigManager, GhidraConfig
 from ..formatters import JSONFormatter, TableFormatter
 
 
-@click.group()
+class GhydraCLI(click.Group):
+    """The root group, with --json accepted in any position.
+
+    Click parses the root group's own options only *before* the subcommand
+    name, so ``ghydra functions list --json`` used to be a usage error. The
+    group lifts a ``--json`` found anywhere in the arguments into an
+    environment variable the root option also reads, then parses what is
+    left — so both positions work and no subcommand ever sees the flag.
+    """
+
+    def main(self, args=None, **extra):
+        if args is None:
+            args = sys.argv[1:]
+        if "--json" in args:
+            os.environ["GHYDRA_JSON"] = "1"
+            args = [arg for arg in args if arg != "--json"]
+        return super().main(args=args, **extra)
+
+
+@click.group(cls=GhydraCLI)
 @click.option('--host', '-h', envvar='GHYDRA_HOST', help='Ghidra host (default: from config or localhost)')
 @click.option('--port', '-p', type=int, envvar='GHYDRA_PORT', help='Ghidra port (default: from config or 8192)')
-@click.option('--json', 'output_json', is_flag=True, help='Output raw JSON instead of formatted text')
+@click.option('--json', 'output_json', is_flag=True, envvar='GHYDRA_JSON',
+              help='Output raw JSON instead of formatted text (accepted in any position)')
 @click.option('--no-color', is_flag=True, help='Disable colored output')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
 @click.version_option(version=__version__, prog_name='ghydra')
@@ -44,6 +66,20 @@ def cli(ctx, host, port, output_json, no_color, verbose):
 
     For more information, visit: https://github.com/TeskesLab/GhydraMCP
     """
+    # Rich's tables use frame characters outside cp1252; on a Western Windows
+    # pipe (sys.stdout.encoding == 'cp1252') click.echo used to raise
+    # UnicodeEncodeError on every table. Reconfigure both streams once, here,
+    # so every subcommand inherits UTF-8 with replacement instead of dying.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                # A stream that cannot be reconfigured (already-closed, or a
+                # non-text wrapper) keeps its encoding; errors="replace" on
+                # the echo side is the fallback.
+                pass
+
     # Load configuration
     try:
         config = ConfigManager.load(verbose=verbose)

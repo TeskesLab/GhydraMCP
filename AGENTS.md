@@ -380,11 +380,14 @@ Two endpoints refuse to work until explicitly enabled — start Ghidra with the 
 
 ## CLI notes
 
-`--json` is defined once on the root group and injected as `ctx.obj['formatter']`; no subcommand
-redefines it, so it must come **before** the subcommand (`ghydra --json functions list`) — after it
-is a usage error. Paging auto-disables under `--json`. Config precedence is
-**CLI flag > `GHYDRA_HOST`/`GHYDRA_PORT` > `~/.ghydra/config.json` > defaults** (`localhost:8192`,
-timeout 900).
+`--json` is defined once on the root group and injected as `ctx.obj['formatter']`; no
+subcommand redefines it. The root group class (`GhydraCLI`) lifts a `--json` found
+**anywhere** in the arguments into `GHYDRA_JSON` before parsing, so both
+`ghydra --json functions list` and `ghydra functions list --json` work (and so does
+the environment variable alone). Paging auto-disables under `--json`. Config precedence
+is **CLI flag > `GHYDRA_HOST`/`GHYDRA_PORT` > `~/.ghydra/config.json` > defaults**
+(`localhost:8192`, timeout 900). The CLI also reconfigures stdout/stderr to UTF-8 with
+`errors="replace"` at startup, so Rich tables survive a cp1252 Windows pipe.
 
 The bridge's env vars are a *different, asymmetric* set: `GHIDRA_HYDRA_HOST` > `GHIDRA_HOST`,
 plus `GHIDRA_TIMEOUT`, `GHIDRA_DECOMP_TIMEOUT`, `GHIDRA_ALLOWED_ORIGINS`. **The bridge never reads
@@ -874,13 +877,12 @@ Verified rough edges — check before trusting anything downstream:
 - The pom's Ghidra dependency `<version>` tags are hardcoded to `12.1.2`; `-Dghidra.version` only
   rewrites the `ghidraVersion` property in `extension.properties`, not those tags. They're
   system-scoped, so this is cosmetic — the `systemPath` jars are what matter.
-- **The rich tables break on a Windows pipe.** `TableFormatter` renders with rich's default
+- **The rich tables used to break on a Windows pipe.** `TableFormatter` renders with rich's default
   `HEAVY_HEAD` box, whose frame characters are outside cp1252; piped on a Western Windows
-  (`sys.stdout.encoding == 'cp1252'`) `click.echo` raises `UnicodeEncodeError`. This is
-  pre-existing and affects every table in the CLI, not just the new ones. The Kuna tables pass
-  `box=box.ASCII` to stay inside cp1252, and `ghydra kuna` additionally writes with
-  `errors="replace"`. A real fix would reconfigure stdout to UTF-8, which changes the CLI
-  globally — not done here.
+  (`sys.stdout.encoding == 'cp1252'`) `click.echo` raised `UnicodeEncodeError`. Fixed: the CLI
+  entrypoint now reconfigures stdout/stderr to UTF-8 with `errors="replace"` before any output
+  (covered by `test_errors.py`, which runs the CLI under `PYTHONIOENCODING=cp1252`). The Kuna
+  tables keep `box=box.ASCII` as defense in depth.
 
 ## Key documentation
 

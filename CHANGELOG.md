@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`--json` anywhere and UTF-8 output (I4)**: the CLI entrypoint reconfigures
+  stdout/stderr to UTF-8 with `errors="replace"` before any output, so Rich tables
+  no longer raise `UnicodeEncodeError` on a cp1252 Windows pipe, and a custom root
+  group lifts a `--json` found in any position into `GHYDRA_JSON` — both
+  `ghydra --json functions list` and `ghydra functions list --json` work now, and so
+  does the environment variable alone. `test_errors.py` runs the CLI under
+  `PYTHONIOENCODING=cp1252` to prove it.
+- **Machine-readable error contract (I9)**: a static guard asserts every
+  `Response.error(...)` call site in the Java sources passes a non-empty,
+  code-shaped literal as its first string argument — no handler can ship an error an
+  agent cannot branch on — and the bridge's `format_error` now keeps the envelope's
+  request id in the text (`Error [CODE]: msg (request id: ...)`), so an agent that
+  wants the server's log line for the exact failure has the handle to ask with.
 - **Background tasks for long operations (I7)**: `functions_batch_decompile`
   and `headless_start` gain `async_mode=True` — a task handle (`T-0001`)
   comes back immediately, the blocking call runs in a background thread, and

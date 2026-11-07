@@ -1073,11 +1073,13 @@ def safe_delete(port: int, endpoint: str) -> dict:
 # Format API responses as plain text for efficient LLM consumption
 
 def format_error(response: dict) -> str:
-    """Format an error response as plain text
+    """Format an error response as plain text.
 
     A machine-readable code, when the error carries one, is kept in the text:
     the Kuna failures have a code an agent can branch on, and dropping it
-    here would leave only the prose.
+    here would leave only the prose. The envelope's request id is kept too,
+    so an agent that wants the server's log line for this exact failure has
+    the handle to ask with.
     """
     if isinstance(response, dict) and "error" in response:
         err = response["error"]
@@ -1085,9 +1087,15 @@ def format_error(response: dict) -> str:
             message = err.get("message", "Unknown error")
             code = err.get("code")
             if code:
-                return f"Error [{code}]: {message}"
-            return f"Error: {message}"
-        return f"Error: {err}"
+                text = f"Error [{code}]: {message}"
+            else:
+                text = f"Error: {message}"
+        else:
+            text = f"Error: {err}"
+        request_id = response.get("id")
+        if request_id:
+            text += f" (request id: {request_id})"
+        return text
     return "Error: Unknown error"
 
 

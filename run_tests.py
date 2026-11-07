@@ -485,6 +485,31 @@ def run_tasks_tests():
         return False
 
 
+def run_errors_tests():
+    """Run the error contract and CLI entrypoint tests (no Ghidra needed)."""
+    print_header("Running Error Contract Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_errors.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running error contract tests: {str(e)}")
+        return False
+
+
 def require_live_ghidra():
     """Refuse a run that would be a green summary made of skipped suites."""
     host = os.environ.get("GHYDRAMCP_TEST_HOST", "localhost")
@@ -520,6 +545,7 @@ def run_all_tests():
     docs_success = run_docs_tests()
     capability_summary_success = run_capability_summary_tests()
     tasks_success = run_tasks_tests()
+    errors_success = run_errors_tests()
 
     # Print a summary
     print_header("Test Summary")
@@ -542,7 +568,8 @@ def run_all_tests():
     print(f"Documentation Drift Guard Tests: {'PASSED' if docs_success else 'FAILED'}")
     print(f"Capability Triage Tests: {'PASSED' if capability_summary_success else 'FAILED'}")
     print(f"Background Task Tests: {'PASSED' if tasks_success else 'FAILED'}")
-    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success and surface_parity_success and capabilities_success and scripts_success and compatibility_success and runner_success and docs_success and capability_summary_success and tasks_success) else 'FAILED'}")
+    print(f"Error Contract Tests: {'PASSED' if errors_success else 'FAILED'}")
+    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success and surface_parity_success and capabilities_success and scripts_success and compatibility_success and runner_success and docs_success and capability_summary_success and tasks_success and errors_success) else 'FAILED'}")
 
     return (http_api_success and mcp_bridge_success and data_tests_success
             and comment_tests_success and port_tests_success and kuna_success
@@ -550,7 +577,7 @@ def run_all_tests():
             and triage_success and rea_parity_success and surface_parity_success
             and capabilities_success and scripts_success and compatibility_success
             and runner_success and docs_success and capability_summary_success
-            and tasks_success)
+            and tasks_success and errors_success)
 
 # Suites that need neither a live Ghidra nor any external binary. CI runs
 # exactly these on every push: a green result here is real evidence, not a
@@ -558,7 +585,7 @@ def run_all_tests():
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
-    "--capability-summary", "--tasks",
+    "--capability-summary", "--tasks", "--errors",
 )
 
 SUITES = {
@@ -581,13 +608,14 @@ SUITES = {
     "--docs": run_docs_tests,
     "--capability-summary": run_capability_summary_tests,
     "--tasks": run_tasks_tests,
+    "--errors": run_errors_tests,
 }
 
 USAGE = (
     "Usage: python run_tests.py [--no-ghidra | --http | --mcp | --data | "
     "--comments | --port | --kuna | --x64dbg | --headless | --evidence | "
     "--triage | --rea | --surface | --capabilities | --scripts | "
-    "--compatibility | --runner | --docs | --capability-summary | --tasks | --require-live]"
+    "--compatibility | --runner | --docs | --capability-summary | --tasks | --errors | --require-live]"
     "  (suite flags may be combined)"
 )
 
