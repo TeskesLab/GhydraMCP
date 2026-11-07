@@ -229,5 +229,49 @@ class CliContractTests(unittest.TestCase):
                                  getattr(cls, "__abstractmethods__", set()))
 
 
+class SimplifiedEnvelopeLinkTests(unittest.TestCase):
+    """simplify_response drops _links and keeps the hrefs flat."""
+
+    def test_the_flat_api_links_still_produce_a_suggestion(self):
+        envelope = {"success": True, "result": {"name": "f"},
+                    "api_links": {"decompile":
+                                  "/functions/00401000/decompile"}}
+        self.assertIn('functions_decompile(address="00401000")',
+                      bridge._suggested_calls(envelope))
+
+
+class RichEscapeTests(unittest.TestCase):
+    """Decompiled C is full of brackets; Rich must not read them as markup."""
+
+    def test_bracket_tokens_in_a_body_do_not_break_the_table_formatter(self):
+        from ghydra.formatters import TableFormatter
+        pack = contextpack.build_context_pack("q", "what_it_does", "x", [
+            {"title": "decompilation",
+             "body": "if (buf[i] == 0) { return; }",
+             "citations": ["0x401000"]}], 4000)
+        text = TableFormatter(use_colors=False).format_context_pack(pack)
+        self.assertIn("buf[i]", text)
+
+
+class ContextPackCliErrorTests(unittest.TestCase):
+    def test_a_ghidra_error_is_handled_not_raised(self):
+        from click.testing import CliRunner
+        from ghydra.client.exceptions import GhidraError
+        from ghydra.cli import analysis as analysis_cli
+        from ghydra.formatters import TableFormatter
+
+        class FakeClient:
+            def get(self, endpoint, params=None):
+                raise GhidraError("Ghidra is not running")
+
+        result = CliRunner().invoke(
+            analysis_cli.context_pack,
+            ['-q', 'o que faz esta funcao', '-a', '0x401000'],
+            obj={'client': FakeClient(),
+                 'formatter': TableFormatter(use_colors=False),
+                 'config': mock.Mock(), 'output_json': False})
+        self.assertEqual(1, result.exit_code, result.output)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

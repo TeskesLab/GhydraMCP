@@ -349,6 +349,33 @@ def context_pack(ctx, question, address, budget_tokens):
         raise click.UsageError(
             f"the '{template}' question needs --address")
 
+    try:
+        sections, program_name = _context_pack_sections(client, template, address)
+        report = build_context_pack(question, template, program_name,
+                                    sections, budget_tokens)
+        output = formatter.format_context_pack(report)
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+    except GhidraError as e:
+        # The composed calls raise on a 4xx/5xx or an unreachable instance;
+        # without this the exception escaped the Click command instead of
+        # producing the formatter's structured error.
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+def _context_pack_sections(client, template, address):
+    """Fetch what the question needs and turn it into pack sections.
+
+    Separated from the command so the whole composed request sequence is one
+    unit the command can guard with the standard GhidraError handling.
+    """
+    import json as _json
+    from urllib.parse import quote as _quote
+
     program = client.get('program')
     program_name = ""
     if isinstance(program.get("result"), dict):
@@ -356,7 +383,6 @@ def context_pack(ctx, question, address, budget_tokens):
 
     def section(title, response, citations=()):
         if isinstance(response, dict) and response.get("success", False):
-            import json as _json
             payload = response.get("result")
             body = (payload if isinstance(payload, str)
                     else _json.dumps(payload, ensure_ascii=False, default=str))
@@ -368,7 +394,6 @@ def context_pack(ctx, question, address, budget_tokens):
 
     sections = []
     if template == "what_it_does":
-        from urllib.parse import quote as _quote
         resolved = _quote(address)
         sections.append(section("function",
                                 client.get(f'functions/{resolved}'),
@@ -391,7 +416,6 @@ def context_pack(ctx, question, address, budget_tokens):
         sections.append(section("callees", client.get(
             f'analysis/callees/{resolved}', params={'limit': 10})))
     elif template == "data_origin":
-        from urllib.parse import quote as _quote
         resolved = _quote(address)
         sections.append(section("address context",
                                 client.get(f'inspect/address/{resolved}'),
@@ -415,14 +439,7 @@ def context_pack(ctx, question, address, budget_tokens):
                                 client.get('segments', params={'limit': 50})))
         sections.append(section("imports", client.get(
             'symbols/imports', params={'limit': 100})))
-
-    report = build_context_pack(question, template, program_name,
-                                sections, budget_tokens)
-    output = formatter.format_context_pack(report)
-    if should_page(config, ctx.obj['output_json']):
-        page_output(output, use_pager=config.page_output)
-    else:
-        click.echo(output)
+    return sections, program_name
 
 
 @analysis.command('status')
@@ -475,9 +492,8 @@ def capabilities_summary(ctx, no_strings):
 
     try:
         program = client.get('program')
-        imports = client.get('symbols/imports', params={'limit': 1000})
-        strings = (None if no_strings
-                   else client.get('strings', params={'limit': 2000}))
+        imports = _collect_pages(client, 'symbols/imports')
+        strings = None if no_strings else _collect_pages(client, 'strings')
         report = build_capability_report(program, imports, strings,
                                          include_strings=not no_strings)
         output = formatter.format_capabilities_summary(report)
@@ -489,3 +505,28 @@ def capabilities_summary(ctx, no_strings):
         error_output = formatter.format_error(e)
         rich_echo(error_output, err=True)
         ctx.exit(1)
+
+
+def _collect_pages(client, endpoint, limit=1000, max_pages=20):
+    """Every item of a listing, paged through the advertised total.
+
+    The server clamps a page to 1000 items, so one request only sees the
+    first page; a binary can have the matching evidence on page three and get
+    a misleading empty report. Follows meta.total, with a page cap.
+    """
+    items = []
+    offset = 0
+    for _page in range(max_pages):
+        response = client.get(endpoint, params={'offset': offset,
+                                                'limit': limit})
+        payload = response.get('result')
+        page = payload if isinstance(payload, list) else []
+        items.extend(page)
+        meta = response.get('meta') or {}
+        total = meta.get('total') if isinstance(meta, dict) else None
+        if not page or len(page) < limit:
+            break
+        if isinstance(total, int) and len(items) >= total:
+            break
+        offset += len(page)
+    return {'success': True, 'result': items}

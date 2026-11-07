@@ -3186,18 +3186,17 @@ def text_output(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         started = time.perf_counter()
-        text = _render_tool_output(func, *args, **kwargs)
-        _telemetry_safely(func.__name__, started, text)
+        response = func(*args, **kwargs)
+        text = _render_tool_output(response, func.__name__, kwargs)
+        _telemetry_safely(func.__name__, started, response, text)
         return text
 
     wrapper.__annotations__['return'] = str
     return wrapper
 
 
-def _render_tool_output(func, *args, **kwargs):
+def _render_tool_output(response, name: str, kwargs: dict):
     """The body text_output used to have, with the Next: line (I8)."""
-    response = func(*args, **kwargs)
-
     # If already a string, pass through
     if isinstance(response, str):
         return response
@@ -3215,7 +3214,7 @@ def _render_tool_output(func, *args, **kwargs):
         return format_error(response)
 
     # Look up formatter by function name
-    formatter = FORMATTERS.get(func.__name__)
+    formatter = FORMATTERS.get(name)
     if formatter:
         text = formatter(response, **kwargs)
     else:
@@ -3237,10 +3236,20 @@ _ADDRESSISH = re.compile(r"^(0x[0-9a-fA-F]+|[0-9a-fA-F]{4,})$")
 
 
 def _suggested_calls(response: dict, limit: int = 4) -> list[str]:
-    """Translate the envelope's _links into registered bridge calls."""
+    """Translate the envelope's _links into registered bridge calls.
+
+    Two shapes reach here: the raw envelope (``_links`` = rel -> {href,
+    method}) and the one ``simplify_response`` returns for the ordinary HTTP
+    tools (``_links`` is dropped and the hrefs are kept flat under
+    ``api_links``). Both are read, so the suggestion is emitted either way.
+    """
     if not isinstance(response, dict):
         return []
     links = response.get("_links")
+    if not isinstance(links, dict):
+        flat = response.get("api_links")
+        if isinstance(flat, dict):
+            links = {rel: {"href": href} for rel, href in flat.items()}
     if not isinstance(links, dict):
         return []
     registered = set(getattr(mcp._tool_manager, "_tools", {}))
@@ -8706,6 +8715,43 @@ def build_capability_report(program: object, imports: object, strings: object,
     }
 
 
+_CAPABILITY_PAGE_LIMIT = 1000      # the server clamps every page to this
+_CAPABILITY_MAX_PAGES = 20         # a bound the answer must still respect
+
+
+def _collect_capability_items(port: int, endpoint: str,
+                              total_expected: int | None = None) -> dict:
+    """Every item of a listing, paged through the advertised total.
+
+    The server clamps every page to 1000 items, so a single request only sees
+    the first page: a binary with 5000 imports could have all of its matching
+    evidence on page three and still get an empty capability report. This
+    follows meta.total, with a page cap so a listing that never ends cannot
+    hang the tool.
+    """
+    items: list = []
+    offset = 0
+    first = None
+    for _page in range(_CAPABILITY_MAX_PAGES):
+        response = safe_get(port, endpoint,
+                            {"offset": offset, "limit": _CAPABILITY_PAGE_LIMIT})
+        if first is None:
+            first = response
+        page = _cap_items(response)
+        items.extend(page)
+        meta = response.get("meta") if isinstance(response, dict) else None
+        total = meta.get("total") if isinstance(meta, dict) else None
+        if not page or len(page) < _CAPABILITY_PAGE_LIMIT:
+            break
+        if isinstance(total, int) and len(items) >= total:
+            break
+        offset += len(page)
+    if first is not None and isinstance(first, dict) \
+            and first.get("success") is False:
+        return first  # the report says which part failed, never hides it
+    return {"success": True, "result": items}
+
+
 @mcp.tool()
 @text_output
 def analysis_capabilities_summary(include_strings: bool = True,
@@ -8728,8 +8774,8 @@ def analysis_capabilities_summary(include_strings: bool = True,
     """
     port = _get_instance_port(port)
     program = safe_get(port, "program")
-    imports = safe_get(port, "symbols/imports", {"limit": 1000})
-    strings = (safe_get(port, "strings", {"limit": 2000})
+    imports = _collect_capability_items(port, "symbols/imports")
+    strings = (_collect_capability_items(port, "strings")
                if include_strings else None)
     return build_capability_report(program, imports, strings, include_strings)
 
@@ -11141,8 +11187,6 @@ def tools_unload_group(group: str) -> dict:
 _TELEMETRY_MAX_BYTES = 1_000_000
 _TELEMETRY_KEEP_LINES = 2000
 
-_ERROR_CODE_PREFIX = re.compile(r"^Error \[([A-Z][A-Z0-9_]*)\]")
-
 
 def _telemetry_path() -> str:
     return os.path.join(_headless_state_dir(), "telemetry.jsonl")
@@ -11183,13 +11227,25 @@ def _telemetry_record(tool: str, ok: bool, code: str | None,
         pass  # telemetry must never break a tool call
 
 
-def _telemetry_safely(tool: str, started: float, text) -> None:
-    """Record one call without ever raising into the tool."""
+def _telemetry_safely(tool: str, started: float, response, text) -> None:
+    """Record one call from the RAW response, without ever raising.
+
+    The envelope decides success, not the rendered text: with
+    GHYDRA_MCP_OUTPUT=json an error is a string starting with "{" and a
+    prefix check would count every failure as a success.
+    """
     try:
-        failed = isinstance(text, str) and text.startswith("Error")
-        match = _ERROR_CODE_PREFIX.match(text) if isinstance(text, str) else None
+        failed = False
+        code = None
+        if isinstance(response, dict):
+            failed = response.get("success") is False
+            error = response.get("error")
+            if failed and isinstance(error, dict):
+                code = error.get("code")
+        elif isinstance(response, str):
+            failed = response.startswith("Error")
         _telemetry_record(
-            tool, not failed, match.group(1) if match else None,
+            tool, not failed, code,
             (time.perf_counter() - started) * 1000.0,
             max(1, len(text) // 4) if isinstance(text, str) else 0)
     except Exception:

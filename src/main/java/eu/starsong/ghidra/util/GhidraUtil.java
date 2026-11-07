@@ -460,7 +460,13 @@ public class GhidraUtil {
      */
     public static void setFieldName(DataTypeComponent component, String name) {
         try {
-            component.getClass().getMethod("setFieldName", String.class).invoke(component, name);
+            // Resolve on the PUBLIC interface, not on component.getClass():
+            // the implementation (DataTypeComponentDB) is package-private, and
+            // a Method obtained from it fails the access check on invoke with
+            // IllegalAccessException - which would break the rename that used
+            // to work instead of gaining 12.2 compatibility.
+            DataTypeComponent.class.getMethod("setFieldName", String.class)
+                    .invoke(component, name);
         } catch (NoSuchMethodException e) {
             throw new IncompatibleGhidraBuildException(
                 "This Ghidra build has no DataTypeComponent.setFieldName(String)", e);
@@ -484,7 +490,9 @@ public class GhidraUtil {
     public static void removeDataType(DataTypeManager dtm, DataType type) {
         String name = type != null ? type.getName() : "null";
         try {
-            dtm.getClass().getMethod("remove", DataType.class, TaskMonitor.class)
+            // The interface, not dtm.getClass(): DataTypeManagerDB is
+            // package-private, so a Method from it fails the access check.
+            DataTypeManager.class.getMethod("remove", DataType.class, TaskMonitor.class)
                .invoke(dtm, type, TaskMonitor.DUMMY);
             return;
         } catch (NoSuchMethodException e) {
@@ -493,7 +501,7 @@ public class GhidraUtil {
             throw new IllegalStateException("Failed to remove data type " + name, e);
         }
         try {
-            dtm.getClass().getMethod("remove", DataType.class).invoke(dtm, type);
+            DataTypeManager.class.getMethod("remove", DataType.class).invoke(dtm, type);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Failed to remove data type " + name, e);
         }

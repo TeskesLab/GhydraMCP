@@ -831,8 +831,9 @@ class TableFormatter(BaseFormatter):
         for section in result.get("sections") or []:
             lines.append("")
             lines.append(f"[green]## {section.get('title')}[/green]")
+            # escape unconditionally: decompiled C such as buf[i] is Rich markup
             body = str(section.get("body", ""))
-            lines.append(escape(body) if hasattr(self, "_rich_escape") else body)
+            lines.append(escape(body))
             if section.get("citations"):
                 lines.append("  (addresses: " + ", ".join(section["citations"]) + ")")
         citations = result.get("citations") or []
