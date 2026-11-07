@@ -560,6 +560,31 @@ def run_tool_groups_tests():
         return False
 
 
+def run_telemetry_tests():
+    """Run the local telemetry (I14) tests."""
+    print_header("Running Telemetry Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_telemetry.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running telemetry tests: {str(e)}")
+        return False
+
+
 def require_live_ghidra():
     """Refuse a run that would be a green summary made of skipped suites."""
     host = os.environ.get("GHYDRAMCP_TEST_HOST", "localhost")
@@ -598,6 +623,7 @@ def run_all_tests():
     errors_success = run_errors_tests()
     context_pack_success = run_context_pack_tests()
     tool_groups_success = run_tool_groups_tests()
+    telemetry_success = run_telemetry_tests()
 
     # Print a summary
     print_header("Test Summary")
@@ -623,7 +649,8 @@ def run_all_tests():
     print(f"Error Contract Tests: {'PASSED' if errors_success else 'FAILED'}")
     print(f"Context Pack Tests: {'PASSED' if context_pack_success else 'FAILED'}")
     print(f"Tool Group Tests: {'PASSED' if tool_groups_success else 'FAILED'}")
-    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success and surface_parity_success and capabilities_success and scripts_success and compatibility_success and runner_success and docs_success and capability_summary_success and tasks_success and errors_success and context_pack_success and tool_groups_success) else 'FAILED'}")
+    print(f"Telemetry Tests: {'PASSED' if telemetry_success else 'FAILED'}")
+    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success and surface_parity_success and capabilities_success and scripts_success and compatibility_success and runner_success and docs_success and capability_summary_success and tasks_success and errors_success and context_pack_success and tool_groups_success and telemetry_success) else 'FAILED'}")
 
     return (http_api_success and mcp_bridge_success and data_tests_success
             and comment_tests_success and port_tests_success and kuna_success
@@ -631,7 +658,7 @@ def run_all_tests():
             and triage_success and rea_parity_success and surface_parity_success
             and capabilities_success and scripts_success and compatibility_success
             and runner_success and docs_success and capability_summary_success
-            and tasks_success and errors_success and context_pack_success and tool_groups_success)
+            and tasks_success and errors_success and context_pack_success and tool_groups_success and telemetry_success)
 
 # Suites that need neither a live Ghidra nor any external binary. CI runs
 # exactly these on every push: a green result here is real evidence, not a
@@ -639,7 +666,7 @@ def run_all_tests():
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
-    "--capability-summary", "--tasks", "--errors", "--context-pack", "--tool-groups",
+    "--capability-summary", "--tasks", "--errors", "--context-pack", "--tool-groups", "--telemetry",
 )
 
 SUITES = {
@@ -665,6 +692,7 @@ SUITES = {
     "--errors": run_errors_tests,
     "--context-pack": run_context_pack_tests,
     "--tool-groups": run_tool_groups_tests,
+    "--telemetry": run_telemetry_tests,
 }
 
 USAGE = (

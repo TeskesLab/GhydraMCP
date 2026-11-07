@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Local telemetry and `ghydra stats` (I14)**: the bridge records what it
+  actually did — one JSON object per call (tool, ok, error code, latency,
+  estimated tokens) under `~/.ghydra/telemetry.jsonl`, capped at ~1 MB, never
+  sent anywhere and disabled with `GHYDRA_TELEMETRY=0`. The new
+  `telemetry_summary` tool and `ghydra stats` aggregate it (calls, failures,
+  latency and token volume per tool, the error codes seen) and **recommend the
+  composed tool when the log shows the pattern one replaces** — 4+ inspection
+  calls point at `analysis_context_pack`, 4+ listings at `programs_overview`,
+  4+ decompiles at `functions_batch_decompile`, and a slow tool at
+  `async_mode`. The recorder swallows every failure: telemetry never breaks a
+  call. `test_telemetry.py` covers the recorder, the bound, the state dir, the
+  disable switch, the summarizers' parity and the CLI/tool renderers;
+  `--telemetry` joins `--no-ghidra`.
 - **Progressive tool discovery (I15)**: 120 tools in one list degrade tool
   selection. The bridge now groups them by workflow (`core`, `functions`,
   `data`, `types`, `scripts`, `headless`, `kuna`, `x64dbg`) and loads only the

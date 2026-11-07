@@ -150,6 +150,8 @@ from . import (
     inspect_address,
 )
 
+from .stats import stats as stats_command
+
 cli.add_command(instances.instances)
 cli.add_command(functions.functions)
 cli.add_command(memory.memory)
@@ -177,6 +179,7 @@ cli.add_command(doctor.doctor)
 cli.add_command(evidence.evidence)
 cli.add_command(session.session)
 cli.add_command(inspect.inspect)
+cli.add_command(stats_command)
 cli.add_command(inspect_address.inspect_address)
 
 

@@ -3021,6 +3021,36 @@ def format_capabilities_summary(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_telemetry_summary(response: dict, **kwargs) -> str:
+    """The local usage summary: totals, the busiest tools, the advice."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    if not result.get("calls"):
+        return f"No telemetry in the last {result.get('days', '?')} day(s)."
+    lines = [
+        f"Local telemetry — {result.get('calls')} calls in the last "
+        f"{result.get('days')} day(s)  ({result.get('path', '')})",
+        f"  {'tool':<32} {'calls':>5} {'fail':>4} {'avg ms':>7} {'tokens':>8}",
+    ]
+    for row in result.get("tools") or []:
+        lines.append(f"  {row['tool']:<32} {row['calls']:>5} "
+                     f"{row['failed']:>4} {row.get('ms_avg', 0):>7} "
+                     f"{row['tokens']:>8}")
+    codes = result.get("error_codes") or {}
+    if codes:
+        lines.append("Error codes: " + ", ".join(
+            f"{code}={count}" for code, count in sorted(codes.items())))
+    recommendations = result.get("recommendations") or []
+    if recommendations:
+        lines.append("Recommendations:")
+        for item in recommendations:
+            lines.append(f"  - {item}")
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -3052,6 +3082,7 @@ FORMATTERS = {
     "tools_search": format_tool_matches,
     "tools_load_group": format_tool_groups,
     "tools_unload_group": format_tool_groups,
+    "telemetry_summary": format_telemetry_summary,
     "structs_list": format_structs_list,
     "structs_get": format_struct_info,
     "analysis_get_callgraph": format_callgraph,
@@ -3154,44 +3185,52 @@ def text_output(func):
     """Decorator that converts dict responses to plain text using registered formatters"""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        response = func(*args, **kwargs)
-
-        # If already a string, pass through
-        if isinstance(response, str):
-            return response
-
-        # GHYDRA_MCP_OUTPUT=json: the raw envelope, for a machine that
-        # parses it. The error envelope goes out the same way.
-        if RAW_OUTPUT:
-            try:
-                return json.dumps(response, default=str)
-            except (TypeError, ValueError):
-                return str(response)
-
-        # Check for error first
-        if isinstance(response, dict) and not response.get("success", True):
-            return format_error(response)
-
-        # Look up formatter by function name
-        formatter = FORMATTERS.get(func.__name__)
-        if formatter:
-            text = formatter(response, **kwargs)
-        else:
-            # Fallback: format_simple_result for mutation operations
-            text = format_simple_result(response, "Done")
-
-        # Actionable HATEOAS (I8): the envelope's links, translated into the
-        # bridge calls that follow them. The hrefs carry real values, so the
-        # suggestion is a call the agent can make as it reads. A link that
-        # does not map to a registered tool is left out — a wrong suggestion
-        # is worse than none.
-        suggestions = _suggested_calls(response)
-        if suggestions:
-            text += "\nNext: " + " | ".join(suggestions)
+        started = time.perf_counter()
+        text = _render_tool_output(func, *args, **kwargs)
+        _telemetry_safely(func.__name__, started, text)
         return text
 
     wrapper.__annotations__['return'] = str
     return wrapper
+
+
+def _render_tool_output(func, *args, **kwargs):
+    """The body text_output used to have, with the Next: line (I8)."""
+    response = func(*args, **kwargs)
+
+    # If already a string, pass through
+    if isinstance(response, str):
+        return response
+
+    # GHYDRA_MCP_OUTPUT=json: the raw envelope, for a machine that
+    # parses it. The error envelope goes out the same way.
+    if RAW_OUTPUT:
+        try:
+            return json.dumps(response, default=str)
+        except (TypeError, ValueError):
+            return str(response)
+
+    # Check for error first
+    if isinstance(response, dict) and not response.get("success", True):
+        return format_error(response)
+
+    # Look up formatter by function name
+    formatter = FORMATTERS.get(func.__name__)
+    if formatter:
+        text = formatter(response, **kwargs)
+    else:
+        # Fallback: format_simple_result for mutation operations
+        text = format_simple_result(response, "Done")
+
+    # Actionable HATEOAS (I8): the envelope's links, translated into the
+    # bridge calls that follow them. The hrefs carry real values, so the
+    # suggestion is a call the agent can make as it reads. A link that
+    # does not map to a registered tool is left out — a wrong suggestion
+    # is worse than none.
+    suggestions = _suggested_calls(response)
+    if suggestions:
+        text += "\nNext: " + " | ".join(suggestions)
+    return text
 
 
 _ADDRESSISH = re.compile(r"^(0x[0-9a-fA-F]+|[0-9a-fA-F]{4,})$")
@@ -11077,6 +11116,186 @@ def tools_unload_group(group: str) -> dict:
     return {"success": True,
             "result": {"group": group, "removed": removed,
                        "groups": sorted(_loaded_groups)}}
+
+
+# ================= Local telemetry (I14) =================
+# What this bridge actually did, recorded on this machine only. Nothing is
+# ever sent anywhere: the file is ~/.ghydra/telemetry.jsonl (or under
+# GHYDRA_STATE_DIR), one JSON object per call, capped at ~1 MB. Disabled with
+# GHYDRA_TELEMETRY=0. The recorder must never break a tool call, so every
+# failure in it is swallowed.
+_TELEMETRY_MAX_BYTES = 1_000_000
+_TELEMETRY_KEEP_LINES = 2000
+
+_ERROR_CODE_PREFIX = re.compile(r"^Error \[([A-Z][A-Z0-9_]*)\]")
+
+
+def _telemetry_path() -> str:
+    return os.path.join(_headless_state_dir(), "telemetry.jsonl")
+
+
+def _telemetry_enabled() -> bool:
+    return os.environ.get("GHYDRA_TELEMETRY", "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def _telemetry_trim(path: str) -> None:
+    """Keep the log bounded by dropping the oldest lines."""
+    try:
+        if os.path.getsize(path) <= _TELEMETRY_MAX_BYTES:
+            return
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()[-_TELEMETRY_KEEP_LINES:]
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError:
+        pass
+
+
+def _telemetry_record(tool: str, ok: bool, code: str | None,
+                      duration_ms: float, tokens: int) -> None:
+    if not _telemetry_enabled():
+        return
+    try:
+        path = _telemetry_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        entry = {"ts": round(time.time(), 3), "tool": tool, "ok": bool(ok),
+                 "code": code, "ms": round(float(duration_ms), 1),
+                 "tokens": int(tokens)}
+        _telemetry_trim(path)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass  # telemetry must never break a tool call
+
+
+def _telemetry_safely(tool: str, started: float, text) -> None:
+    """Record one call without ever raising into the tool."""
+    try:
+        failed = isinstance(text, str) and text.startswith("Error")
+        match = _ERROR_CODE_PREFIX.match(text) if isinstance(text, str) else None
+        _telemetry_record(
+            tool, not failed, match.group(1) if match else None,
+            (time.perf_counter() - started) * 1000.0,
+            max(1, len(text) // 4) if isinstance(text, str) else 0)
+    except Exception:
+        pass
+
+
+def _telemetry_read(max_entries: int = 5000) -> list:
+    try:
+        with open(_telemetry_path(), encoding="utf-8") as handle:
+            lines = handle.read().splitlines()[-max_entries:]
+    except OSError:
+        return []
+    entries = []
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("tool"):
+            entries.append(entry)
+    return entries
+
+
+def _telemetry_recommendations(entries: list) -> list:
+    """Name the composed tool when the log shows the pattern it replaces."""
+    recommendations = []
+    counts: Dict[str, int] = {}
+    slow: Dict[str, float] = {}
+    for entry in entries:
+        tool = str(entry.get("tool"))
+        counts[tool] = counts.get(tool, 0) + 1
+        if entry.get("ok"):
+            slow[tool] = max(slow.get(tool, 0.0), float(entry.get("ms") or 0))
+
+    inspection = sum(counts.get(name, 0) for name in (
+        "functions_get", "functions_decompile", "analysis_callers",
+        "analysis_callees", "xrefs_list", "inspect_address"))
+    if inspection >= 4:
+        recommendations.append(
+            f"{inspection} inspection calls in the window: "
+            f"analysis_context_pack(question, address) answers that pattern "
+            f"in one call, with a token budget and citable addresses.")
+    listing = sum(counts.get(name, 0) for name in (
+        "functions_list", "data_list", "symbols_list", "variables_list"))
+    if listing >= 4:
+        recommendations.append(
+            f"{listing} listing calls: programs_overview composes the counts "
+            f"and imports in one call, and a page takes limit/offset.")
+    batch = counts.get("functions_decompile", 0)
+    if batch >= 4:
+        recommendations.append(
+            f"{batch} single decompiles: functions_batch_decompile takes a "
+            f"list (async_mode=True for a long batch).")
+    for tool, worst in sorted(slow.items(), key=lambda item: -item[1])[:3]:
+        if worst >= 500:
+            recommendations.append(
+                f"{tool} took up to {worst:.0f} ms: consider async_mode=True "
+                f"or a narrower request.")
+    return recommendations[:5]
+
+
+@mcp.tool()
+@text_output
+def telemetry_summary(days: int = 7) -> dict:
+    """Summarize what this bridge has actually done, from the local log
+
+    The log is local only (never sent anywhere): one JSON object per tool
+    call under ~/.ghydra/telemetry.jsonl, capped at about 1 MB. This tool
+    aggregates it — calls, failures, latency and estimated token volume per
+    tool, the error codes seen — and names the composed tool when the log
+    shows a pattern one of them replaces.
+
+    Args:
+        days: Only count entries from the last N days (default: 7)
+
+    Returns:
+        dict: totals, per-tool rows, error codes and recommendations
+    """
+    cutoff = time.time() - max(1, int(days)) * 86400
+    entries = [entry for entry in _telemetry_read()
+               if float(entry.get("ts") or 0) >= cutoff]
+    if not entries:
+        return {"success": True,
+                "result": {"days": days, "calls": 0, "tools": [],
+                           "error_codes": {},
+                           "recommendations": [],
+                           "path": _telemetry_path(),
+                           "message": "no telemetry recorded in this window"}}
+
+    totals: Dict[str, dict] = {}
+    codes: Dict[str, int] = {}
+    for entry in entries:
+        tool = str(entry.get("tool"))
+        row = totals.setdefault(tool, {"tool": tool, "calls": 0, "failed": 0,
+                                       "ms_total": 0.0, "ms_max": 0.0,
+                                       "tokens": 0})
+        row["calls"] += 1
+        if not entry.get("ok"):
+            row["failed"] += 1
+        row["ms_total"] += float(entry.get("ms") or 0)
+        row["ms_max"] = max(row["ms_max"], float(entry.get("ms") or 0))
+        row["tokens"] += int(entry.get("tokens") or 0)
+        code = entry.get("code")
+        if code:
+            codes[str(code)] = codes.get(str(code), 0) + 1
+
+    rows = []
+    for row in sorted(totals.values(), key=lambda item: -item["calls"]):
+        rows.append({**row,
+                     "ms_avg": round(row["ms_total"] / row["calls"], 1),
+                     "ms_max": round(row["ms_max"], 1)})
+    return {"success": True,
+            "result": {
+                "days": days,
+                "calls": len(entries),
+                "tools": rows[:25],
+                "error_codes": codes,
+                "recommendations": _telemetry_recommendations(entries),
+                "path": _telemetry_path(),
+            }}
 
 
 # ================= Startup =================

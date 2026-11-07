@@ -43,6 +43,7 @@ python run_tests.py --tasks         # background task registry (async_mode)
 python run_tests.py --errors        # error.code contract + CLI entrypoint (I4/I9)
 python run_tests.py --context-pack  # budgeted dossier (R3) + actionable links (I8)
 python run_tests.py --tool-groups   # progressive tool discovery (I15)
+python run_tests.py --telemetry     # local telemetry recorder/summary (I14)
 python run_tests.py --no-ghidra     # ALL suites that need no Ghidra (CI's set)
 python run_tests.py --surface --scripts   # several flags can be combined
 ```
@@ -51,7 +52,7 @@ python run_tests.py --surface --scripts   # several flags can be combined
 > each one separately. `--no-ghidra` expands to the suites that always execute
 > (`--kuna`, `--x64dbg`, `--surface`, `--capabilities`, `--scripts`,
 > `--compatibility`, `--runner`, `--docs`, `--capability-summary`, `--tasks`,
-> `--errors`, `--context-pack`, `--tool-groups`); both CI workflows run exactly that
+> `--errors`, `--context-pack`, `--tool-groups`, `--telemetry`); both CI workflows run exactly that
 > set on every push and pull request, so a green result is real evidence rather than a
 > summary made of skipped suites. `--require-live` probes `/plugin-version` first
 > and refuses to run when no Ghidra is serving.
@@ -62,7 +63,7 @@ python run_tests.py --surface --scripts   # several flags can be combined
 >
 > `--kuna`, `--x64dbg`, `--surface`, `--capabilities`, `--scripts`, `--compatibility`
 > `--runner`, `--docs`, `--capability-summary`, `--tasks`, `--errors`,
-> `--context-pack` and `--tool-groups` are the exceptions: they need neither Ghidra
+> `--context-pack`, `--tool-groups` and `--telemetry` are the exceptions: they need neither Ghidra
 > nor their respective binaries, so they always run
 > and always give a signal. `--rea` is
 > half contract (no Ghidra) and half live. `python run_tests.py --require-live`
