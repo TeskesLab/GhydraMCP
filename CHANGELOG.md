@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Progressive tool discovery (I15)**: 120 tools in one list degrade tool
+  selection. The bridge now groups them by workflow (`core`, `functions`,
+  `data`, `types`, `scripts`, `headless`, `kuna`, `x64dbg`) and loads only the
+  groups a session asks for — with `GHYDRA_TOOL_GROUPS=core,functions` at
+  startup, or at runtime. Four meta-tools are always loaded:
+  `tools_groups` (the groups, their sizes and whether they are loaded),
+  `tools_search` (searches the FULL catalogue, including hidden tools, and
+  says which group to load), `tools_load_group` and `tools_unload_group`.
+  `core` can never be unloaded, and the meta-tools survive every profile, so a
+  hidden tool is always findable and recoverable. The catalogue is captured
+  before any profile is applied; a client that caches the list must re-read it
+  after a runtime change (a restart with the env var gives a guaranteed
+  profile). `test_tool_groups.py` covers the map, the profile switch, the
+  stash/restore and the four tools; `--tool-groups` joins `--no-ghidra`.
 - **`context_pack`: one answered question within a token budget (R3)**: the
   `analysis_context_pack` tool and `ghydra analysis context-pack` compose the
   endpoints a question needs into ONE ranked dossier — three question models

@@ -15,10 +15,10 @@ decompilation, annotation, and data manipulation.
   subsequent instances walk up to `MAX_PORT_ATTEMPTS` = 256 ports (8192–8447).
 - The bridge auto-discovers instances on startup and on a daemon timer, but `QUICK_DISCOVERY_RANGE`
   only scans **8192–8201**. Instances above 8202 need `instances_register` / the CLI.
-- 116 MCP tools in 29 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
+- 120 MCP tools in 30 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
   `doctor_*`, `evidence_*`, `functions_*`, `headless_*`, `inspect_*`, `instances_*`, `kuna_*`,
   `memory_*`, `namespaces_*`, `programs_*`, `project_*`, `projects_*`, `raw_image_*`, `scalars_*`,
-  `scripts_*`, `segments_*`, `session_*`, `structs_*`, `symbols_*`, `tasks_*`, `ui_*`,
+  `scripts_*`, `segments_*`, `session_*`, `structs_*`, `symbols_*`, `tasks_*`, `tools_*`, `ui_*`,
   `variables_*`, `x64dbg_*`, `xrefs_*`.
 - v3.0.0 migrated `HttpServer` → **Javalin** with service/DTO/resource layering. `API_VERSION` is
   **3000** (breaking: fully-qualified names everywhere).
@@ -206,6 +206,14 @@ protocol uses for a tool's parameters, so a client that re-encodes the container
 happened to `x64dbg_call`, and the unit tests did not catch it because they called the function
 instead of the protocol: `test_x64dbg.py` now drives a tool through `mcp.call_tool(...)`, and a
 guard asserts that no bridge tool declares a parameter the protocol reserves.
+
+**The tool list is groupable** (I15): 120 tools in one list degrade selection, so the bridge groups
+them by workflow — `core` (always), `functions`, `data`, `types`, `scripts`, `headless`, `kuna`,
+`x64dbg`. `GHYDRA_TOOL_GROUPS=core,functions` at startup keeps only those groups registered;
+at runtime `tools_load_group` / `tools_unload_group` change it, and `tools_search` searches the
+FULL catalogue (including hidden tools) and names the group to load. `tools_groups` shows what is
+loaded. A client that caches the tool list must re-read it after a runtime change — the env var
+gives a guaranteed profile.
 
 **A tool parameter that takes a nested object should take it as one piece of text.** A client that
 delivers a tool's parameters over stdio flattens what is nested in them: every value of a nested

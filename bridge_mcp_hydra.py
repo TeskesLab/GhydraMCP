@@ -2813,6 +2813,47 @@ def format_sessions(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_tool_groups(response: dict, **kwargs) -> str:
+    """The tool groups: size, loaded state, namespaces."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    if "groups" not in result:
+        return str(result)
+    groups = result["groups"]
+    if groups and isinstance(groups[0], str):
+        return "Groups loaded: " + ", ".join(groups)
+    lines = [f"Tool groups ({result.get('visible_tools', '?')} of "
+             f"{result.get('total_tools', '?')} tools visible)"]
+    for group in groups:
+        state = "loaded" if group.get("loaded") else "      "
+        lines.append(f"  [{state}] {group.get('group', '?'):<10} "
+                     f"{group.get('tools', 0):>3} tools  "
+                     f"{', '.join(group.get('namespaces') or [])}")
+    return "\n".join(lines)
+
+
+def format_tool_matches(response: dict, **kwargs) -> str:
+    """Search results: the tool, its group and whether it is loaded."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    matches = result.get("matches") or []
+    if not matches:
+        return f"No tool matches '{result.get('query', '')}'."
+    lines = [f"Tools matching '{result.get('query', '')}' "
+             f"({len(matches)}):"]
+    for match in matches:
+        state = "loaded" if match.get("loaded") else "hidden"
+        lines.append(f"  [{state}] {match.get('name')}  "
+                     f"({match.get('group')})  {match.get('summary', '')}")
+    return "\n".join(lines)
+
+
 def format_task_view(response: dict, **kwargs) -> str:
     """One background task: its status, elapsed time and outcome."""
     if not response.get("success", False):
@@ -3007,6 +3048,10 @@ FORMATTERS = {
     "tasks_list": format_tasks_list,
     "tasks_get": format_task_view,
     "tasks_cancel": format_task_view,
+    "tools_groups": format_tool_groups,
+    "tools_search": format_tool_matches,
+    "tools_load_group": format_tool_groups,
+    "tools_unload_group": format_tool_groups,
     "structs_list": format_structs_list,
     "structs_get": format_struct_info,
     "analysis_get_callgraph": format_callgraph,
@@ -10787,6 +10832,253 @@ def tasks_cancel(task_id: str) -> dict:
     return {"success": True, "result": view}
 
 
+# ================= Progressive tool discovery (I15) =================
+# 116 tools in one list degrade tool selection: an agent that has to pick
+# from everything picks worse. The bridge groups them by workflow and can
+# load only the groups a session asked for (`GHYDRA_TOOL_GROUPS=core,functions`
+# or at runtime with tools_load_group). The four tools_* meta-tools are always
+# loaded, and the full catalogue stays searchable even when a tool is hidden.
+
+_TOOL_GROUPS = {
+    "core": {"programs", "project", "projects", "instances", "ui", "doctor",
+             "evidence", "session", "tasks", "tools"},
+    "functions": {"functions", "analysis", "inspect", "variables", "memory"},
+    "data": {"data", "xrefs", "scalars", "comments", "segments"},
+    "types": {"structs", "datatypes", "classes", "raw", "symbols",
+              "namespaces"},
+    "scripts": {"scripts"},
+    "headless": {"headless"},
+    "kuna": {"kuna"},
+    "x64dbg": {"x64dbg"},
+}
+
+_META_NAMESPACE = "tools"
+_tool_stash: Dict[str, Dict[str, object]] = {}
+_loaded_groups: set[str] = set(_TOOL_GROUPS)
+
+
+def _tool_namespace(tool_name: str) -> str:
+    return tool_name.split("_", 1)[0]
+
+
+def _tool_group(tool_name: str) -> str:
+    """The group a tool belongs to; an unknown namespace is always loaded."""
+    namespace = _tool_namespace(tool_name)
+    for group, namespaces in _TOOL_GROUPS.items():
+        if namespace in namespaces:
+            return group
+    return "core"
+
+
+def _tool_catalog() -> Dict[str, dict]:
+    """The FULL catalogue, including tools a profile has hidden."""
+    catalog = {}
+    manager = getattr(mcp, "_tool_manager", None)
+    live = getattr(manager, "_tools", {}) if manager else {}
+    for name, tool in live.items():
+        catalog[name] = _catalog_entry(name, tool)
+    for tools in _tool_stash.values():
+        for name, tool in tools.items():
+            catalog.setdefault(name, _catalog_entry(name, tool))
+    return catalog
+
+
+def _catalog_entry(name: str, tool) -> dict:
+    description = str(getattr(tool, "description", "") or "")
+    summary = description.strip().splitlines()[0] if description.strip() else ""
+    return {
+        "name": name,
+        "namespace": _tool_namespace(name),
+        "group": _tool_group(name),
+        "summary": summary[:160],
+    }
+
+
+def _tool_loaded(name: str) -> bool:
+    manager = getattr(mcp, "_tool_manager", None)
+    return name in getattr(manager, "_tools", {}) if manager else False
+
+
+def apply_tool_groups(spec: str | None = None) -> dict:
+    """Load only the named groups (comma-separated), or all of them.
+
+    Called at startup from GHYDRA_TOOL_GROUPS and at runtime from
+    tools_load_group/tools_unload_group. The tools_* meta-tools are never
+    removed, and the full catalogue stays searchable: a hidden tool can be
+    found with tools_search and loaded with tools_load_group.
+    """
+    global _loaded_groups
+    requested = [part.strip().lower() for part in (spec or "").split(",")
+                 if part.strip()]
+    unknown = [group for group in requested if group not in _TOOL_GROUPS]
+    if unknown:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNKNOWN",
+                          "message": f"unknown group(s): {', '.join(unknown)}",
+                          "known": sorted(_TOOL_GROUPS)}}
+    target = set(requested) if requested else set(_TOOL_GROUPS)
+    target.add("core")  # the basics are always available
+    manager = getattr(mcp, "_tool_manager", None)
+    if manager is None:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNAVAILABLE",
+                          "message": "this bridge has no tool manager"}}
+
+    loaded_now = set()
+    for name, tool in list(manager._tools.items()):
+        group = _tool_group(name)
+        if group in target:
+            loaded_now.add(name)
+            continue
+        if _tool_namespace(name) == _META_NAMESPACE:
+            loaded_now.add(name)  # the meta-tools are the way back
+            continue
+        _tool_stash.setdefault(group, {})[name] = tool
+        manager._tools.pop(name, None)
+
+    _loaded_groups = target
+    return {"success": True,
+            "result": {"groups": sorted(_loaded_groups),
+                       "loaded": len(loaded_now),
+                       "loaded_tools": sorted(loaded_now)[:200]}}
+
+
+@mcp.tool()
+@text_output
+def tools_groups() -> dict:
+    """List the tool groups, their sizes and whether they are loaded
+
+    The bridge groups its tools by workflow so a session can keep only the
+    namespaces its work needs. `core` is always loaded; the rest are opt-in
+    with GHYDRA_TOOL_GROUPS or tools_load_group.
+
+    Returns:
+        dict: Every group with its tool count and loaded state
+    """
+    catalog = _tool_catalog()
+    counts: Dict[str, int] = {}
+    for entry in catalog.values():
+        counts[entry["group"]] = counts.get(entry["group"], 0) + 1
+    groups = []
+    for group in sorted(_TOOL_GROUPS):
+        groups.append({
+            "group": group,
+            "tools": counts.get(group, 0),
+            "loaded": group in _loaded_groups,
+            "namespaces": sorted(_TOOL_GROUPS[group]),
+        })
+    return {"success": True,
+            "result": {"count": len(groups), "groups": groups,
+                       "visible_tools": len(getattr(
+                           getattr(mcp, "_tool_manager", None), "_tools", {})),
+                       "total_tools": len(catalog)}}
+
+
+@mcp.tool()
+@text_output
+def tools_search(query: str, limit: int = 20) -> dict:
+    """Search every tool, including those a loaded profile hides
+
+    Matches the query against tool names, their one-line summaries and their
+    namespaces — so an agent that needs a capability can find the tool and
+    the group to load, instead of carrying the whole list in context.
+
+    Args:
+        query: What to look for (e.g. "decompile", "struct", "x64dbg")
+        limit: Maximum matches to return (default: 20)
+
+    Returns:
+        dict: The matching tools with name, group, namespace, summary and
+              whether each one is currently loaded
+    """
+    needle = (query or "").lower()
+    matches = []
+    for name, entry in sorted(_tool_catalog().items()):
+        haystack = f"{name} {entry['summary']} {entry['namespace']} " \
+                   f"{entry['group']}".lower()
+        if needle not in haystack:
+            continue
+        matches.append({**entry, "loaded": _tool_loaded(name)})
+        if len(matches) >= limit:
+            break
+    return {"success": True,
+            "result": {"query": query, "count": len(matches),
+                       "matches": matches}}
+
+
+@mcp.tool()
+@text_output
+def tools_load_group(group: str) -> dict:
+    """Load one tool group into this session
+
+    The tools come back into the server's list; MCP clients that cache the
+    tool list should re-read it (most read it on demand). For a guaranteed
+    profile, restart the bridge with GHYDRA_TOOL_GROUPS.
+
+    Args:
+        group: The group to load (see tools_groups)
+
+    Returns:
+        dict: The groups now loaded and how many tools they hold
+    """
+    if group not in _TOOL_GROUPS:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNKNOWN",
+                          "message": f"unknown group '{group}'",
+                          "known": sorted(_TOOL_GROUPS)}}
+    stashed = _tool_stash.pop(group, {})
+    manager = getattr(mcp, "_tool_manager", None)
+    if manager is None:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNAVAILABLE",
+                          "message": "this bridge has no tool manager"}}
+    for name, tool in stashed.items():
+        manager._tools[name] = tool
+    _loaded_groups.add(group)
+    return {"success": True,
+            "result": {"group": group, "restored": len(stashed),
+                       "groups": sorted(_loaded_groups),
+                       "note": "re-read the tool list to see them; a restart "
+                               "with GHYDRA_TOOL_GROUPS gives a guaranteed "
+                               "profile"}}
+
+
+@mcp.tool()
+@text_output
+def tools_unload_group(group: str) -> dict:
+    """Remove one tool group from this session, keeping the meta-tools
+
+    Args:
+        group: The group to unload
+
+    Returns:
+        dict: The groups now loaded and how many tools were removed
+    """
+    if group not in _TOOL_GROUPS:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNKNOWN",
+                          "message": f"unknown group '{group}'",
+                          "known": sorted(_TOOL_GROUPS)}}
+    if group == "core":
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_CORE",
+                          "message": "the core group cannot be unloaded"}}
+    manager = getattr(mcp, "_tool_manager", None)
+    if manager is None:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNAVAILABLE",
+                          "message": "this bridge has no tool manager"}}
+    removed = 0
+    for name, tool in list(manager._tools.items()):
+        if _tool_group(name) == group and _tool_namespace(name) != _META_NAMESPACE:
+            _tool_stash.setdefault(group, {})[name] = manager._tools.pop(name)
+            removed += 1
+    _loaded_groups.discard(group)
+    return {"success": True,
+            "result": {"group": group, "removed": removed,
+                       "groups": sorted(_loaded_groups)}}
+
+
 # ================= Startup =================
 
 def main():
@@ -10805,6 +11097,21 @@ def main():
     discovery_thread.start()
 
     signal.signal(signal.SIGINT, handle_sigint)
+
+    # Progressive tool discovery (I15): a profile keeps only the groups the
+    # session asked for. Unset loads everything, which is the old behaviour.
+    profile = os.environ.get("GHYDRA_TOOL_GROUPS", "").strip()
+    if profile:
+        applied = apply_tool_groups(profile)
+        if applied.get("success"):
+            print(f"GhydraMCP: tool profile loaded — "
+                  f"{', '.join(applied['result']['groups'])} "
+                  f"({applied['result']['loaded']} tools)",
+                  file=sys.stderr, flush=True)
+        else:
+            print(f"GhydraMCP: ignored GHYDRA_TOOL_GROUPS '{profile}': "
+                  f"{applied['error']['message']}", file=sys.stderr, flush=True)
+
     mcp.run(transport="stdio")
 
 
