@@ -6,38 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Fixed
-- **The 28 tools that answered `"Done"`**: every MCP tool now has a `FORMATTERS` entry, so
-  `scripts_list` shows the script catalogue and `scripts_run` the captured `output` again.
-  `test_surface_parity.py` (`python run_tests.py --surface`) asserts the invariant over the
-  whole registered catalogue, not just one namespace.
-- **The sixth version copy**: `ghydra/x64dbg.py` uses `ghydra.__version__` instead of a
-  hardcoded `3.0.0`, bringing it under `scripts/version.py --check`.
-- **Instance discovery**: the full sweep now reaches every port the plugin can bind
-  (`MAX_PORT_ATTEMPTS = 256`, 8192-8447) instead of stopping at 8211.
-- **Documentation drift**: `CONTRIBUTING.md` points at `scripts/version.py` instead of
-  hand-editing `v2.0.0`/`API_VERSION=2`; `TESTING.md` lists all flags and no longer asserts a
-  `port` field the envelope never emits; `AGENTS.md` names the bridge env vars correctly
-  (`GHIDRA_*`).
-- **Dead CLI command**: the duplicate `inspect-address` in `ghydra/cli/inspect.py` is gone.
-- **Ad-hoc Python 3 execution (PyGhidra regression from v3.0.0)**: the merge that removed
-  `/script/execute` left `ScriptService.runSource` writing only `.java` files and demanding
-  `extends GhidraScript`, so Python source answered `BAD_REQUEST`. `POST /scripts/run`, the
-  bridge's `scripts_run` and `ghydra scripts run` now take an explicit `language`
-  (`java`/`python`) and `filename`; a `.py` name (or `language=python`) writes a temporary
-  `.py` file so Ghidra selects the PyGhidra provider, and a missing provider names the
-  `pyghidraRun` remedy. Java support and the existing execution opt-in are unchanged.
-  `skills/ghydra-cli/SKILL.md` no longer teaches the removed `ghydra script execute` /
-  `script capabilities` commands. `scripts_list`/`scripts_run` also gained the missing
-  `@text_output` decorator (their formatters were dead), and `scripts_run`'s `args` is now
-  one piece of text instead of a list some MCP clients flatten.
-- **Ghidra 11.x/12.2 compatibility (`I3`)**: `DataTypeComponent.setFieldName` is resolved
-  reflectively (its return type changed in 12.2, and a direct call site produced
-  `NoSuchMethodError` — an `Error` that escaped every `catch (Exception)` and every Javalin
-  handler, giving an empty 500). `TransactionHelper` now catches `Throwable`, converts
-  `LinkageError` into `IncompatibleGhidraBuildException`, and the server answers a structured
-  `500 INCOMPATIBLE_GHIDRA_BUILD` with a remedy. `CompatibilityService` probes the runtime
-  signatures at startup and publishes them in `/capabilities`.
+## [3.1.0] - 2026-11-06
 
 ### Added
 - **Version 3.1.0**: all five version locations moved together via `scripts/version.py --set`;
@@ -139,6 +108,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Gitea release build:** the release workflow installs the JDK each Ghidra series needs (21 for 11.x, 25 for 12.2) instead of a fixed one, because a single job builds both series and `javac` cannot read a newer class file.
 
 ### Fixed
+- **Ad-hoc Python 3 execution (PyGhidra regression from v3.0.0)**: the merge that removed
+  `/script/execute` left `ScriptService.runSource` writing only `.java` files and demanding
+  `extends GhidraScript`, so Python source answered `BAD_REQUEST`. `POST /scripts/run`, the
+  bridge's `scripts_run` and `ghydra scripts run` now take an explicit `language`
+  (`java`/`python`) and `filename`; a `.py` name (or `language=python`) writes a temporary
+  `.py` file so Ghidra selects the PyGhidra provider, and a missing provider names the
+  `pyghidraRun` remedy. Java support and the existing execution opt-in are unchanged.
+  `skills/ghydra-cli/SKILL.md` no longer teaches the removed `script execute` /
+  `script capabilities` commands. `scripts_list`/`scripts_run`/`programs_save` also gained the
+  missing `@text_output` decorator (their formatters were dead), and `scripts_run`'s `args` is
+  now one piece of text instead of a list some MCP clients flatten.
+- **Ghidra 11.x/12.2 compatibility (`I3`)**: `DataTypeComponent.setFieldName` is resolved
+  reflectively (its return type changed in 12.2, and a direct call site produced
+  `NoSuchMethodError` — an `Error` that escaped every `catch (Exception)` and every Javalin
+  handler, giving an empty 500). `TransactionHelper` now catches `Throwable`, converts
+  `LinkageError` into `IncompatibleGhidraBuildException`, and the server answers a structured
+  `500 INCOMPATIBLE_GHIDRA_BUILD` with a remedy. `CompatibilityService` probes the runtime
+  signatures at startup and publishes them in `/capabilities`.
+- **The 28 tools that answered `"Done"`**: every MCP tool now has a `FORMATTERS` entry, so
+  `scripts_list` shows the script catalogue and `scripts_run` the captured `output` again.
+  `test_surface_parity.py` (`python run_tests.py --surface`) asserts the invariant over the
+  whole registered catalogue, not just one namespace.
+- **The sixth version copy**: `ghydra/x64dbg.py` uses `ghydra.__version__` instead of a
+  hardcoded `3.0.0`, bringing it under `scripts/version.py --check`.
+- **Instance discovery**: the full sweep now reaches every port the plugin can bind
+  (`MAX_PORT_ATTEMPTS = 256`, 8192-8447) instead of stopping at 8211.
+- **Documentation drift**: `CONTRIBUTING.md` points at `scripts/version.py` instead of
+  hand-editing `v2.0.0`/`API_VERSION=2`; `TESTING.md` lists all flags and no longer asserts a
+  `port` field the envelope never emits; `AGENTS.md` names the bridge env vars correctly
+  (`GHIDRA_*`).
+- **Dead CLI command**: the duplicate `inspect-address` in `ghydra/cli/inspect.py` is gone.
 - **A remote target does not start a headless run.** The run is started on this machine and serves this machine, so a report pointed at another machine that is not serving the API waited for an answer that could never come - and left the analyzer behind, because the failure came before the cleanup. A remote target has to be up already, and a run that does not come up is stopped instead of left behind.
 - **The port is checked before anything is started.** The script falls back to 8192 for a port it cannot use, so a port of 0, a negative one or one above 65535 made the launcher wait for an answer on a port that was never bound, with an analyzer sitting on another one. The runner refuses the port now, with the code `HEADLESS_BAD_PORT`.
 - **The backslash is a separator everywhere.** On POSIX, `os.path.basename()` takes the whole `C:\bin\cmd.exe` as the name, so the lookup of the program in the index of the project and the name of the project were wrong for a Windows path on a POSIX machine - and the lookup would import a program that was already in the project, which fails. The name of the file is taken with both separators in mind now.
@@ -189,6 +189,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **A variable that could be renamed only once:** the rename looked the variable up in the decompiler's local symbol map, and the listing merged what the database holds with what the decompiler knows — so the two disagreed. A local that was already renamed is a *unique symbol*, and a unique symbol lives in the global map, so the second rename of the same variable answered "variable not found" and the rename could not be undone. The lookup now covers the database and the unique symbols of the function, and the test asserts that the rename can be taken back.
 - **A name the decompiler invented, offered as if it were a variable:** what the decompiler calls a register it did not map (`puVar13`) is not a variable — there is nothing behind it to rename, and the name is re-numbered on the next decompile, so the listing and the rename disagreed about it. Renaming one now fails with a message that says so, and the listing keeps saying where each name came from (`source`): `database` is a variable, `decompiler` is the decompiler's own word for a value.
 - **Python packaging:** the wheel shipped the `ghydramcp` entry point but not the `bridge_mcp_hydra` module it points at. Defining `tool.hatch.build.targets.wheel.packages` disables `include`-based file selection, so the top-level bridge file never entered the wheel and installs via `uvx --from git+https://github.com/TeskesLab/GhydraMCP ghydramcp` (or `pip install ghydramcp`) died with `ModuleNotFoundError: No module named 'bridge_mcp_hydra'`. The bridge module is now force-included in the wheel.
+
+Automated by MisterMal
 
 ## [3.0.0] - 2026-10-23
 
@@ -375,7 +377,8 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 - Initial project setup
 - Basic MCP bridge functionality
 
-[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v3.0.0...HEAD
+[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/TeskesLab/GhydraMCP/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/TeskesLab/GhydraMCP/compare/v2.4.1...v3.0.0
 [3.0.0-rc.1]: https://github.com/starsong-consulting/GhydraMCP/compare/v3.0.0-beta...v3.0.0-rc.1
 [2.0.0]: https://github.com/teal-bauer/GhydraMCP/compare/v1.4.0...v2.0.0
