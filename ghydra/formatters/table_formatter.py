@@ -789,6 +789,102 @@ class TableFormatter(BaseFormatter):
 
         return self._capture(table)
 
+    def format_capabilities(self, data: Dict[str, Any]) -> str:
+        """Format the capability negotiation payload as a panel."""
+        result = data.get("result", data)
+        if not isinstance(result, dict):
+            return self._capture(str(result))
+
+        lines = [
+            f"[cyan]Plugin:[/cyan] {result.get('plugin_version', '?')}",
+            f"[cyan]API:[/cyan] {result.get('api_version', '?')}",
+            f"[cyan]Ghidra:[/cyan] {result.get('ghidra_version', 'unknown')}",
+            f"[cyan]Java:[/cyan] {result.get('java_version', 'unknown')}",
+            f"[cyan]Headless:[/cyan] {result.get('headless', False)}",
+        ]
+        features = result.get("features") or {}
+        if features:
+            on = ", ".join(sorted(k for k, v in features.items() if v)) or "none"
+            off = ", ".join(sorted(k for k, v in features.items() if not v)) or "none"
+            lines.append(f"[cyan]Features on:[/cyan] {on}")
+            lines.append(f"[cyan]Features off:[/cyan] {off}")
+        limits = result.get("limits") or {}
+        if limits:
+            lines.append("[cyan]Limits:[/cyan] " + ", ".join(
+                f"{k}={v}" for k, v in sorted(limits.items())))
+
+        return self._capture(Panel("\n".join(lines), title="Capabilities",
+                                   border_style="blue"))
+
+    def format_context_pack(self, data: Dict[str, Any]) -> str:
+        """Format a budgeted dossier as sections with a citations footer."""
+        result = data.get("result", data)
+        if not isinstance(result, dict):
+            return self._capture(str(result))
+        lines = [
+            f"[cyan]Context pack[/cyan] [{result.get('template', '?')}] — "
+            f"{result.get('question', '')}",
+            f"program: {result.get('program') or '?'}  "
+            f"budget: {result.get('budget_tokens', '?')} tokens, "
+            f"used {result.get('used_tokens', '?')}",
+        ]
+        for section in result.get("sections") or []:
+            lines.append("")
+            lines.append(f"[green]## {section.get('title')}[/green]")
+            # escape unconditionally: decompiled C such as buf[i] is Rich markup
+            body = str(section.get("body", ""))
+            lines.append(escape(body))
+            if section.get("citations"):
+                lines.append("  (addresses: " + ", ".join(section["citations"]) + ")")
+        citations = result.get("citations") or []
+        if citations:
+            lines.append("")
+            lines.append("[cyan]Citations:[/cyan] " + ", ".join(citations))
+        omitted = result.get("omitted") or []
+        if omitted:
+            lines.append("[yellow]Omitted:[/yellow]")
+            for item in omitted:
+                lines.append(f"  - {item.get('section')}: {item.get('reason')}")
+        return self._capture("\n".join(lines))
+
+    def format_capabilities_summary(self, data: Dict[str, Any]) -> str:
+        """Format a ranked capability triage as a table + evidence lines."""
+        result = data.get("result", data)
+        if not isinstance(result, dict):
+            return self._capture(str(result))
+        findings = result.get("findings") or []
+        summary = result.get("summary") or {}
+
+        table = Table(title="Capability Triage", show_lines=False)
+        table.add_column("Confidence", style="yellow", justify="left")
+        table.add_column("ID", style="cyan")
+        table.add_column("Technique", style="green")
+        table.add_column("Score", style="magenta", justify="right")
+        table.add_column("Evidence", style="white")
+
+        for finding in findings:
+            evidence = ", ".join(
+                f"{item.get('kind')}:{item.get('name')}"
+                for item in (finding.get("evidence") or [])[:2]) or "-"
+            table.add_row(
+                str(finding.get("confidence", "?")),
+                str(finding.get("id", "?")),
+                str(finding.get("name", "?")),
+                str(finding.get("score", 0)),
+                evidence,
+            )
+
+        footer = (
+            f"Scanned {summary.get('imports_scanned', 0)} imports / "
+            f"{summary.get('strings_scanned', 0)} strings against "
+            f"{summary.get('rules', 0)} rules. "
+            + str(result.get("method", ""))
+        )
+        if not findings:
+            footer += "  No known technique patterns matched."
+        rendered = self._capture(table)
+        return rendered + "\n" + footer
+
     def format_simple_result(self, data: Dict[str, Any]) -> str:
         """Format simple success/info response."""
         result = data.get("result", {})

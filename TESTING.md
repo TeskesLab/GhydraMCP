@@ -27,15 +27,49 @@ python run_tests.py --data       # data operations tests
 python run_tests.py --comments   # comment tests
 python run_tests.py --port       # Javalin port edge-case tests
 python run_tests.py --kuna       # Kuna integration tests
-python run_tests.py --scripts    # MCP/CLI scripting behavior with a local HTTP fixture
+python run_tests.py --x64dbg     # x64dbg integration tests
+python run_tests.py --headless   # headless runner, report and annotations
+python run_tests.py --evidence   # evidence ledger and sessions
+python run_tests.py --triage     # target triage
+python run_tests.py --rea        # REA parity
+python run_tests.py --surface    # global tool/formatter contract
+python run_tests.py --capabilities # capability negotiation contract
+python run_tests.py --scripts      # MCP/CLI scripting behavior with a local HTTP fixture
+python run_tests.py --compatibility # 11.x/12.2 compatibility contract
+python run_tests.py --runner        # test-runner contract
+python run_tests.py --docs          # documentation drift guard
+python run_tests.py --capability-summary # ATT&CK/MBC triage contract
+python run_tests.py --tasks         # background task registry (async_mode)
+python run_tests.py --errors        # error.code contract + CLI entrypoint (I4/I9)
+python run_tests.py --context-pack  # budgeted dossier (R3) + actionable links (I8)
+python run_tests.py --tool-groups   # progressive tool discovery (I15)
+python run_tests.py --telemetry     # local telemetry recorder/summary (I14)
+python run_tests.py --no-ghidra     # ALL suites that need no Ghidra (CI's set)
+python run_tests.py --surface --scripts   # several flags can be combined
 ```
+
+> `run_tests.py` accepts any number of suite flags in one invocation and reports
+> each one separately. `--no-ghidra` expands to the suites that always execute
+> (`--kuna`, `--x64dbg`, `--surface`, `--capabilities`, `--scripts`,
+> `--compatibility`, `--runner`, `--docs`, `--capability-summary`, `--tasks`,
+> `--errors`, `--context-pack`, `--tool-groups`, `--telemetry`); both CI workflows run exactly that
+> set on every push and pull request, so a green result is real evidence rather than a
+> summary made of skipped suites. `--require-live` probes `/plugin-version` first
+> and refuses to run when no Ghidra is serving.
 
 > **Every suite skips itself when Ghidra is not running.** Each `setUp` calls
 > `skipTest("Ghidra not running")`, so a green summary does not prove anything unless the
 > tests actually executed — check the output for skips before trusting a pass.
 >
-> The Kuna and script-contract suites are the exceptions: they need neither Ghidra nor
-> any external binary, so they always run and always give a signal.
+> `--kuna`, `--x64dbg`, `--surface`, `--capabilities`, `--scripts`, `--compatibility`
+> `--runner`, `--docs`, `--capability-summary`, `--tasks`, `--errors`,
+> `--context-pack`, `--tool-groups` and `--telemetry` are the exceptions: they need neither Ghidra
+> nor their respective binaries, so they always run
+> and always give a signal. `--rea` is
+> half contract (no Ghidra) and half live. `python run_tests.py --require-live`
+> probes `/plugin-version` first and refuses to run without a live instance, so a
+> green summary cannot be made of skipped suites. The `--scripts` suite now also
+> drives the bridge and CLI against a local HTTP fixture.
 
 ## HTTP API Tests
 
@@ -77,9 +111,9 @@ The test script will:
 1. Connect to the bridge using the MCP client
 2. Initialize the session
 3. List the available tools
-4. Call the list_instances tool
-5. Call the discover_instances tool
-6. Call the list_functions tool
+4. Call the instances_list tool
+5. Call the instances_discover tool
+6. Call the functions_list tool
 
 ### What's Being Tested
 
@@ -154,7 +188,8 @@ def test_new_endpoint(self):
     self.assertIn("success", data)
     self.assertTrue(data["success"])
     self.assertIn("timestamp", data)
-    self.assertIn("port", data)
+    self.assertIn("instance", data)
+    self.assertIn("result", data)
 ```
 
 ### MCP Bridge Tests
@@ -162,7 +197,7 @@ def test_new_endpoint(self):
 To add a new test for an MCP tool:
 
 1. Add a new test method to the `MCPBridgeTests` class
-2. Use the `send_mcp_request` method to send an MCP request to the bridge
+2. Use the MCP client helper in `test_mcp_bridge.py` to send a request to the bridge
 3. Verify the response using assertions
 
 Example:

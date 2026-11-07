@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
@@ -78,17 +79,22 @@ class _ScriptHandler(BaseHTTPRequestHandler):
         ]})
 
     def do_POST(self):
+        # Drain the body before replying. An early 403/404/400 that leaves
+        # unread bytes in the socket makes Windows reset the connection
+        # (WSAECONNRESET), so the client sees a transport error instead of the
+        # structured REST error this fixture is meant to model.
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        body = self.rfile.read(length) if length > 0 else b""
         if self.path != "/scripts/run":
             self._error(404, "NOT_FOUND", "Unknown endpoint")
             return
         if not cast(_ScriptHTTPServer, self.server).allow_scripts:
             self._error(403, "SCRIPTS_DISABLED", "Script execution is disabled")
             return
-        length = int(self.headers.get("Content-Length", "0"))
         if not 0 < length <= 16384:
             self._error(400, "BAD_REQUEST", "Invalid request size")
             return
-        request = json.loads(self.rfile.read(length))
+        request = json.loads(body)
         source = request.get("source")
         filename = request.get("filename", "adhoc.java")
         language = request.get("language")
@@ -142,13 +148,25 @@ class ScriptProtocolTests(unittest.TestCase):
         self.enterContext(mock.patch.object(bridge, "RAW_OUTPUT", False))
 
     def call(self, tool="scripts_run", **arguments):
-        content = asyncio.run(bridge.mcp.call_tool(tool, {
-            "port": self.fixture.port, **arguments,
-        }))
-        return "\n".join(
-            item.get("text", "") if isinstance(item, dict) else getattr(item, "text", "")
-            for item in content
-        )
+        # This machine resets roughly one loopback connection in fourteen
+        # (documented in AGENTS.md). A connection that never reached the
+        # fixture is always safe to repeat, so retry the transport failure
+        # instead of letting a random test fail on the machine's timing.
+        last = ""
+        for attempt in range(3):
+            content = asyncio.run(bridge.mcp.call_tool(tool, {
+                "port": self.fixture.port, **arguments,
+            }))
+            last = "\n".join(
+                item.get("text", "") if isinstance(item, dict)
+                else getattr(item, "text", "")
+                for item in content
+            )
+            if "CONNECTION_ERROR" not in last:
+                return last
+            if attempt < 2:
+                time.sleep(0.05)
+        return last
 
     def test_python_output_survives_mcp_text_formatting(self):
         for runtime in ({"language": "python"}, {"filename": "probe.py"}):

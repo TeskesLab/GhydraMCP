@@ -88,48 +88,37 @@ GhydraMCP follows semantic versioning (SemVer) and uses explicit API versions:
 
 ### Version Numbers
 
-When making changes, update version numbers in these locations:
+**Do not edit version constants by hand.** `scripts/version.py` is the single source of
+truth: it writes all five locations at once, and `--check` proves they agree. Both CI
+workflows run the check on every push.
 
-1. **Plugin Version** in `src/main/java/eu/starsong/ghidra/api/ApiConstants.java`:
-   ```java
-   public static final String PLUGIN_VERSION = "v2.0.0";
-   ```
+```bash
+python scripts/version.py --set 3.1.0      # writes all five locations
+python scripts/version.py --check         # fails CI when they disagree
+python scripts/prepare_release.py 3.1.0   # CHANGELOG section + versions in one step
+```
 
-2. **Bridge Version** in `bridge_mcp_hydra.py`:
-   ```python
-   BRIDGE_VERSION = "v2.0.0"
-   ```
-
-### API Versions
-
-The API version is tracked separately from the implementation version:
-
-1. **API Version** in `src/main/java/eu/starsong/ghidra/api/ApiConstants.java`:
-   ```java
-   public static final int API_VERSION = 2;
-   ```
-
-2. **Required API Version** in `bridge_mcp_hydra.py`:
-   ```python
-   REQUIRED_API_VERSION = 2
-   ```
+The five locations are `ApiConstants.PLUGIN_VERSION`, `bridge_mcp_hydra.py`'s
+`BRIDGE_VERSION`, `pyproject.toml`, `ghydra/__init__.py` and
+`src/main/resources/extension.properties`. `API_VERSION` / `REQUIRED_API_VERSION`
+are a separate axis (currently `3000`): they move only for a breaking API change and
+`--set` never touches them.
 
 ### When to Update Versions
 
-- **Patch Version** (`x.y.Z`): Bug fixes and minor changes that don't affect API compatibility
-- **Minor Version** (`x.Y.z`): New features that are backward compatible
-- **Major Version** (`X.y.z`): Breaking changes that aren't backward compatible
-- **API Version**: Only increment when making incompatible API changes
+- **Patch** (`x.y.Z`): bug fixes that don't affect API compatibility
+- **Minor** (`x.Y.z`): new features that are backward compatible
+- **Major** (`X.y.z`): breaking changes
+- **API version**: only for incompatible API changes
 
 ### Important Versioning Rules
 
-1. **Bridge Modifications**: When modifying the MCP bridge script (`bridge_mcp_hydra.py`), update the `BRIDGE_VERSION` string but only update the `REQUIRED_API_VERSION` if the changes require API compatibility changes.
-
-2. **Java Plugin Modifications**: When making changes to the Java plugin:
-   - Update `PLUGIN_VERSION` string for all changes
-   - Only increment `API_VERSION` when introducing breaking changes to the API
-
-3. **API Compatibility**: The bridge script and Java plugin must have matching API versions to work together. The bridge verifies this at runtime.
+1. Run `python scripts/version.py --check` before opening a PR; CI runs it too.
+2. A release needs a `## [<version>]` section in `CHANGELOG.md` — `scripts/release_notes.py`
+   refuses a tag whose section is missing or empty.
+3. A release tag `vX.Y.Z` must be pushed to **both** remotes (`github` and `forgejo`).
+4. The bridge verifies `API_VERSION` by exact equality in `register_instance`; a mismatch
+   surfaces later as "No active Ghidra instance".
 
 ## Code Standards
 

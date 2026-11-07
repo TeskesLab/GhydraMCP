@@ -6,6 +6,102 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Local telemetry and `ghydra stats` (I14)**: the bridge records what it
+  actually did — one JSON object per call (tool, ok, error code, latency,
+  estimated tokens) under `~/.ghydra/telemetry.jsonl`, capped at ~1 MB, never
+  sent anywhere and disabled with `GHYDRA_TELEMETRY=0`. The new
+  `telemetry_summary` tool and `ghydra stats` aggregate it (calls, failures,
+  latency and token volume per tool, the error codes seen) and **recommend the
+  composed tool when the log shows the pattern one replaces** — 4+ inspection
+  calls point at `analysis_context_pack`, 4+ listings at `programs_overview`,
+  4+ decompiles at `functions_batch_decompile`, and a slow tool at
+  `async_mode`. The recorder swallows every failure: telemetry never breaks a
+  call. `test_telemetry.py` covers the recorder, the bound, the state dir, the
+  disable switch, the summarizers' parity and the CLI/tool renderers;
+  `--telemetry` joins `--no-ghidra`.
+- **Progressive tool discovery (I15)**: 120 tools in one list degrade tool
+  selection. The bridge now groups them by workflow (`core`, `functions`,
+  `data`, `types`, `scripts`, `headless`, `kuna`, `x64dbg`) and loads only the
+  groups a session asks for — with `GHYDRA_TOOL_GROUPS=core,functions` at
+  startup, or at runtime. Four meta-tools are always loaded:
+  `tools_groups` (the groups, their sizes and whether they are loaded),
+  `tools_search` (searches the FULL catalogue, including hidden tools, and
+  says which group to load), `tools_load_group` and `tools_unload_group`.
+  `core` can never be unloaded, and the meta-tools survive every profile, so a
+  hidden tool is always findable and recoverable. The catalogue is captured
+  before any profile is applied; a client that caches the list must re-read it
+  after a runtime change (a restart with the env var gives a guaranteed
+  profile). `test_tool_groups.py` covers the map, the profile switch, the
+  stash/restore and the four tools; `--tool-groups` joins `--no-ghidra`.
+- **`context_pack`: one answered question within a token budget (R3)**: the
+  `analysis_context_pack` tool and `ghydra analysis context-pack` compose the
+  endpoints a question needs into ONE ranked dossier — three question models
+  (what it does / where the data comes from / what changed, PT or EN) with
+  exact-endpoint retrieval, graph expansion (callers/callees/xrefs), an
+  approximate token budget, **citable addresses** for every section, and an
+  explicit list of what was omitted and why. A section that fails is reported
+  with its error code, never hidden. The builder lives in
+  `ghydra/contextpack.py` with a copy in the bridge (parity asserted by
+  `test_context_pack.py`).
+- **Actionable HATEOAS (I8)**: every text answer now ends with a `Next:` line
+  built from the envelope's `_links` — the hrefs carry real values, so the
+  suggestion is the bridge call that follows (`functions_decompile(address="…")`),
+  including the next page for paginated listings. A link that does not map to a
+  registered tool is left out: a wrong suggestion is worse than none.
+- **`--json` anywhere and UTF-8 output (I4)**: the CLI entrypoint reconfigures
+  stdout/stderr to UTF-8 with `errors="replace"` before any output, so Rich tables
+  no longer raise `UnicodeEncodeError` on a cp1252 Windows pipe, and a custom root
+  group lifts a `--json` found in any position into `GHYDRA_JSON` — both
+  `ghydra --json functions list` and `ghydra functions list --json` work now, and so
+  does the environment variable alone. `test_errors.py` runs the CLI under
+  `PYTHONIOENCODING=cp1252` to prove it.
+- **Machine-readable error contract (I9)**: a static guard asserts every
+  `Response.error(...)` call site in the Java sources passes a non-empty,
+  code-shaped literal as its first string argument — no handler can ship an error an
+  agent cannot branch on — and the bridge's `format_error` now keeps the envelope's
+  request id in the text (`Error [CODE]: msg (request id: ...)`), so an agent that
+  wants the server's log line for the exact failure has the handle to ask with.
+- **Background tasks for long operations (I7)**: `functions_batch_decompile`
+  and `headless_start` gain `async_mode=True` — a task handle (`T-0001`)
+  comes back immediately, the blocking call runs in a background thread, and
+  the new `tasks_get`/`tasks_list`/`tasks_cancel` tools poll and cancel it.
+  The synchronous default is unchanged (a plain call behaves exactly as
+  before). Cancelling is honest about what it stops: the waiting, not the
+  server-side work — a batch keeps decompiling and a headless run keeps
+  running (that is what `headless_stop` is for); the task's result is
+  discarded. The registry generalizes the Kuna job pattern and lives in the
+  bridge process, like the jobs. `test_tasks.py` covers the lifecycle, the
+  cancel semantics, the fallback and the tool contract; `--tasks` joins
+  `--no-ghidra`.
+- **Capability triage (R4)**: `analysis_capabilities_summary` (bridge),
+  `ghydra analysis capabilities-summary` (CLI) composes the program, imported
+  symbols and defined strings into one ranked ATT&CK/MBC-style report — each
+  technique with its confidence, score and the evidence (name + address) behind
+  it, plus the explicit "a lead for an analyst, not a verdict" method line. A
+  technique is only reported when an import or string actually matches one of
+  the 10 rules; failures are listed, never hidden. The rule pack lives in
+  `ghydra/capabilities.py` with a byte-identical copy in the bridge (parity
+  asserted by `test_capabilities_summary.py`, the Kuna-taxonomy pattern);
+  `--capability-summary` joins `--no-ghidra`. No new endpoint: it composes
+  `/program` + `/symbols/imports` + `/strings`, so `API_VERSION` stays 3000.
+- **Honest CI (I6)**: `run_tests.py` now accepts any number of suite flags in one
+  invocation and reports each result separately, plus `--no-ghidra`, which expands
+  to the suites that always execute. Both the GitHub Actions and Gitea Actions
+  `build.yml` install the Python package and run exactly that set on every push/PR,
+  so a green run is real evidence instead of a summary made of skipped suites.
+  `test_runner.py` covers the new multi-flag behaviour and the `--no-ghidra`
+  contract; `TESTING.md` documents it.
+- **Documentation drift guard (I13)**: `scripts/check_docs.py` counts
+  `@mcp.tool()`/`@mcp.prompt()`/`@mcp.resource()` and `FORMATTERS` entries from the
+  AST, counts REST routes in the Java resources, and compares them with the
+  "N tools in M namespaces" claims in `README.md` and `AGENTS.md`. It also runs
+  `scripts/version.py --check` and verifies that `ghydra/x64dbg.py` uses
+  `__version__` instead of a second hardcoded release number. Wired into CI as the
+  `--docs` suite (part of `--no-ghidra`); `test_docs.py` covers the pure checks.
+- **Sync with upstream v3.1.1**: incorporates the merged PyGhidra fix (PR #12)
+  plus the maintainer's runtime-preservation and regression work.
+
 ## [3.1.1] - 2026-11-07
 
 ### Fixed
@@ -37,6 +133,22 @@ Automated by MisterMal
 ## [3.1.0] - 2026-11-06
 
 ### Added
+- **Version 3.1.0**: all five version locations moved together via `scripts/version.py --set`;
+  `API_VERSION` stays `3000`.
+- **Live Python regression coverage**: `src/test/ghidra/TestPyGhidraScript.java` runs a `.py`
+  probe under `analyzeHeadless` (skips cleanly without PyGhidra), `ScriptServiceTest` and
+  `CompatibilityServiceTest` cover the pure Java logic, and `test_scripts.py` /
+  `test_compatibility.py` cover the three-surface contracts without Ghidra.
+- **Capability negotiation (`GET /capabilities`)**: the plugin now describes its versions
+  (plugin/API/Ghidra/Java), whether it is headless, which feature flags are actually enabled
+  and its limits. The bridge prefers it at `register_instance`, falls back to
+  `/plugin-version` on older plugins (the endpoint is additive, `API_VERSION` stays 3000), and
+  reports an API mismatch with both versions, the runtime and the remedy instead of a generic
+  "No active Ghidra instance". Exposed on all three surfaces: `instances_capabilities`,
+  `ghydra instances capabilities`, and `format_capabilities` on all three formatters.
+  `test_capabilities.py` (`python run_tests.py --capabilities`) proves the contract without Ghidra.
+- **`--require-live`**: `python run_tests.py --require-live` probes `/plugin-version` and
+  refuses to run when no Ghidra is serving, so a green summary cannot be made of skips.
 - **The doctor:** `ghydra doctor` checks the Ghidra installation, the JDK it needs, the extension and the version it was built for, the port, the project directory, the API, Kuna and the x64dbg plugin — and every problem comes with the command that solves it. The JDK is the part that bites: Ghidra 11.x wants a JDK 21 and Ghidra 12.2 wants a JDK 25, and the installation's own VM arguments carry flags that only the newer JVMs take, so a run with the wrong one dies with a message about a flag instead of about the JDK.
 - **A launcher that builds the JVM invocation itself:** the headless runner no longer calls Ghidra's launcher script — it builds the same JVM invocation the launcher makes, reading the VM arguments from Ghidra's own `LaunchSupport`. Three things fall out of it. The log of the run is the log that was asked for, and not the one the Ghidra application log happens to hold. The Windows launcher no longer asks "press any key to continue" when it fails: it cannot tell a double-click from a shell, and a launcher that was started by another program is exactly that case. And the JDK is found by asking Ghidra which one it supports, instead of trusting `JAVA_HOME`.
 - **The evidence ledger:** `ghydra evidence add` records a finding and gives it an ID (`EV-0001`) that never changes and is never given out twice, even after the finding is removed. `ghydra evidence list` filters by kind, tag, address or text, and `ghydra evidence export` writes the ledger as a bundle — a Markdown document to read and a JSON one to read with a program. A finding can be referred to from anywhere, for as long as the ledger exists.
@@ -120,6 +232,37 @@ Automated by MisterMal
 - **Gitea release build:** the release workflow installs the JDK each Ghidra series needs (21 for 11.x, 25 for 12.2) instead of a fixed one, because a single job builds both series and `javac` cannot read a newer class file.
 
 ### Fixed
+- **Ad-hoc Python 3 execution (PyGhidra regression from v3.0.0)**: the merge that removed
+  `/script/execute` left `ScriptService.runSource` writing only `.java` files and demanding
+  `extends GhidraScript`, so Python source answered `BAD_REQUEST`. `POST /scripts/run`, the
+  bridge's `scripts_run` and `ghydra scripts run` now take an explicit `language`
+  (`java`/`python`) and `filename`; a `.py` name (or `language=python`) writes a temporary
+  `.py` file so Ghidra selects the PyGhidra provider, and a missing provider names the
+  `pyghidraRun` remedy. Java support and the existing execution opt-in are unchanged.
+  `skills/ghydra-cli/SKILL.md` no longer teaches the removed `script execute` /
+  `script capabilities` commands. `scripts_list`/`scripts_run`/`programs_save` also gained the
+  missing `@text_output` decorator (their formatters were dead), and `scripts_run`'s `args` is
+  now one piece of text instead of a list some MCP clients flatten.
+- **Ghidra 11.x/12.2 compatibility (`I3`)**: `DataTypeComponent.setFieldName` is resolved
+  reflectively (its return type changed in 12.2, and a direct call site produced
+  `NoSuchMethodError` — an `Error` that escaped every `catch (Exception)` and every Javalin
+  handler, giving an empty 500). `TransactionHelper` now catches `Throwable`, converts
+  `LinkageError` into `IncompatibleGhidraBuildException`, and the server answers a structured
+  `500 INCOMPATIBLE_GHIDRA_BUILD` with a remedy. `CompatibilityService` probes the runtime
+  signatures at startup and publishes them in `/capabilities`.
+- **The 28 tools that answered `"Done"`**: every MCP tool now has a `FORMATTERS` entry, so
+  `scripts_list` shows the script catalogue and `scripts_run` the captured `output` again.
+  `test_surface_parity.py` (`python run_tests.py --surface`) asserts the invariant over the
+  whole registered catalogue, not just one namespace.
+- **The sixth version copy**: `ghydra/x64dbg.py` uses `ghydra.__version__` instead of a
+  hardcoded `3.0.0`, bringing it under `scripts/version.py --check`.
+- **Instance discovery**: the full sweep now reaches every port the plugin can bind
+  (`MAX_PORT_ATTEMPTS = 256`, 8192-8447) instead of stopping at 8211.
+- **Documentation drift**: `CONTRIBUTING.md` points at `scripts/version.py` instead of
+  hand-editing `v2.0.0`/`API_VERSION=2`; `TESTING.md` lists all flags and no longer asserts a
+  `port` field the envelope never emits; `AGENTS.md` names the bridge env vars correctly
+  (`GHIDRA_*`).
+- **Dead CLI command**: the duplicate `inspect-address` in `ghydra/cli/inspect.py` is gone.
 - **A remote target does not start a headless run.** The run is started on this machine and serves this machine, so a report pointed at another machine that is not serving the API waited for an answer that could never come - and left the analyzer behind, because the failure came before the cleanup. A remote target has to be up already, and a run that does not come up is stopped instead of left behind.
 - **The port is checked before anything is started.** The script falls back to 8192 for a port it cannot use, so a port of 0, a negative one or one above 65535 made the launcher wait for an answer on a port that was never bound, with an analyzer sitting on another one. The runner refuses the port now, with the code `HEADLESS_BAD_PORT`.
 - **The backslash is a separator everywhere.** On POSIX, `os.path.basename()` takes the whole `C:\bin\cmd.exe` as the name, so the lookup of the program in the index of the project and the name of the project were wrong for a Windows path on a POSIX machine - and the lookup would import a program that was already in the project, which fails. The name of the file is taken with both separators in mind now.
