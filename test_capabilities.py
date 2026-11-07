@@ -11,6 +11,7 @@ Run with:  python test_capabilities.py
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -116,5 +117,83 @@ class SurfaceContractTests(unittest.TestCase):
                     "format_capabilities", getattr(cls, "__abstractmethods__", set()))
 
 
+class CapabilityPagingTests(unittest.TestCase):
+    """A listing is paged through meta.total, never just the first page.
+
+    The server clamps a page to 1000 items, so a single request only sees the
+    first page: a binary can have the matching evidence on page three.
+    """
+
+    def _page(self, items, total):
+        return {"success": True, "result": items,
+                "meta": {"total": total}}
+
+    def test_a_large_listing_is_paged_through_the_total(self):
+        page1 = [{"name": f"imp{i}"} for i in range(1000)]
+        page2 = [{"name": "VirtualAllocEx"}, {"name": "WriteProcessMemory"}]
+
+        def side_effect(port, endpoint, params=None):
+            offset = (params or {}).get("offset", 0)
+            return self._page(page1 if offset == 0 else page2, 1002)
+
+        with mock.patch.object(bridge, "safe_get", side_effect=side_effect) as fake:
+            collected = bridge._collect_capability_items(8192, "symbols/imports")
+        self.assertEqual(1002, len(collected["result"]))
+        offsets = [c.args[2]["offset"] for c in fake.call_args_list]
+        self.assertEqual([0, 1000], offsets)
+
+    def test_a_short_page_stops_after_one_request(self):
+        with mock.patch.object(bridge, "safe_get",
+                               return_value=self._page([{"name": "a"}], 1)) as fake:
+            bridge._collect_capability_items(8192, "symbols/imports")
+        self.assertEqual(1, fake.call_count)
+
+    def test_a_failed_first_page_is_reported_not_hidden(self):
+        failed = {"success": False, "error": {"code": "TIMEOUT", "message": "x"}}
+        with mock.patch.object(bridge, "safe_get", return_value=failed):
+            self.assertEqual("TIMEOUT",
+                             bridge._collect_capability_items(8192, "x")["error"]["code"])
+
+    def test_a_listing_without_an_end_stops_at_the_page_cap(self):
+        full = [{"name": "x"} for _ in range(1000)]
+        with mock.patch.object(bridge, "safe_get",
+                               return_value=self._page(full, 10 ** 9)) as fake:
+            bridge._collect_capability_items(8192, "symbols/imports")
+        self.assertEqual(bridge._CAPABILITY_MAX_PAGES, fake.call_count)
+
+
+class CapabilitiesCliTests(unittest.TestCase):
+    """An older plugin has no /capabilities: the CLI must fall back."""
+
+    def test_a_404_falls_back_to_plugin_version(self):
+        from click.testing import CliRunner
+        from ghydra.client.exceptions import GhidraAPIError
+        from ghydra.cli import instances as instances_cli
+        from ghydra.formatters import TableFormatter
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, endpoint, params=None):
+                self.calls.append(endpoint)
+                if endpoint == 'capabilities':
+                    raise GhidraAPIError("HTTP 404: not found", "HTTP_404")
+                return {"success": True,
+                        "result": {"plugin_version": "v3.1.1",
+                                   "api_version": 3000}}
+
+        fake = FakeClient()
+        result = CliRunner().invoke(
+            instances_cli.capabilities, [],
+            obj={'client': fake,
+                 'formatter': TableFormatter(use_colors=False)})
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertEqual(['capabilities', 'plugin-version'], fake.calls)
+        self.assertIn('v3.1.1', result.output)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+

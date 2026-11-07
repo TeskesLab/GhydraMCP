@@ -168,7 +168,16 @@ def capabilities(ctx):
     formatter = ctx.obj['formatter']
 
     try:
-        data = client.get('capabilities')
+        try:
+            data = client.get('capabilities')
+        except GhidraError as e:
+            # An older plugin has no /capabilities at all: the client raises
+            # on the 404, so the fallback has to be here, not after a check
+            # on a response that cannot be returned.
+            code = getattr(e, "code", "") or ""
+            if code not in ("HTTP_404", "NOT_FOUND") and "404" not in str(e):
+                raise
+            data = client.get('plugin-version')
         if not data.get('success', False):
             data = client.get('plugin-version')
         click.echo(formatter.format_capabilities(data))

@@ -195,5 +195,40 @@ class CliTests(unittest.TestCase):
                     os.environ["GHYDRA_STATE_DIR"] = old
 
 
+class RawOutputTests(unittest.TestCase):
+    """GHYDRA_MCP_OUTPUT=json must not turn failures into successes."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.old = os.environ.get("GHYDRA_STATE_DIR")
+        os.environ["GHYDRA_STATE_DIR"] = self.dir.name
+
+    def tearDown(self):
+        if self.old is None:
+            os.environ.pop("GHYDRA_STATE_DIR", None)
+        else:
+            os.environ["GHYDRA_STATE_DIR"] = self.old
+        self.dir.cleanup()
+
+    def test_an_error_envelope_rendered_as_json_is_recorded_as_failed(self):
+        import time as _time
+        envelope = {"success": False,
+                    "error": {"code": "FUNCTION_NOT_FOUND", "message": "no"}}
+        bridge._telemetry_safely("functions_get", _time.perf_counter(),
+                                 envelope, '{"success": false, ...}')
+        rows = bridge._telemetry_read()
+        self.assertEqual(1, len(rows))
+        self.assertFalse(rows[0]["ok"])
+        self.assertEqual("FUNCTION_NOT_FOUND", rows[0]["code"])
+
+    def test_a_successful_envelope_is_recorded_as_success(self):
+        import time as _time
+        bridge._telemetry_safely("functions_get", _time.perf_counter(),
+                                 {"success": True, "result": {}}, "ok")
+        self.assertTrue(bridge._telemetry_read()[0]["ok"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
