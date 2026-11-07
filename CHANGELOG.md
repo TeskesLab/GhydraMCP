@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Background tasks for long operations (I7)**: `functions_batch_decompile`
+  and `headless_start` gain `async_mode=True` — a task handle (`T-0001`)
+  comes back immediately, the blocking call runs in a background thread, and
+  the new `tasks_get`/`tasks_list`/`tasks_cancel` tools poll and cancel it.
+  The synchronous default is unchanged (a plain call behaves exactly as
+  before). Cancelling is honest about what it stops: the waiting, not the
+  server-side work — a batch keeps decompiling and a headless run keeps
+  running (that is what `headless_stop` is for); the task's result is
+  discarded. The registry generalizes the Kuna job pattern and lives in the
+  bridge process, like the jobs. `test_tasks.py` covers the lifecycle, the
+  cancel semantics, the fallback and the tool contract; `--tasks` joins
+  `--no-ghidra`.
 - **Capability triage (R4)**: `analysis_capabilities_summary` (bridge),
   `ghydra analysis capabilities-summary` (CLI) composes the program, imported
   symbols and defined strings into one ranked ATT&CK/MBC-style report — each

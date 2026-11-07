@@ -166,6 +166,116 @@ _kuna_jobs: Dict[str, dict] = {}
 _kuna_jobs_lock = Lock()
 
 
+# Long-running bridge tasks (I7), keyed by task id. The same shape the Kuna
+# job registry has, generalized to any blocking call the agent should not
+# have to sit through: functions_batch_decompile and headless_start today.
+#
+# The registry survives in this bridge process only — a task handle from a
+# previous bridge is not addressable, exactly like the Kuna jobs. Cancelling
+# marks the task and frees the caller: the batch request already sent is not
+# interrupted server-side, and a headless run keeps running on purpose (it
+# outlives the call that started it). What cancel stops is the waiting.
+_bg_tasks: Dict[str, dict] = {}
+_bg_tasks_lock = Lock()
+_bg_task_counter = 0
+
+
+def _task_new(kind: str, label: str) -> dict:
+    """Register a working task and return its record."""
+    global _bg_task_counter
+    with _bg_tasks_lock:
+        _bg_task_counter += 1
+        task_id = f"T-{_bg_task_counter:04d}"
+        record = {
+            "id": task_id,
+            "kind": kind,
+            "label": label,
+            "status": "working",
+            "cancel_requested": False,
+            "created": time.time(),
+            "started": time.time(),
+            "finished": None,
+            "result": None,
+            "error": None,
+        }
+        _bg_tasks[task_id] = record
+        return record
+
+
+def _task_view(record: dict) -> dict:
+    """The task as the agent sees it: the bookkeeping, never the lock."""
+    elapsed = (record["finished"] or time.time()) - record["started"]
+    view = {
+        "id": record["id"],
+        "kind": record["kind"],
+        "label": record["label"],
+        "status": record["status"],
+        "elapsed_seconds": round(elapsed, 1),
+    }
+    if record["status"] in ("completed", "failed"):
+        view["result"] = record["result"]
+        view["error"] = record["error"]
+    if record["cancel_requested"] and record["status"] == "working":
+        view["note"] = "cancel requested; the task will discard its result"
+    return view
+
+
+def _task_finish(record: dict, status: str, result=None, error=None) -> None:
+    with _bg_tasks_lock:
+        record["status"] = status
+        record["finished"] = time.time()
+        record["result"] = result
+        record["error"] = error
+
+
+def _task_run(record: dict, body, result_of) -> None:
+    """Run a blocking body in this thread and file the outcome.
+
+    The body is a zero-argument callable; result_of turns whatever it returns
+    into the task result. A cancel requested while the body runs discards the
+    outcome — the caller asked to stop waiting, so the answer would land on
+    nobody.
+    """
+    try:
+        outcome = body()
+        with _bg_tasks_lock:
+            cancelled = record["cancel_requested"]
+        if cancelled:
+            _task_finish(record, "cancelled")
+            return
+        result = result_of(outcome)
+        if isinstance(result, dict) and result.get("success") is False:
+            _task_finish(record, "failed", result=result,
+                         error=(result.get("error") or {}).get("code"))
+        else:
+            _task_finish(record, "completed", result=result)
+    except Exception as exc:  # the worker thread must never raise
+        with _bg_tasks_lock:
+            cancelled = record["cancel_requested"]
+        if cancelled:
+            _task_finish(record, "cancelled")
+        else:
+            _task_finish(record, "failed",
+                         error=f"{type(exc).__name__}: {exc}")
+
+
+def _task_spawn(kind: str, label: str, body, result_of) -> dict:
+    """Register a task, start its worker thread, and return the handle view."""
+    record = _task_new(kind, label)
+    thread = threading.Thread(
+        target=_task_run, args=(record, body, result_of), daemon=True)
+    thread.start()
+    return {
+        "success": True,
+        "result": {
+            "task": _task_view(record),
+            "note": "running in the background; poll tasks_get(task_id) "
+                    "until status is completed/failed/cancelled. Cancelling "
+                    "stops the waiting, not the server-side work.",
+        },
+    }
+
+
 def _kuna_config() -> dict:
     """Read the "kuna" section of ~/.ghydra/config.json.
 
@@ -2695,6 +2805,48 @@ def format_sessions(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_task_view(response: dict, **kwargs) -> str:
+    """One background task: its status, elapsed time and outcome."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [
+        f"Task {result.get('id', '?')}  [{result.get('status', '?')}]",
+        f"  kind: {result.get('kind', '?')}  {result.get('label', '')}",
+        f"  elapsed: {result.get('elapsed_seconds', '?')}s",
+    ]
+    if result.get("note"):
+        lines.append(f"  note: {result['note']}")
+    if result.get("error"):
+        lines.append(f"  error: {result['error']}")
+    outcome = result.get("result")
+    if isinstance(outcome, dict):
+        summary = outcome.get("result")
+        if isinstance(summary, list):
+            lines.append(f"  outcome: {len(summary)} item(s)")
+        else:
+            lines.append(f"  outcome: {str(summary)[:200]}")
+    return "\n".join(lines)
+
+
+def format_tasks_list(response: dict, **kwargs) -> str:
+    """The background tasks, one line each."""
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return format_error(response)
+    tasks = result.get("tasks") or []
+    if not tasks:
+        return "No background tasks."
+    lines = []
+    for task in tasks:
+        lines.append(f"{task.get('id', '?')}  [{task.get('status', '?'):<9}] "
+                     f"{task.get('kind', '?'):<16} {task.get('elapsed_seconds', '?')}s  "
+                     f"{task.get('label', '')}")
+    return "\n".join(lines)
+
+
 def format_triage(response: dict, **kwargs) -> str:
     """What a target is, and what it needs."""
     result = response.get("result") if isinstance(response, dict) else None
@@ -2811,6 +2963,9 @@ FORMATTERS = {
     "instances_current": format_instance_info,
     "instances_capabilities": format_capabilities,
     "analysis_capabilities_summary": format_capabilities_summary,
+    "tasks_list": format_tasks_list,
+    "tasks_get": format_task_view,
+    "tasks_cancel": format_task_view,
     "structs_list": format_structs_list,
     "structs_get": format_struct_info,
     "analysis_get_callgraph": format_callgraph,
@@ -4362,6 +4517,7 @@ def _parse_targets(text: str) -> list[str]:
 @text_output
 def functions_batch_decompile(targets: TargetsText,
                               timeout: int = DEFAULT_DECOMPILATION_TIMEOUT,
+                              async_mode: bool = False,
                               port: int | None = None) -> dict:
     """Decompile a list of functions in one call
 
@@ -4370,11 +4526,15 @@ def functions_batch_decompile(targets: TargetsText,
                  A bare name or a comma-separated list is accepted too. Each target
                  is a function name or an address.
         timeout: Decompilation timeout per function, in seconds (default: 60)
+        async_mode: Return a task handle immediately instead of blocking for the
+                    whole batch (which the server runs one target at a time and
+                    can take timeout x targets). Poll tasks_get(task_id).
         port: Specific Ghidra instance port (optional)
 
     Returns:
         dict: One entry per target, with the decompiled code or the reason it
               failed. A target that resolves to nothing does not stop the batch.
+              With async_mode=True: a task handle for tasks_get/tasks_cancel.
     """
     port = _get_instance_port(port)
 
@@ -4400,8 +4560,15 @@ def functions_batch_decompile(targets: TargetsText,
             "timestamp": int(time.time() * 1000)
         }
 
-    response = safe_post(port, "functions/decompile-batch",
-                         {"targets": wanted, "timeout": timeout})
+    payload = {"targets": wanted, "timeout": timeout}
+    if async_mode:
+        return _task_spawn(
+            "batch_decompile",
+            f"{len(wanted)} target(s) on port {port}",
+            body=lambda: safe_post(port, "functions/decompile-batch", payload),
+            result_of=simplify_response)
+
+    response = safe_post(port, "functions/decompile-batch", payload)
     return simplify_response(response)
 
 
@@ -9512,7 +9679,7 @@ def _headless_slug(binary: str) -> str:
 @text_output
 def headless_start(binary: str, port: int = HEADLESS_DEFAULT_PORT,
                    timeout: int = 900, ghidra_home: str = "",
-                   java_home: str = "") -> dict:
+                   java_home: str = "", async_mode: bool = False) -> dict:
     """Analyse a binary and serve the API from it, with no window.
 
     The run imports the binary, analyses it, and then answers the ordinary
@@ -9521,7 +9688,11 @@ def headless_start(binary: str, port: int = HEADLESS_DEFAULT_PORT,
     "headless_stop" is called.
 
     The analysis of a big binary takes minutes, so the call waits for the
-    API to come up (the "timeout" is how long it waits).
+    API to come up (the "timeout" is how long it waits). With async_mode=True
+    it does not wait at all: a task handle comes back immediately, the wait
+    runs in the background, and tasks_get(task_id) says when the API is up.
+    The run itself is not affected by cancelling the task - it is meant to
+    outlive this call; use headless_stop for that.
 
     Args:
         binary: The file to analyse
@@ -9529,11 +9700,20 @@ def headless_start(binary: str, port: int = HEADLESS_DEFAULT_PORT,
         timeout: Seconds to wait for the API (default: 900)
         ghidra_home: Path of the Ghidra installation (default: GHIDRA_HOME)
         java_home: Path of the JDK (default: the one Ghidra supports)
+        async_mode: Return a task handle immediately; the wait for the API
+                    runs in the background (poll tasks_get).
 
     Returns:
         dict: The port, the url, the pid, the project and the log
     """
-    return _headless_start_raw(binary, port, timeout, ghidra_home, java_home)
+    raw = lambda: _headless_start_raw(binary, port, timeout, ghidra_home, java_home)
+    if async_mode:
+        return _task_spawn(
+            "headless_start",
+            f"{os.path.basename(binary)} on port {port}",
+            body=raw,
+            result_of=lambda outcome: outcome)
+    return raw()
 
 
 def _headless_start_raw(binary: str, port: int = HEADLESS_DEFAULT_PORT,
@@ -10226,6 +10406,78 @@ def session_close(session_id: str) -> dict:
     return {"success": False,
             "error": {"code": "SESSION_NO_SUCH",
                       "message": f"no session with the ID '{session_id}'"}}
+
+
+# ================= Background tasks (I7) =================
+
+@mcp.tool()
+@text_output
+def tasks_list() -> dict:
+    """List the background tasks started with async_mode=True
+
+    The registry lives in this bridge process, like the Kuna export jobs: a
+    task started by a previous bridge is not addressable here.
+
+    Returns:
+        dict: Every task with its id, kind, status and elapsed time
+    """
+    with _bg_tasks_lock:
+        tasks = [_task_view(record) for record in
+                 sorted(_bg_tasks.values(), key=lambda r: r["id"])]
+    return {"success": True, "result": {"count": len(tasks), "tasks": tasks}}
+
+
+@mcp.tool()
+@text_output
+def tasks_get(task_id: str) -> dict:
+    """Get the status and outcome of a background task
+
+    Args:
+        task_id: The task ID returned by the async_mode call (e.g. "T-0001")
+
+    Returns:
+        dict: The task view — status working/completed/failed/cancelled,
+              elapsed seconds, and the result once it has one
+    """
+    with _bg_tasks_lock:
+        record = _bg_tasks.get(task_id)
+        if record is None:
+            return {"success": False,
+                    "error": {"code": "TASK_NOT_FOUND",
+                              "message": f"no task with the ID '{task_id}' "
+                                         f"(tasks live in the bridge process "
+                                         f"that started them)"}}
+        view = _task_view(record)
+    return {"success": True, "result": view}
+
+
+@mcp.tool()
+@text_output
+def tasks_cancel(task_id: str) -> dict:
+    """Stop waiting for a background task
+
+    Cancelling marks the task and frees the caller. The work already sent to
+    the server is not interrupted — a batch keeps decompiling server-side and
+    a headless run keeps running (that is what headless_stop is for); what
+    cancel stops is the waiting, and the task's result is discarded when it
+    arrives.
+
+    Args:
+        task_id: The task ID returned by the async_mode call (e.g. "T-0001")
+
+    Returns:
+        dict: The task view after the cancel was requested
+    """
+    with _bg_tasks_lock:
+        record = _bg_tasks.get(task_id)
+        if record is None:
+            return {"success": False,
+                    "error": {"code": "TASK_NOT_FOUND",
+                              "message": f"no task with the ID '{task_id}'"}}
+        if record["status"] == "working":
+            record["cancel_requested"] = True
+        view = _task_view(record)
+    return {"success": True, "result": view}
 
 
 # ================= Startup =================

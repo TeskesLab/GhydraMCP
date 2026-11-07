@@ -19,11 +19,11 @@ Three surfaces, one assistant:
 
 | | What it is | What it gives the assistant |
 | --- | --- | --- |
-| **Ghidra** | The plugin, inside the CodeBrowser | 93 tools over the program: functions, data, structures, xrefs, the CFG, the decompiler, capability negotiation and triage |
+| **Ghidra** | The plugin, inside the CodeBrowser | 96 tools over the program: functions, data, structures, xrefs, the CFG, the decompiler, capability negotiation and triage, background tasks |
 | **x64dbg** | A plugin that lives inside the debugger | The debugger's own 80 tools over the live process: registers, memory, breakpoints, stepping |
 | **Kuna** | A separate decompiler CLI | A second opinion on the same binary, and the recovered C as MCP resources |
 
-The bridge exposes **112 tools** in total: the 93 above, 6 over x64dbg (the pass-through that reaches
+The bridge exposes **115 tools** in total: the 96 above, 6 over x64dbg (the pass-through that reaches
 the debugger's own 80), and 13 for the Kuna exports.
 
 The two debugger sides share one model of addresses, so a static address from Ghidra can be turned
@@ -689,13 +689,13 @@ Any MCP client works. The bridge is a stdio server:
 }
 ```
 
-The bridge exposes **112 tools in 28 namespaces**. The namespaces are:
+The bridge exposes **115 tools in 29 namespaces**. The namespaces are:
 
 `analysis_*` · `classes_*` · `comments_*` · `data_*` · `datatypes_*` · `doctor_*` ·
 `evidence_*` · `functions_*` · `headless_*` · `inspect_*` · `instances_*` · `kuna_*` ·
 `memory_*` · `namespaces_*` · `programs_*` · `project_*` · `projects_*` · `raw_image_*` ·
 `scalars_*` · `scripts_*` · `segments_*` · `session_*` · `structs_*` · `symbols_*` ·
-`ui_*` · `variables_*` · `x64dbg_*` · `xrefs_*`
+`tasks_*` · `ui_*` · `variables_*` · `x64dbg_*` · `xrefs_*`
 
 The MCP client setup for Claude Desktop, Claude Code, Cline and 5ire is in
 [Client Setup](#client-setup) below, with detailed configuration instructions for each client.

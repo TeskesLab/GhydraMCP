@@ -38,6 +38,8 @@ python run_tests.py --scripts      # MCP/CLI scripting behavior with a local HTT
 python run_tests.py --compatibility # 11.x/12.2 compatibility contract
 python run_tests.py --runner        # test-runner contract
 python run_tests.py --docs          # documentation drift guard
+python run_tests.py --capability-summary # ATT&CK/MBC triage contract
+python run_tests.py --tasks         # background task registry (async_mode)
 python run_tests.py --no-ghidra     # ALL suites that need no Ghidra (CI's set)
 python run_tests.py --surface --scripts   # several flags can be combined
 ```
@@ -45,18 +47,20 @@ python run_tests.py --surface --scripts   # several flags can be combined
 > `run_tests.py` accepts any number of suite flags in one invocation and reports
 > each one separately. `--no-ghidra` expands to the suites that always execute
 > (`--kuna`, `--x64dbg`, `--surface`, `--capabilities`, `--scripts`,
-> `--compatibility`, `--runner`, `--docs`); both CI workflows run exactly that set
-> on every push and pull request, so a green result is real evidence rather than a
-> summary made of skipped suites. `--require-live` probes `/plugin-version` first
-> and refuses to run when no Ghidra is serving.
+> `--compatibility`, `--runner`, `--docs`, `--capability-summary`, `--tasks`);
+> both CI workflows run exactly that set on every push and pull request, so a
+> green result is real evidence rather than a summary made of skipped suites.
+> `--require-live` probes `/plugin-version` first and refuses to run when no
+> Ghidra is serving.
 
 > **Every suite skips itself when Ghidra is not running.** Each `setUp` calls
 > `skipTest("Ghidra not running")`, so a green summary does not prove anything unless the
 > tests actually executed — check the output for skips before trusting a pass.
 >
 > `--kuna`, `--x64dbg`, `--surface`, `--capabilities`, `--scripts`, `--compatibility`
-> `--runner` and `--docs` are the exceptions: they need neither Ghidra nor their
-> respective binaries, so they always run and always give a signal. `--rea` is
+> `--runner`, `--docs`, `--capability-summary` and `--tasks` are the exceptions: they
+> need neither Ghidra nor their respective binaries, so they always run and always
+> give a signal. `--rea` is
 > half contract (no Ghidra) and half live. `python run_tests.py --require-live`
 > probes `/plugin-version` first and refuses to run without a live instance, so a
 > green summary cannot be made of skipped suites. The `--scripts` suite now also
