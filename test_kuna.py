@@ -489,6 +489,16 @@ class KunaExportAddressingTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+        # The reuse logic must not depend on a machine that happens to have
+        # Kuna installed: a configured path that exists is all the resolver
+        # needs, and every test that would actually run it patches Popen.
+        self.fake_kuna = os.path.join(self.tmp.name, "kuna-fake")
+        with open(self.fake_kuna, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\nexit 0\n")
+        previous = os.environ.get(kuna_helper.ENV_PATH)
+        os.environ[kuna_helper.ENV_PATH] = self.fake_kuna
+        self.addCleanup(self._restore_kuna_path, previous)
+
         # Registered last, so it runs first: the watcher thread must be done
         # with the work directory before the temporary directory goes.
         self.addCleanup(wait_for_kuna_export_watchers)
@@ -524,6 +534,13 @@ class KunaExportAddressingTests(unittest.TestCase):
                 handle.write(json.dumps(record) + "\n")
 
         self.digest = os.path.basename(self.dir)
+
+    @staticmethod
+    def _restore_kuna_path(previous):
+        if previous is None:
+            os.environ.pop(kuna_helper.ENV_PATH, None)
+        else:
+            os.environ[kuna_helper.ENV_PATH] = previous
 
     # ---- the cache ---------------------------------------------------
 
