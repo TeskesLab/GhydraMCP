@@ -264,6 +264,18 @@ class BaseFormatter(ABC):
         pass
 
     @abstractmethod
+    def format_capabilities_summary(self, data: Dict[str, Any]) -> str:
+        """Format a ranked capability triage (ATT&CK/MBC-style leads).
+
+        Args:
+            data: Report with scan counts, ranked findings and evidence
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
     def format_simple_result(self, data: Dict[str, Any]) -> str:
         """Format simple success/info response.
 

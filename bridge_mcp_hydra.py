@@ -2755,6 +2755,39 @@ def format_capabilities(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_capabilities_summary(response: dict, **kwargs) -> str:
+    """Show a ranked capability triage, with the evidence behind each lead."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    summary = result.get("summary") or {}
+    findings = result.get("findings") or []
+    lines = [
+        f"Capability triage for {result.get('program') or 'the program'}: "
+        f"{len(findings)} technique(s) matched",
+        f"  scanned {summary.get('imports_scanned', 0)} imports, "
+        f"{summary.get('strings_scanned', 0)} strings against "
+        f"{summary.get('rules', 0)} rules",
+        "  " + str(result.get("method", "")),
+    ]
+    if result.get("failures"):
+        lines.append("  unavailable: " + ", ".join(result["failures"]))
+    for finding in findings:
+        lines.append(
+            f"  [{finding.get('confidence', '?'):>6}] {finding.get('id')} "
+            f"{finding.get('name')}  score={finding.get('score')}")
+        lines.append(f"           {finding.get('tactic', '')}")
+        for evidence in (finding.get("evidence") or [])[:3]:
+            lines.append(
+                f"           - {evidence.get('kind')} {evidence.get('name')} "
+                f"@ {evidence.get('address') or '?'}")
+    if not findings:
+        lines.append("  No known technique patterns matched.")
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -2777,6 +2810,7 @@ FORMATTERS = {
     "instances_discover": format_instances,
     "instances_current": format_instance_info,
     "instances_capabilities": format_capabilities,
+    "analysis_capabilities_summary": format_capabilities_summary,
     "structs_list": format_structs_list,
     "structs_get": format_struct_info,
     "analysis_get_callgraph": format_callgraph,
@@ -8111,6 +8145,232 @@ def scripts_run(name: str | None = None, source: str | None = None,
 
 
 # ================= Analysis =================
+
+# Capability triage (R4). This is a copy of ghydra/capabilities.py: the bridge
+# ships as one standalone file and must not import the ghydra package.
+# test_capabilities_summary.py asserts the two copies stay byte-for-byte in
+# agreement, the same way the Kuna error taxonomies are kept in step.
+CAPABILITY_RULES = (
+    {
+        "id": "T1055",
+        "name": "Process Injection",
+        "tactic": "Defense Evasion / Privilege Escalation",
+        "imports": ("VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread",
+                    "NtCreateThreadEx", "QueueUserAPC", "SetThreadContext",
+                    "NtMapViewOfSection"),
+        "strings": (),
+    },
+    {
+        "id": "T1057",
+        "name": "Process Discovery",
+        "tactic": "Discovery",
+        "imports": ("CreateToolhelp32Snapshot", "Process32First", "Process32Next",
+                    "EnumProcesses", "NtQuerySystemInformation"),
+        "strings": (),
+    },
+    {
+        "id": "T1082",
+        "name": "System Information Discovery",
+        "tactic": "Discovery",
+        "imports": ("GetSystemInfo", "GetVersionEx", "GetComputerName",
+                    "GetUserName", "GetDiskFreeSpace", "RegQueryValueEx"),
+        "strings": (),
+    },
+    {
+        "id": "T1105",
+        "name": "Ingress Tool Transfer",
+        "tactic": "Command and Control",
+        "imports": ("URLDownloadToFile", "WinHttpOpen", "InternetOpenUrl",
+                    "HttpSendRequest", "curl_easy_perform", "recv", "WSARecv"),
+        "strings": ("http://", "https://", "Mozilla/", "User-Agent", "download"),
+    },
+    {
+        "id": "T1071",
+        "name": "Application Layer Protocol",
+        "tactic": "Command and Control",
+        "imports": ("WSAConnect", "InternetConnect", "HttpOpenRequest",
+                    "WSAStartup", "connect", "send"),
+        "strings": (),
+    },
+    {
+        "id": "T1486",
+        "name": "Data Encrypted for Impact",
+        "tactic": "Impact",
+        "imports": ("CryptEncrypt", "CryptGenKey", "BCryptEncrypt", "CryptDeriveKey"),
+        "strings": ("YOUR FILES", "ransom", "decrypt", ".locked", "bitcoin",
+                    "restore your", "encrypted"),
+    },
+    {
+        "id": "T1497",
+        "name": "Virtualization / Sandbox Evasion",
+        "tactic": "Defense Evasion / Discovery",
+        "imports": ("IsDebuggerPresent", "CheckRemoteDebuggerPresent",
+                    "GetTickCount", "Sleep", "NtQueryInformationProcess"),
+        "strings": ("VMware", "VirtualBox", "QEMU", "Sandbox", "VBox", "ollydbg"),
+    },
+    {
+        "id": "T1113",
+        "name": "Screen Capture",
+        "tactic": "Collection",
+        "imports": ("BitBlt", "GetDC", "CreateCompatibleBitmap", "PrintWindow",
+                    "GetWindowDC"),
+        "strings": (),
+    },
+    {
+        "id": "T1547",
+        "name": "Boot or Logon Autostart Execution",
+        "tactic": "Persistence",
+        "imports": ("CreateService", "OpenSCManager", "RegSetValueEx", "ShellExecute"),
+        "strings": ("\\CurrentVersion\\Run", "\\RunOnce", "schtasks", "startup"),
+    },
+    {
+        "id": "T1027",
+        "name": "Obfuscated Files or Information",
+        "tactic": "Defense Evasion",
+        "imports": ("VirtualProtect", "GetProcAddress", "LoadLibraryA",
+                    "LoadLibraryW", "LdrLoadDll"),
+        "strings": ("base64", "obfuscat"),
+    },
+)
+
+_CAP_IMPORT_KEYS = ("name", "label", "symbol", "value")
+_CAP_STRING_KEYS = ("value", "name", "string", "text")
+_CAP_ADDRESS_KEYS = ("address", "addr", "offset")
+
+
+def _cap_items(response: object) -> list[dict]:
+    if not isinstance(response, dict) or not response.get("success", False):
+        return []
+    payload = response.get("result")
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def _cap_text(item: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _cap_address(item: dict) -> str:
+    for key in _CAP_ADDRESS_KEYS:
+        value = item.get(key)
+        if isinstance(value, (str, int)) and value != "":
+            return str(value)
+    return ""
+
+
+def _cap_evidence(items: list[dict], keys: tuple[str, ...],
+                  patterns: tuple[str, ...], kind: str) -> list[dict]:
+    found: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        text = _cap_text(item, keys)
+        if not text:
+            continue
+        lowered = text.lower()
+        for pattern in patterns:
+            if pattern.lower() in lowered:
+                marker = (kind, text)
+                if marker not in seen:
+                    seen.add(marker)
+                    found.append({
+                        "kind": kind,
+                        "name": text[:120],
+                        "address": _cap_address(item),
+                        "matched": pattern,
+                    })
+                break
+    return found
+
+
+def build_capability_report(program: object, imports: object, strings: object,
+                            include_strings: bool = True) -> dict:
+    """Compose the three envelopes into a ranked capability triage report."""
+    import_items = _cap_items(imports)
+    string_items = _cap_items(strings) if include_strings else []
+
+    failures = []
+    for label, response in (("imports", imports), ("strings", strings)):
+        if label == "strings" and not include_strings:
+            continue
+        if isinstance(response, dict) and response.get("success") is False:
+            failures.append(label)
+
+    findings = []
+    for rule in CAPABILITY_RULES:
+        import_hits = _cap_evidence(import_items, _CAP_IMPORT_KEYS,
+                                    rule["imports"], "import")
+        string_hits = _cap_evidence(string_items, _CAP_STRING_KEYS,
+                                    rule["strings"], "string")
+        score = 2 * len(import_hits) + len(string_hits)
+        if score < 2:
+            continue
+        confidence = "high" if score >= 6 else ("medium" if score >= 3 else "low")
+        findings.append({
+            "id": rule["id"],
+            "name": rule["name"],
+            "tactic": rule["tactic"],
+            "confidence": confidence,
+            "score": score,
+            "import_matches": len(import_hits),
+            "string_matches": len(string_hits),
+            "evidence": (import_hits + string_hits)[:6],
+        })
+    findings.sort(key=lambda finding: (-finding["score"], finding["id"]))
+
+    name = ""
+    if isinstance(program, dict) and isinstance(program.get("result"), dict):
+        name = program["result"].get("name") or ""
+
+    return {
+        "success": True,
+        "result": {
+            "program": name,
+            "summary": {
+                "imports_scanned": len(import_items),
+                "strings_scanned": len(string_items),
+                "rules": len(CAPABILITY_RULES),
+                "techniques_matched": len(findings),
+            },
+            "failures": failures,
+            "findings": findings,
+            "method": "Heuristic import/string matching; a lead for an analyst, "
+                      "not a verdict.",
+        },
+    }
+
+
+@mcp.tool()
+@text_output
+def analysis_capabilities_summary(include_strings: bool = True,
+                                  port: int | None = None) -> dict:
+    """Rank ATT&CK/MBC-style capability leads for the loaded binary, in one call.
+
+    Composes the program, imported symbols and defined strings into a ranked
+    list of techniques, each with the evidence (name and address) behind it.
+    This is a triage lead for an analyst, never a verdict: a technique is only
+    reported when an import or a string in the binary actually matches one of
+    the rules, and nothing is inferred from a missing match.
+
+    Args:
+        include_strings: Include defined strings as evidence (default: True)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: program name, scan counts, ranked findings with evidence and
+              confidence, and the list of endpoints that failed (if any).
+    """
+    port = _get_instance_port(port)
+    program = safe_get(port, "program")
+    imports = safe_get(port, "symbols/imports", {"limit": 1000})
+    strings = (safe_get(port, "strings", {"limit": 2000})
+               if include_strings else None)
+    return build_capability_report(program, imports, strings, include_strings)
+
 
 @mcp.tool()
 @text_output

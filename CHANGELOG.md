@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Capability triage (R4)**: `analysis_capabilities_summary` (bridge),
+  `ghydra analysis capabilities-summary` (CLI) composes the program, imported
+  symbols and defined strings into one ranked ATT&CK/MBC-style report — each
+  technique with its confidence, score and the evidence (name + address) behind
+  it, plus the explicit "a lead for an analyst, not a verdict" method line. A
+  technique is only reported when an import or string actually matches one of
+  the 10 rules; failures are listed, never hidden. The rule pack lives in
+  `ghydra/capabilities.py` with a byte-identical copy in the bridge (parity
+  asserted by `test_capabilities_summary.py`, the Kuna-taxonomy pattern);
+  `--capability-summary` joins `--no-ghidra`. No new endpoint: it composes
+  `/program` + `/symbols/imports` + `/strings`, so `API_VERSION` stays 3000.
 - **Honest CI (I6)**: `run_tests.py` now accepts any number of suite flags in one
   invocation and reports each result separately, plus `--no-ghidra`, which expands
   to the suites that always execute. Both the GitHub Actions and Gitea Actions

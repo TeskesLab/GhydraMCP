@@ -15,7 +15,7 @@ decompilation, annotation, and data manipulation.
   subsequent instances walk up to `MAX_PORT_ATTEMPTS` = 256 ports (8192–8447).
 - The bridge auto-discovers instances on startup and on a daemon timer, but `QUICK_DISCOVERY_RANGE`
   only scans **8192–8201**. Instances above 8202 need `instances_register` / the CLI.
-- 111 MCP tools in 28 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
+- 112 MCP tools in 28 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
   `doctor_*`, `evidence_*`, `functions_*`, `headless_*`, `inspect_*`, `instances_*`, `kuna_*`,
   `memory_*`, `namespaces_*`, `programs_*`, `project_*`, `projects_*`, `raw_image_*`, `scalars_*`,
   `scripts_*`, `segments_*`, `session_*`, `structs_*`, `symbols_*`, `ui_*`, `variables_*`,

@@ -122,6 +122,10 @@ class JSONFormatter(BaseFormatter):
         """Format capabilities as JSON."""
         return self._format_json(data)
 
+    def format_capabilities_summary(self, data: Dict[str, Any]) -> str:
+        """Format a capability triage report as JSON."""
+        return self._format_json(data)
+
     def format_simple_result(self, data: Dict[str, Any]) -> str:
         """Format simple result as JSON."""
         return self._format_json(data)

@@ -340,3 +340,43 @@ def status(ctx):
         error_output = formatter.format_error(e)
         rich_echo(error_output, err=True)
         ctx.exit(1)
+
+
+@analysis.command('capabilities-summary')
+@click.option('--no-strings', is_flag=True,
+              help='Skip the defined-strings evidence (imports only)')
+@click.pass_context
+def capabilities_summary(ctx, no_strings):
+    """Rank ATT&CK/MBC-style capability leads for the loaded binary.
+
+    Composes the program, imported symbols and defined strings into one ranked
+    report, with the evidence behind each technique. This is a triage lead for
+    an analyst, not a verdict.
+
+    \b
+    Example:
+        ghydra analysis capabilities-summary
+        ghydra analysis capabilities-summary --no-strings
+    """
+    from ..capabilities import build_capability_report
+
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        program = client.get('program')
+        imports = client.get('symbols/imports', params={'limit': 1000})
+        strings = (None if no_strings
+                   else client.get('strings', params={'limit': 2000}))
+        report = build_capability_report(program, imports, strings,
+                                         include_strings=not no_strings)
+        output = formatter.format_capabilities_summary(report)
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)

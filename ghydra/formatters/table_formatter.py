@@ -816,6 +816,44 @@ class TableFormatter(BaseFormatter):
         return self._capture(Panel("\n".join(lines), title="Capabilities",
                                    border_style="blue"))
 
+    def format_capabilities_summary(self, data: Dict[str, Any]) -> str:
+        """Format a ranked capability triage as a table + evidence lines."""
+        result = data.get("result", data)
+        if not isinstance(result, dict):
+            return self._capture(str(result))
+        findings = result.get("findings") or []
+        summary = result.get("summary") or {}
+
+        table = Table(title="Capability Triage", show_lines=False)
+        table.add_column("Confidence", style="yellow", justify="left")
+        table.add_column("ID", style="cyan")
+        table.add_column("Technique", style="green")
+        table.add_column("Score", style="magenta", justify="right")
+        table.add_column("Evidence", style="white")
+
+        for finding in findings:
+            evidence = ", ".join(
+                f"{item.get('kind')}:{item.get('name')}"
+                for item in (finding.get("evidence") or [])[:2]) or "-"
+            table.add_row(
+                str(finding.get("confidence", "?")),
+                str(finding.get("id", "?")),
+                str(finding.get("name", "?")),
+                str(finding.get("score", 0)),
+                evidence,
+            )
+
+        footer = (
+            f"Scanned {summary.get('imports_scanned', 0)} imports / "
+            f"{summary.get('strings_scanned', 0)} strings against "
+            f"{summary.get('rules', 0)} rules. "
+            + str(result.get("method", ""))
+        )
+        if not findings:
+            footer += "  No known technique patterns matched."
+        rendered = self._capture(table)
+        return rendered + "\n" + footer
+
     def format_simple_result(self, data: Dict[str, Any]) -> str:
         """Format simple success/info response."""
         result = data.get("result", {})
