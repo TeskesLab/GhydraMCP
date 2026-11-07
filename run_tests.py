@@ -410,6 +410,31 @@ def run_runner_tests():
         return False
 
 
+def run_docs_tests():
+    """Run the documentation drift guard tests (no Ghidra needed)."""
+    print_header("Running Documentation Drift Guard Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_docs.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running documentation guard tests: {str(e)}")
+        return False
+
+
 def require_live_ghidra():
     """Refuse a run that would be a green summary made of skipped suites."""
     host = os.environ.get("GHYDRAMCP_TEST_HOST", "localhost")
@@ -442,6 +467,7 @@ def run_all_tests():
     scripts_success = run_scripts_tests()
     compatibility_success = run_compatibility_tests()
     runner_success = run_runner_tests()
+    docs_success = run_docs_tests()
 
     # Print a summary
     print_header("Test Summary")
@@ -461,21 +487,22 @@ def run_all_tests():
     print(f"Script Execution Contract Tests: {'PASSED' if scripts_success else 'FAILED'}")
     print(f"Ghidra Compatibility Tests: {'PASSED' if compatibility_success else 'FAILED'}")
     print(f"Test Runner Contract Tests: {'PASSED' if runner_success else 'FAILED'}")
-    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success and surface_parity_success and capabilities_success and scripts_success and compatibility_success and runner_success) else 'FAILED'}")
+    print(f"Documentation Drift Guard Tests: {'PASSED' if docs_success else 'FAILED'}")
+    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success and surface_parity_success and capabilities_success and scripts_success and compatibility_success and runner_success and docs_success) else 'FAILED'}")
 
     return (http_api_success and mcp_bridge_success and data_tests_success
             and comment_tests_success and port_tests_success and kuna_success
             and x64dbg_success and headless_success and evidence_success
             and triage_success and rea_parity_success and surface_parity_success
             and capabilities_success and scripts_success and compatibility_success
-            and runner_success)
+            and runner_success and docs_success)
 
 # Suites that need neither a live Ghidra nor any external binary. CI runs
 # exactly these on every push: a green result here is real evidence, not a
 # summary made of suites that skipped themselves.
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
-    "--capabilities", "--scripts", "--compatibility", "--runner",
+    "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
 )
 
 SUITES = {
@@ -495,13 +522,14 @@ SUITES = {
     "--scripts": run_scripts_tests,
     "--compatibility": run_compatibility_tests,
     "--runner": run_runner_tests,
+    "--docs": run_docs_tests,
 }
 
 USAGE = (
     "Usage: python run_tests.py [--no-ghidra | --http | --mcp | --data | "
     "--comments | --port | --kuna | --x64dbg | --headless | --evidence | "
     "--triage | --rea | --surface | --capabilities | --scripts | "
-    "--compatibility | --runner | --require-live]  (suite flags may be combined)"
+    "--compatibility | --runner | --docs | --require-live]  (suite flags may be combined)"
 )
 
 if __name__ == "__main__":

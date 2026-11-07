@@ -15,6 +15,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   that set on every push/PR, so a green run is real evidence instead of a summary
   made of skipped suites. `test_runner.py` covers the new multi-flag behaviour and
   the `--no-ghidra` contract; `TESTING.md` documents it.
+- **Documentation drift guard (I13)**: `scripts/check_docs.py` counts
+  `@mcp.tool()`/`@mcp.prompt()`/`@mcp.resource()` and `FORMATTERS` entries from the
+  AST, counts REST routes in the Java resources, and compares them with the
+  "N tools in M namespaces" claims in `README.md` and `AGENTS.md`. It also runs
+  `scripts/version.py --check` and verifies that `ghydra/x64dbg.py` uses
+  `__version__` instead of a second hardcoded release number. Wired into CI as the
+  `--docs` suite (part of `--no-ghidra`); `test_docs.py` covers the pure checks.
 
 ## [3.1.0] - 2026-11-06
 
