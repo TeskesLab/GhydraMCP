@@ -2915,6 +2915,38 @@ def format_capabilities(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_context_pack(response: dict, **kwargs) -> str:
+    """The budgeted dossier: sections, citations, omissions."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [
+        f"Context pack [{result.get('template', '?')}] — "
+        f"{result.get('question', '')}",
+        f"  program: {result.get('program') or '?'}  "
+        f"budget: {result.get('budget_tokens', '?')} tokens, "
+        f"used {result.get('used_tokens', '?')}",
+    ]
+    for section in result.get("sections") or []:
+        lines.append("")
+        lines.append(f"## {section.get('title')}")
+        lines.append(str(section.get("body", "")))
+        if section.get("citations"):
+            lines.append("  (addresses: " + ", ".join(section["citations"]) + ")")
+    citations = result.get("citations") or []
+    if citations:
+        lines.append("")
+        lines.append("Citations: " + ", ".join(citations))
+    omitted = result.get("omitted") or []
+    if omitted:
+        lines.append("Omitted:")
+        for item in omitted:
+            lines.append(f"  - {item.get('section')}: {item.get('reason')}")
+    return "\n".join(lines)
+
+
 def format_capabilities_summary(response: dict, **kwargs) -> str:
     """Show a ranked capability triage, with the evidence behind each lead."""
     if not response.get("success", False):
@@ -2971,6 +3003,7 @@ FORMATTERS = {
     "instances_current": format_instance_info,
     "instances_capabilities": format_capabilities,
     "analysis_capabilities_summary": format_capabilities_summary,
+    "analysis_context_pack": format_context_pack,
     "tasks_list": format_tasks_list,
     "tasks_get": format_task_view,
     "tasks_cancel": format_task_view,
@@ -3097,13 +3130,69 @@ def text_output(func):
         # Look up formatter by function name
         formatter = FORMATTERS.get(func.__name__)
         if formatter:
-            return formatter(response, **kwargs)
+            text = formatter(response, **kwargs)
+        else:
+            # Fallback: format_simple_result for mutation operations
+            text = format_simple_result(response, "Done")
 
-        # Fallback: format_simple_result for mutation operations
-        return format_simple_result(response, "Done")
+        # Actionable HATEOAS (I8): the envelope's links, translated into the
+        # bridge calls that follow them. The hrefs carry real values, so the
+        # suggestion is a call the agent can make as it reads. A link that
+        # does not map to a registered tool is left out — a wrong suggestion
+        # is worse than none.
+        suggestions = _suggested_calls(response)
+        if suggestions:
+            text += "\nNext: " + " | ".join(suggestions)
+        return text
 
     wrapper.__annotations__['return'] = str
     return wrapper
+
+
+_ADDRESSISH = re.compile(r"^(0x[0-9a-fA-F]+|[0-9a-fA-F]{4,})$")
+
+
+def _suggested_calls(response: dict, limit: int = 4) -> list[str]:
+    """Translate the envelope's _links into registered bridge calls."""
+    if not isinstance(response, dict):
+        return []
+    links = response.get("_links")
+    if not isinstance(links, dict):
+        return []
+    registered = set(getattr(mcp._tool_manager, "_tools", {}))
+    suggestions = []
+    for rel, link in links.items():
+        if rel == "self" or not isinstance(link, dict):
+            continue  # self is the call that just happened
+        href = link.get("href")
+        if not isinstance(href, str) or not href.startswith("/"):
+            continue
+        path, _, query = href.partition("?")
+        segments = [seg for seg in path.strip("/").split("/") if seg]
+        if len(segments) >= 2:
+            candidates = (f"{segments[0]}_{segments[-1]}",
+                          f"{segments[0]}_get_{segments[-1]}")
+            tool = next((name for name in candidates if name in registered), None)
+            values = segments[1:-1]
+        elif len(segments) == 1:
+            tool = f"{segments[0]}_list" if f"{segments[0]}_list" in registered else None
+            values = []
+        else:
+            continue
+        if tool is None:
+            continue
+        args = []
+        if values:
+            arg_name = "address" if _ADDRESSISH.match(values[-1]) else "name"
+            args.append(f'{arg_name}="{values[-1]}"')
+        for pair in query.split("&"):
+            key, sep, value = pair.partition("=")
+            if sep and key in ("offset", "limit"):
+                args.append(f"{key}={value}")
+        suggestions.append(f"{tool}({', '.join(args)})" if args else f"{tool}()")
+        if len(suggestions) >= limit:
+            break
+    return suggestions
 
 
 def simplify_response(response: dict) -> dict:
@@ -8545,6 +8634,216 @@ def analysis_capabilities_summary(include_strings: bool = True,
     strings = (safe_get(port, "strings", {"limit": 2000})
                if include_strings else None)
     return build_capability_report(program, imports, strings, include_strings)
+
+
+# Context pack (R3): a copy of ghydra/contextpack.py, the way the capability
+# rules are duplicated — the bridge is one standalone file and must not import
+# the ghydra package. test_context_pack.py asserts the copies agree.
+_CONTEXT_CHAR_PER_TOKEN = 4
+
+_CONTEXT_TEMPLATES = {
+    "what_it_does": re.compile(
+        r"o que (esse|esse|esta|essa|este|a função|the function|it) "
+        r"|what .*(does|do)|o que faz|descompil|decompil", re.IGNORECASE),
+    "data_origin": re.compile(
+        r"de onde|quem (escreve|lê|le|leu|escreveu)|where .*(from|written|read)"
+        r"|who (writes|reads)|xref|referên|referen", re.IGNORECASE),
+    "what_changed": re.compile(
+        r"o que mudou|what changed|mudou|diff|desde a última|since last",
+        re.IGNORECASE),
+}
+
+
+def _ctx_classify_question(question: str) -> str:
+    for template, pattern in _CONTEXT_TEMPLATES.items():
+        if pattern.search(question or ""):
+            return template
+    return "overview"
+
+
+def _ctx_tokens(text: str) -> int:
+    return max(1, len(text) // _CONTEXT_CHAR_PER_TOKEN)
+
+
+def build_context_pack(question: str, template: str, program: str,
+                       sections: list, budget_tokens: int = 4000) -> dict:
+    """Assemble fetched sections into one budgeted dossier (R3)."""
+    budget_tokens = max(200, int(budget_tokens))
+    included = []
+    omitted = []
+    citations = []
+    seen_citations = set()
+    used = 0
+
+    header = _ctx_tokens(f"Context pack: {question}")
+    for index, section in enumerate(sections):
+        title = str(section.get("title", "section"))
+        body = str(section.get("body", ""))
+        section_citations = [str(c) for c in section.get("citations") or []]
+
+        if index == 0:
+            # The section the question is about: truncate, never drop.
+            room = budget_tokens - header - used - _ctx_tokens(title)
+            if _ctx_tokens(body) > room > 0:
+                keep_chars = room * _CONTEXT_CHAR_PER_TOKEN
+                body = body[:keep_chars].rsplit("\n", 1)[0]
+                omitted.append({"section": title,
+                                "reason": f"truncated to fit {budget_tokens} "
+                                          f"tokens"})
+        elif used + _ctx_tokens(title) + _ctx_tokens(body) + header > budget_tokens:
+            omitted.append({"section": title,
+                            "reason": "dropped: over the token budget"})
+            continue
+
+        used += _ctx_tokens(title) + _ctx_tokens(body)
+        included.append({"title": title, "body": body,
+                         "citations": section_citations})
+        for citation in section_citations:
+            if citation not in seen_citations:
+                seen_citations.add(citation)
+                citations.append(citation)
+
+    return {
+        "success": True,
+        "result": {
+            "question": question,
+            "template": template,
+            "program": program,
+            "sections": included,
+            "citations": citations,
+            "omitted": omitted,
+            "budget_tokens": budget_tokens,
+            "used_tokens": header + used,
+            "method": "Composed from already-fetched endpoints; ranked by "
+                      "relevance to the question, truncated by budget. Every "
+                      "address is citable.",
+        },
+    }
+
+
+def _ctx_section(title: str, response, key: str = "result",
+                 citations: tuple = ()) -> dict:
+    """One pack section from an endpoint envelope, or a failure note."""
+    if isinstance(response, dict) and response.get("success", False):
+        payload = response.get(key)
+        body = payload if isinstance(payload, str) else json.dumps(
+            payload, ensure_ascii=False, default=str)
+        return {"title": title, "body": body, "citations": list(citations)}
+    code = ""
+    if isinstance(response, dict):
+        error = response.get("error") or {}
+        code = str(error.get("code", "unavailable")) if isinstance(error, dict) else str(error)
+    return {"title": title, "body": f"(unavailable: {code or 'no answer'})",
+            "citations": []}
+
+
+def _ctx_text(response, *keys) -> str:
+    """Best-effort plain text out of an envelope's result."""
+    if not isinstance(response, dict) or not response.get("success", False):
+        return ""
+    payload = response.get("result")
+    if isinstance(payload, dict):
+        for key in keys:
+            if isinstance(payload.get(key), str) and payload[key]:
+                return payload[key]
+    return ""
+
+
+@mcp.tool()
+@text_output
+def analysis_context_pack(question: str, address: str | None = None,
+                          budget_tokens: int = 4000,
+                          port: int | None = None) -> dict:
+    """Answer one question about the binary in a single budgeted dossier
+
+    An agent otherwise pays 10-20 calls to answer "what does this function do
+    and who calls it". This tool composes the relevant endpoints into ONE
+    ranked answer — decompiled code, references, context — with citable
+    addresses, truncated to your token budget, and with an explicit list of
+    what was omitted and why. Three question models are recognised (either
+    language): "what does it do" (needs an address), "where does this data
+    come from" (needs an address) and "what changed" (program fingerprint; a
+    real diff needs two snapshots). Anything else gets the overview template.
+
+    Args:
+        question: The question, free-form, PT or EN (e.g. "o que faz esta
+                  função?", "where is this data written?")
+        address: The hex address the question is about (required by the
+                 what-it-does and data-origin templates)
+        budget_tokens: Approximate token budget for the answer (default: 4000)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The dossier — sections ranked by relevance, citations (every
+              address mentioned), omissions with reasons, and the tokens used
+    """
+    template = _ctx_classify_question(question)
+
+    if template in ("what_it_does", "data_origin") and not address:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": f"the '{template}' question needs the address of "
+                           f"the function or data item it is about",
+            },
+        }
+
+    port = _get_instance_port(port)
+
+    program = safe_get(port, "program")
+    program_name = ""
+    if isinstance(program, dict) and isinstance(program.get("result"), dict):
+        program_name = program["result"].get("name") or ""
+
+    sections = []
+    if template == "what_it_does":
+        resolved = quote(address)
+        info = safe_get(port, f"functions/{resolved}")
+        sections.append(_ctx_section(
+            "function", info, citations=(address,)))
+        decompile = safe_get(port, f"functions/{resolved}/decompile")
+        code = _ctx_text(decompile, "ccode", "decompilation", "decompiled",
+                         "code", "implementation")
+        sections.append(_ctx_section(
+            "decompilation", decompile if not code else
+            {"success": True, "result": code},
+            citations=(address,)))
+        sections.append(_ctx_section(
+            "callers", safe_get(port, f"analysis/callers/{resolved}",
+                                {"limit": 10})))
+        sections.append(_ctx_section(
+            "callees", safe_get(port, f"analysis/callees/{resolved}",
+                                {"limit": 10})))
+    elif template == "data_origin":
+        resolved = quote(address)
+        sections.append(_ctx_section(
+            "address context",
+            safe_get(port, f"inspect/address/{resolved}"),
+            citations=(address,)))
+        sections.append(_ctx_section(
+            "references to it",
+            safe_get(port, "xrefs", {"to_addr": address, "limit": 50})))
+    elif template == "what_changed":
+        sections.append(_ctx_section("program", program))
+        sections.append(_ctx_section(
+            "segments", safe_get(port, "segments", {"limit": 50})))
+        sections.append({
+            "title": "how to diff",
+            "body": "A change diff needs two fingerprints: keep this pack, "
+                    "re-ask after your edits, and compare the statistics and "
+                    "segments above.",
+            "citations": [],
+        })
+    else:  # overview
+        sections.append(_ctx_section("program", program))
+        sections.append(_ctx_section(
+            "segments", safe_get(port, "segments", {"limit": 50})))
+        sections.append(_ctx_section(
+            "imports", safe_get(port, "symbols/imports", {"limit": 100})))
+
+    return build_context_pack(question, template, program_name,
+                              sections, budget_tokens)
 
 
 @mcp.tool()

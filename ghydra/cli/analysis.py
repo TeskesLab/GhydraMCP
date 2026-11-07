@@ -316,6 +316,115 @@ def get_dataflow(ctx, address, direction, max_steps):
         ctx.exit(1)
 
 
+@analysis.command('context-pack')
+@click.option('--question', '-q', required=True,
+              help='The question, free-form, PT or EN')
+@click.option('--address', '-a', default=None,
+              help='Hex address the question is about (what-it-does / '
+                   'data-origin questions)')
+@click.option('--budget', 'budget_tokens', type=int, default=4000,
+              show_default=True,
+              help='Approximate token budget for the answer')
+@click.pass_context
+def context_pack(ctx, question, address, budget_tokens):
+    """Answer one question about the binary in a single budgeted dossier.
+
+    Composes the relevant endpoints into ONE ranked answer — decompiled code,
+    references, context — with citable addresses, truncated to the token
+    budget, and with the list of what was omitted and why.
+
+    \b
+    Example:
+        ghydra analysis context-pack -q "o que faz esta função?" -a 0x401000
+        ghydra analysis context-pack -q "o que mudou" --budget 2000
+    """
+    from ..contextpack import build_context_pack, classify_question
+
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    template = classify_question(question)
+    if template in ("what_it_does", "data_origin") and not address:
+        raise click.UsageError(
+            f"the '{template}' question needs --address")
+
+    program = client.get('program')
+    program_name = ""
+    if isinstance(program.get("result"), dict):
+        program_name = program["result"].get("name") or ""
+
+    def section(title, response, citations=()):
+        if isinstance(response, dict) and response.get("success", False):
+            import json as _json
+            payload = response.get("result")
+            body = (payload if isinstance(payload, str)
+                    else _json.dumps(payload, ensure_ascii=False, default=str))
+            return {"title": title, "body": body, "citations": list(citations)}
+        error = (response.get("error") or {}) if isinstance(response, dict) else {}
+        code = error.get("code", "unavailable") if isinstance(error, dict) else error
+        return {"title": title, "body": f"(unavailable: {code})",
+                "citations": []}
+
+    sections = []
+    if template == "what_it_does":
+        from urllib.parse import quote as _quote
+        resolved = _quote(address)
+        sections.append(section("function",
+                                client.get(f'functions/{resolved}'),
+                                (address,)))
+        decompile = client.get(f'functions/{resolved}/decompile')
+        payload = decompile.get("result") if decompile.get("success") else None
+        code = ""
+        if isinstance(payload, dict):
+            for key in ("ccode", "decompilation", "decompiled", "code"):
+                if isinstance(payload.get(key), str):
+                    code = payload[key]
+                    break
+        elif isinstance(payload, str):
+            code = payload
+        if code:
+            decompile = {"success": True, "result": code}
+        sections.append(section("decompilation", decompile, (address,)))
+        sections.append(section("callers", client.get(
+            f'analysis/callers/{resolved}', params={'limit': 10})))
+        sections.append(section("callees", client.get(
+            f'analysis/callees/{resolved}', params={'limit': 10})))
+    elif template == "data_origin":
+        from urllib.parse import quote as _quote
+        resolved = _quote(address)
+        sections.append(section("address context",
+                                client.get(f'inspect/address/{resolved}'),
+                                (address,)))
+        sections.append(section("references to it", client.get(
+            'xrefs', params={'to_addr': address, 'limit': 50})))
+    elif template == "what_changed":
+        sections.append(section("program", program))
+        sections.append(section("segments",
+                                client.get('segments', params={'limit': 50})))
+        sections.append({
+            "title": "how to diff",
+            "body": "A change diff needs two fingerprints: keep this pack, "
+                    "re-ask after your edits, and compare the statistics and "
+                    "segments above.",
+            "citations": [],
+        })
+    else:
+        sections.append(section("program", program))
+        sections.append(section("segments",
+                                client.get('segments', params={'limit': 50})))
+        sections.append(section("imports", client.get(
+            'symbols/imports', params={'limit': 100})))
+
+    report = build_context_pack(question, template, program_name,
+                                sections, budget_tokens)
+    output = formatter.format_context_pack(report)
+    if should_page(config, ctx.obj['output_json']):
+        page_output(output, use_pager=config.page_output)
+    else:
+        click.echo(output)
+
+
 @analysis.command('status')
 @click.pass_context
 def status(ctx):

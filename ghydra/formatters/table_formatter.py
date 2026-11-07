@@ -816,6 +816,36 @@ class TableFormatter(BaseFormatter):
         return self._capture(Panel("\n".join(lines), title="Capabilities",
                                    border_style="blue"))
 
+    def format_context_pack(self, data: Dict[str, Any]) -> str:
+        """Format a budgeted dossier as sections with a citations footer."""
+        result = data.get("result", data)
+        if not isinstance(result, dict):
+            return self._capture(str(result))
+        lines = [
+            f"[cyan]Context pack[/cyan] [{result.get('template', '?')}] — "
+            f"{result.get('question', '')}",
+            f"program: {result.get('program') or '?'}  "
+            f"budget: {result.get('budget_tokens', '?')} tokens, "
+            f"used {result.get('used_tokens', '?')}",
+        ]
+        for section in result.get("sections") or []:
+            lines.append("")
+            lines.append(f"[green]## {section.get('title')}[/green]")
+            body = str(section.get("body", ""))
+            lines.append(escape(body) if hasattr(self, "_rich_escape") else body)
+            if section.get("citations"):
+                lines.append("  (addresses: " + ", ".join(section["citations"]) + ")")
+        citations = result.get("citations") or []
+        if citations:
+            lines.append("")
+            lines.append("[cyan]Citations:[/cyan] " + ", ".join(citations))
+        omitted = result.get("omitted") or []
+        if omitted:
+            lines.append("[yellow]Omitted:[/yellow]")
+            for item in omitted:
+                lines.append(f"  - {item.get('section')}: {item.get('reason')}")
+        return self._capture("\n".join(lines))
+
     def format_capabilities_summary(self, data: Dict[str, Any]) -> str:
         """Format a ranked capability triage as a table + evidence lines."""
         result = data.get("result", data)

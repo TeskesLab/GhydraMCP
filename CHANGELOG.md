@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`context_pack`: one answered question within a token budget (R3)**: the
+  `analysis_context_pack` tool and `ghydra analysis context-pack` compose the
+  endpoints a question needs into ONE ranked dossier — three question models
+  (what it does / where the data comes from / what changed, PT or EN) with
+  exact-endpoint retrieval, graph expansion (callers/callees/xrefs), an
+  approximate token budget, **citable addresses** for every section, and an
+  explicit list of what was omitted and why. A section that fails is reported
+  with its error code, never hidden. The builder lives in
+  `ghydra/contextpack.py` with a copy in the bridge (parity asserted by
+  `test_context_pack.py`).
+- **Actionable HATEOAS (I8)**: every text answer now ends with a `Next:` line
+  built from the envelope's `_links` — the hrefs carry real values, so the
+  suggestion is the bridge call that follows (`functions_decompile(address="…")`),
+  including the next page for paginated listings. A link that does not map to a
+  registered tool is left out: a wrong suggestion is worse than none.
 - **`--json` anywhere and UTF-8 output (I4)**: the CLI entrypoint reconfigures
   stdout/stderr to UTF-8 with `errors="replace"` before any output, so Rich tables
   no longer raise `UnicodeEncodeError` on a cp1252 Windows pipe, and a custom root

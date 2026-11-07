@@ -264,6 +264,18 @@ class BaseFormatter(ABC):
         pass
 
     @abstractmethod
+    def format_context_pack(self, data: Dict[str, Any]) -> str:
+        """Format a budgeted context-pack dossier (R3).
+
+        Args:
+            data: The pack — sections, citations, omissions, token counts
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
     def format_capabilities_summary(self, data: Dict[str, Any]) -> str:
         """Format a ranked capability triage (ATT&CK/MBC-style leads).
 
