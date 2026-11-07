@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-06
+
 ### Added
 - **The doctor:** `ghydra doctor` checks the Ghidra installation, the JDK it needs, the extension and the version it was built for, the port, the project directory, the API, Kuna and the x64dbg plugin — and every problem comes with the command that solves it. The JDK is the part that bites: Ghidra 11.x wants a JDK 21 and Ghidra 12.2 wants a JDK 25, and the installation's own VM arguments carry flags that only the newer JVMs take, so a run with the wrong one dies with a message about a flag instead of about the JDK.
 - **A launcher that builds the JVM invocation itself:** the headless runner no longer calls Ghidra's launcher script — it builds the same JVM invocation the launcher makes, reading the VM arguments from Ghidra's own `LaunchSupport`. Three things fall out of it. The log of the run is the log that was asked for, and not the one the Ghidra application log happens to hold. The Windows launcher no longer asks "press any key to continue" when it fails: it cannot tell a double-click from a shell, and a launcher that was started by another program is exactly that case. And the JDK is found by asking Ghidra which one it supports, instead of trusting `JAVA_HOME`.
@@ -140,6 +142,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **A variable that could be renamed only once:** the rename looked the variable up in the decompiler's local symbol map, and the listing merged what the database holds with what the decompiler knows — so the two disagreed. A local that was already renamed is a *unique symbol*, and a unique symbol lives in the global map, so the second rename of the same variable answered "variable not found" and the rename could not be undone. The lookup now covers the database and the unique symbols of the function, and the test asserts that the rename can be taken back.
 - **A name the decompiler invented, offered as if it were a variable:** what the decompiler calls a register it did not map (`puVar13`) is not a variable — there is nothing behind it to rename, and the name is re-numbered on the next decompile, so the listing and the rename disagreed about it. Renaming one now fails with a message that says so, and the listing keeps saying where each name came from (`source`): `database` is a variable, `decompiler` is the decompiler's own word for a value.
 - **Python packaging:** the wheel shipped the `ghydramcp` entry point but not the `bridge_mcp_hydra` module it points at. Defining `tool.hatch.build.targets.wheel.packages` disables `include`-based file selection, so the top-level bridge file never entered the wheel and installs via `uvx --from git+https://github.com/TeskesLab/GhydraMCP ghydramcp` (or `pip install ghydramcp`) died with `ModuleNotFoundError: No module named 'bridge_mcp_hydra'`. The bridge module is now force-included in the wheel.
+
+Automated by MisterMal
 
 ## [3.0.0] - 2026-10-23
 
@@ -326,7 +330,8 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 - Initial project setup
 - Basic MCP bridge functionality
 
-[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v3.0.0...HEAD
+[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/TeskesLab/GhydraMCP/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/TeskesLab/GhydraMCP/compare/v2.4.1...v3.0.0
 [3.0.0-rc.1]: https://github.com/starsong-consulting/GhydraMCP/compare/v3.0.0-beta...v3.0.0-rc.1
 [2.0.0]: https://github.com/teal-bauer/GhydraMCP/compare/v1.4.0...v2.0.0
