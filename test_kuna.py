@@ -26,6 +26,39 @@ from ghydra import kuna as kuna_helper
 from ghydra.cli import kuna as kuna_cli
 from ghydra.config.config_manager import ConfigManager
 
+_MODULE_TMP = None
+_MODULE_PATCHERS = []
+
+
+def setUpModule():
+    """Make the module hermetic: the environment decides, not ~/.ghydra.
+
+    A developer machine usually carries a config file with the integration
+    enabled; a clean CI runner does not. The suite must not depend on either,
+    so for the whole module the config file points at a path that does not
+    exist and GHYDRA_KUNA enables the integration. The opt-in tests override
+    both in their own setUp, which is what they are there to prove.
+    """
+    global _MODULE_TMP
+    _MODULE_TMP = tempfile.mkdtemp(prefix="ghydra-kuna-tests-")
+    absent = os.path.join(_MODULE_TMP, "no-config.json")
+    _MODULE_PATCHERS.extend([
+        mock.patch.object(kuna_helper, "CONFIG_FILE", absent),
+        mock.patch.object(bridge, "KUNA_CONFIG_FILE", absent),
+    ])
+    for patcher in _MODULE_PATCHERS:
+        patcher.start()
+    os.environ[kuna_helper.ENV_ENABLED] = "1"
+
+
+def tearDownModule():
+    for patcher in _MODULE_PATCHERS:
+        patcher.stop()
+    _MODULE_PATCHERS.clear()
+    os.environ.pop(kuna_helper.ENV_ENABLED, None)
+    if _MODULE_TMP:
+        shutil.rmtree(_MODULE_TMP, ignore_errors=True)
+
 
 def wait_for_kuna_export_watchers(timeout: float = 10.0) -> None:
     """Wait for the export watchers to finish.

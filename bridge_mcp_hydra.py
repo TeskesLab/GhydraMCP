@@ -7703,6 +7703,20 @@ def _x64dbg_parse_modules(text: str) -> List[dict]:
     return modules
 
 
+def _x64dbg_path_name(path: str) -> str:
+    """The file name of a path, on any platform.
+
+    os.path.basename only knows the separators of the machine it runs on, so
+    on POSIX it takes the whole "C:\\dir\\cmd.exe" as the name and the by-name
+    module match silently fails. The two sides of this integration always
+    speak Windows paths, so both separators are separators here.
+    """
+    text = str(path or "").strip().strip('"')
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    return text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
 def _x64dbg_find_module(modules: List[dict], binary_path: str) -> Optional[dict]:
     """The module that is the given binary.
 
@@ -7716,10 +7730,10 @@ def _x64dbg_find_module(modules: List[dict], binary_path: str) -> Optional[dict]
     for module in modules:
         if _x64dbg_normalize_path(module.get("path", "")) == wanted:
             return module
-    wanted_name = os.path.basename(wanted).lower()
+    wanted_name = _x64dbg_path_name(wanted).lower()
     for module in modules:
         candidate = _x64dbg_normalize_path(module.get("path", ""))
-        if candidate and os.path.basename(candidate).lower() == wanted_name:
+        if candidate and _x64dbg_path_name(candidate).lower() == wanted_name:
             return module
     return None
 

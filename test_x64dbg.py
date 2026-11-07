@@ -468,6 +468,14 @@ class X64dbgAddressTests(unittest.TestCase):
             modules, "\\\\?\\C:\\Windows\\System32\\cmd.exe")
         self.assertIsNotNone(module)
 
+    def test_the_file_name_is_read_on_any_platform(self):
+        """os.path.basename only knows this machine's separators; ours does not."""
+        self.assertEqual("cmd.exe",
+                         x64dbg_helper.path_name("C:\\Windows\\System32\\cmd.exe"))
+        self.assertEqual("cmd.exe", x64dbg_helper.path_name("\\\\?\\C:\\Windows\\System32\\cmd.exe"))
+        self.assertEqual("cmd.exe", x64dbg_helper.path_name("/usr/bin/cmd.exe"))
+        self.assertEqual("", x64dbg_helper.path_name(""))
+
     def test_a_binary_that_is_not_loaded_matches_nothing(self):
         modules = x64dbg_helper.parse_modules(MODULES_TEXT)
         self.assertIsNone(x64dbg_helper.find_module(modules, "C:\\other\\app.exe"))
