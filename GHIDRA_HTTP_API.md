@@ -926,16 +926,20 @@ Run Ghidra scripts via the API, for multi-stage or batch operations (mass rename
 
 - **`GET /scripts`**: List runnable scripts (name, path, category) from the enabled source directories.
 - **`POST /scripts/run`**: Run a script and return its captured output.
-  - Body (provide one of):
-    - `{ "name": "MyScript.java" }`: run an existing script by file name.
-    - `{ "source": "import ghidra.app.script.GhidraScript; public class X extends GhidraScript { public void run() throws Exception { println(\"hi\"); } }" }`: compile and run ad-hoc GhidraScript source (the class name must match; the file is written to the user script dir and removed after).
+  - Body (provide one of `name` or `source`):
+    - `{ "name": "MyScript.java" }` / `{ "name": "Probe.py" }`: run an existing script by file name; the extension picks the provider.
+    - `{ "source": "...", "language": "java" }`: compile and run ad-hoc Java `GhidraScript` source (must declare `public class <Name> extends GhidraScript`; the temp file is named after the class and removed after).
+    - `{ "source": "println('PYGHIDRA_OK ' + currentProgram.getName())", "language": "python", "filename": "probe.py" }`: run a temporary **`.py`** file with the PyGhidra/Python 3 provider explicitly selected, regardless of Jython provider order or script metadata. Python 3 needs an initialized PyGhidra runtime (`pyghidraRun`); installing the extension alone does not initialize it.
     - `"args": ["a", "b"]` (optional): passed to the script (`getScriptArgs()`).
+  - **Runtime selection**: `language` is `"java"` (default) or `"python"` / `"python3"` / `"pyghidra"`. An explicit `language` wins; otherwise a `filename` ending in `.py` selects Python 3 and `.java` selects Java. `filename` also preserves the original name for ad-hoc source.
+  - Ad-hoc Python files use a unique temporary directory, retain the requested basename, and are removed after execution. An existing user script with that name is not overwritten.
   - Runs with the current program as `currentProgram`; use `println(...)` for output.
+  - On Ghidra 12+, nonempty script error output sets `result.success` to `false` and is returned in `result.error`; partial standard output remains in `result.output`. This includes Python exceptions that older PyGhidra versions print instead of propagating to Java. Ghidra 11 retains its legacy execution API: messages routed only to its console/logger cannot be captured through a separate error writer.
   ```json
-  // Example Response
+  // Example Response (ad-hoc Python 3)
   "result": {
-    "script": "X.java",
-    "output": "hi\n",
+    "script": "probe.py",
+    "output": "PYGHIDRA_OK cmd.exe\n",
     "success": true,
     "error": null
   }

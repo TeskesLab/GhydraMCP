@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Ad-hoc Python 3 execution via PyGhidra**: the v3.0.0 merge that removed
+  `/script/execute` left `ScriptService.runSource` writing only `.java` files and
+  requiring `extends GhidraScript`, so Python 3 source answered `BAD_REQUEST`.
+  `POST /scripts/run`, `scripts_run` and `ghydra scripts run` now accept an explicit
+  `language` (`java`/`python`) and `filename`; a `.py` name (or `language=python`)
+  runs a temporary `.py` file with the PyGhidra provider explicitly selected,
+  independent of Jython defaults or script metadata. Unique temporary directories
+  keep existing user scripts and concurrent requests with the same filename intact;
+  a missing provider names the `pyghidraRun` remedy. Java support and the existing
+  execution opt-in are unchanged. `skills/ghydra-cli/SKILL.md` no longer teaches the
+  removed `script execute` / `script capabilities` commands.
+- **Python script failures:** capture the script error writer as well as stdout.
+  PyGhidra versions that print uncaught exceptions instead of throwing them now
+  return a failed result with the traceback and keep output produced before failure.
+- **The script tools lost their output**: `scripts_list` and `scripts_run` had no
+  `@text_output` and no `FORMATTERS` entry, so the script catalogue and the captured
+  `output` degraded to a bare `"Done"`. Both are formatted now, and `scripts_run`'s
+  `args` is one piece of text instead of a list that some MCP clients flatten.
+- **Java ad-hoc compatibility:** Java sources remain at the script root because
+  Ghidra interprets a subdirectory as a package. Existing Java sources are refused
+  atomically rather than overwritten or deleted; Python uses isolated directories.
+
 ## [3.1.0] - 2026-11-06
 
 ### Added
