@@ -53,10 +53,10 @@ def list_scripts(ctx):
 def run_script(ctx, name, source_file, source_code, language, filename, args):
     """Run a Ghidra script by --name, or ad-hoc from --file / --code.
 
-    Python 3 ad-hoc source needs PyGhidra (launch Ghidra with pyghidraRun, or
-    install the PyGhidra extension). The .py extension is what makes Ghidra
-    select the Python provider, so --file keeps its basename and --language
-    python is sent for inline --code.
+    Python 3 ad-hoc source needs Ghidra launched with pyghidraRun. A .py
+    --file keeps its basename and selects PyGhidra explicitly; use --language
+    python for inline --code. Installing the extension alone does not
+    initialize the Python runtime.
 
     \b
     Examples:

@@ -34,7 +34,7 @@ python run_tests.py --triage     # target triage
 python run_tests.py --rea        # REA parity
 python run_tests.py --surface    # global tool/formatter contract
 python run_tests.py --capabilities # capability negotiation contract
-python run_tests.py --scripts      # ad-hoc Java/Python script contract
+python run_tests.py --scripts      # MCP/CLI scripting behavior with a local HTTP fixture
 python run_tests.py --compatibility # 11.x/12.2 compatibility contract
 python run_tests.py --runner        # test-runner contract
 python run_tests.py --docs          # documentation drift guard
@@ -59,7 +59,8 @@ python run_tests.py --surface --scripts   # several flags can be combined
 > respective binaries, so they always run and always give a signal. `--rea` is
 > half contract (no Ghidra) and half live. `python run_tests.py --require-live`
 > probes `/plugin-version` first and refuses to run without a live instance, so a
-> green summary cannot be made of skipped suites.
+> green summary cannot be made of skipped suites. The `--scripts` suite now also
+> drives the bridge and CLI against a local HTTP fixture.
 
 ## HTTP API Tests
 
@@ -242,6 +243,14 @@ analyzeHeadless /tmp/RawImageTest RawImageTest \
   ARGB8888 / 1bpp, single-address cleanup, whole-program sweeps, idempotency, the
   refuse-to-clear-non-RawImage guard, and that every bad input raises
   `IllegalArgumentException` (which the HTTP layer maps to `400`, not `500`).
+- `TestPyGhidraScript` — executes real Java and Python 3 source, arguments and error
+  diagnostics; checks language precedence, existing-script preservation and cleanup
+  including Python bytecode caches. Run it from the Script Manager in a Ghidra
+  instance launched with `pyghidraRun` and this extension installed. A plain
+  `analyzeHeadless` run can exercise Java but skips Python when its runtime is not
+  initialized; a Python skip is not proof that the regression passed.
+  Capture assertions require Ghidra 12+; Ghidra 11 reports an explicit skip because
+  its script API has no separate error writer.
 
 Each script throws on the first failed assertion, so headless reports `SCRIPT ERROR` and a
 non-zero exit — usable as a CI gate:

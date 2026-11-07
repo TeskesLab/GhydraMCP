@@ -114,10 +114,6 @@ ghydra instances use --port 8195
 # Get current instance info
 ghydra instances current
 
-# Capability negotiation: versions, runtime, feature flags and limits.
-# Falls back to /plugin-version on an older plugin.
-ghydra instances capabilities
-
 # Unregister an instance
 ghydra instances unregister --port 8195
 ```
@@ -139,7 +135,8 @@ ghydra scripts run --filename probe.py --language python --code "println('hi')"
 `--language` accepts `java` (default) or `python`. A `.py` `--file`/`--filename`
 also selects Python 3 and is forwarded so the server preserves the extension —
 sending only the source text used to lose it and produce a `.java` file. Python
-3 requires PyGhidra (`pyghidraRun` / the PyGhidra extension, Ghidra 11.x+).
+3 requires Ghidra launched through `pyghidraRun`; installing the extension alone
+does not initialize the Python runtime.
 
 ### Functions Commands
 
@@ -204,8 +201,8 @@ ghydra functions set-comment --address 0x401000 --comment "Main entry point"
 ### The four composed commands
 
 Four commands that answer a question in one call, where the pieces were all there and the agent
-paid a call for each. They close the four native gaps found by comparing the two tool catalogues
-by capability.
+paid a call for each. They close the four native gaps against the REA — the comparison is in
+[REA_PARITY.md](REA_PARITY.md).
 
 ```bash
 # Decompile a list of functions in one call

@@ -12,9 +12,14 @@ import ghidra.program.util.ProgramLocation;
 import ghidra.util.task.TaskMonitor;
 
 import java.io.File;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.FileVisitResult;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -66,20 +71,17 @@ public class ScriptService {
         if (file == null) {
             throw new IllegalArgumentException("Script not found: " + name);
         }
-        return run(tool, project, program, file, args);
+        return run(tool, project, program, file, args, null);
     }
 
     /**
      * Resolve the runtime for an ad-hoc script.
      *
-     * <p>A {@code .py} filename selects Python 3 even when no language was sent,
-     * so callers that forward a real source file keep its extension. Explicit
-     * {@code language=python} (or {@code python3}/{@code pyghidra}) does the same
-     * for inline source. Java remains the default, preserving v3.0.0 behaviour.
+     * <p>An explicit {@code language} wins; a {@code .py} filename is the fallback
+     * that preserves the extension of a real source file when none was sent.
+     * Java remains the default, preserving v3.0.0 behaviour.
      */
     public static String normalizeLanguage(String language, String filename) {
-        // An explicit choice wins; the filename is the fallback that preserves
-        // the extension of a real source file when no language was sent.
         if (language != null && !language.isBlank()) {
             String l = language.trim().toLowerCase(Locale.ROOT);
             return switch (l) {
@@ -107,10 +109,11 @@ public class ScriptService {
     }
 
     /**
-     * Write ad-hoc source into the user script directory with the extension its
-     * runtime needs, run it, then delete the temp source. Java source must
-     * declare {@code public class &lt;Name&gt; extends GhidraScript}; Python 3
-     * source is written as {@code .py} so Ghidra selects the PyGhidra provider.
+     * Run Python source in a unique temporary directory with PyGhidra explicitly
+     * selected. Java source must declare a GhidraScript class and is written at
+     * the script root, because a subdirectory is interpreted as a Java package.
+     * Existing Java source files are refused rather than overwritten. Only files
+     * owned by this invocation are removed afterwards.
      */
     public RunResult runSource(PluginTool tool, Project project, Program program,
             String source, String[] args) {
@@ -124,7 +127,7 @@ public class ScriptService {
         if ("python".equals(lang)) {
             stem = filename != null && !filename.isBlank()
                 ? stripExtension(new File(filename).getName())
-                : "adhoc_python_" + System.currentTimeMillis();
+                : "adhoc_python";
         } else {
             Matcher m = CLASS_NAME.matcher(source);
             if (!m.find()) {
@@ -136,18 +139,62 @@ public class ScriptService {
         }
 
         File dir = GhidraScriptUtil.getUserScriptDirectory().getFile(false);
-        // getName() strips any directory component the caller put in filename.
-        File scriptFile = new File(dir, stem + extensionFor(lang));
+        Path temporaryDirectory = null;
+        File scriptFile = null;
         try {
+            Files.createDirectories(dir.toPath());
+            // Python filenames must not overwrite scripts in the user's directory,
+            // and simultaneous requests with the same filename need separate files.
+            if ("python".equals(lang)) {
+                temporaryDirectory = Files.createTempDirectory(dir.toPath(), "ghydra_python_");
+            }
+            File target = new File(
+                temporaryDirectory != null ? temporaryDirectory.toFile() : dir,
+                stem + extensionFor(lang));
+            if (temporaryDirectory == null) {
+                Files.createFile(target.toPath());
+            }
+            scriptFile = target;
             Files.writeString(scriptFile.toPath(), source);
-            return run(tool, project, program, new ResourceFile(scriptFile), args);
+            return run(tool, project, program, new ResourceFile(scriptFile), args, lang);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
             throw new RuntimeException("Failed to run ad-hoc script: " + e.getMessage(), e);
         } finally {
-            scriptFile.delete();
+            if (temporaryDirectory != null) {
+                try {
+                    deleteTemporaryDirectory(temporaryDirectory);
+                } catch (IOException e) {
+                    throw new RuntimeException("Failed to remove ad-hoc Python script directory", e);
+                }
+            } else if (scriptFile != null) {
+                scriptFile.delete();
+            }
         }
+    }
+
+    private static void deleteTemporaryDirectory(Path directory) throws IOException {
+        // PyGhidra also writes __pycache__; remove only this request's owned tree.
+        // walkFileTree does not follow symbolic links.
+        Files.walkFileTree(directory, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
+                    throws IOException {
+                Files.delete(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path path, IOException error)
+                    throws IOException {
+                if (error != null) {
+                    throw error;
+                }
+                Files.delete(path);
+                return FileVisitResult.CONTINUE;
+            }
+        });
     }
 
     /** A safe file stem: no directories, no punctuation the script loader rejects. */
@@ -158,12 +205,41 @@ public class ScriptService {
         return safe.isEmpty() ? "adhoc_python" : safe;
     }
 
+    /**
+     * Pick the provider explicitly for Python 3 ad-hoc source.
+     *
+     * <p>{@code GhidraScriptUtil.getProvider(file)} resolves providers that
+     * share an extension from the script's {@code @runtime} metadata. When both
+     * Jython and PyGhidra are installed, a bare generated .py file has no such
+     * marker, so an explicit {@code language=python} could still be handed to
+     * Jython and fail on Python-3-only source. Binding directly to the provider
+     * whose runtime is "PyGhidra" makes the selection deterministic. Named
+     * scripts (language == null) keep Ghidra's own metadata-based resolution.
+     */
+    private GhidraScriptProvider providerFor(ResourceFile file, String language) {
+        if (!"python".equals(language)) {
+            return GhidraScriptUtil.getProvider(file);
+        }
+        for (GhidraScriptProvider provider : GhidraScriptUtil.getProviders()) {
+            String runtime = provider.getRuntimeEnvironmentName();
+            if (runtime != null && runtime.toLowerCase(Locale.ROOT).contains("pyghidra")) {
+                return provider;
+            }
+        }
+        throw new IllegalArgumentException(
+            "No PyGhidra provider is available for ad-hoc Python 3 scripts. "
+            + "Launch Ghidra with pyghidraRun, or install the PyGhidra extension "
+            + "(Ghidra 11.x+).");
+    }
+
     private RunResult run(PluginTool tool, Project project, Program program,
-            ResourceFile file, String[] args) {
+            ResourceFile file, String[] args, String language) {
         StringWriter sw = new StringWriter();
         PrintWriter writer = new PrintWriter(sw);
+        StringWriter errors = new StringWriter();
+        PrintWriter errorWriter = new PrintWriter(errors);
         try {
-            GhidraScriptProvider provider = GhidraScriptUtil.getProvider(file);
+            GhidraScriptProvider provider = providerFor(file, language);
             if (provider == null) {
                 String hint = file.getName().toLowerCase(Locale.ROOT).endsWith(".py")
                     ? " Python 3 needs PyGhidra: launch Ghidra with pyghidraRun, or install "
@@ -172,7 +248,12 @@ public class ScriptService {
                 throw new IllegalArgumentException(
                     "No script provider for " + file.getName() + " (unsupported extension?)." + hint);
             }
-            GhidraScript script = provider.getScriptInstance(file, writer);
+            GhidraScript script = provider.getScriptInstance(file, errorWriter);
+            if (script == null) {
+                throw new IllegalArgumentException(
+                    "Could not initialize " + provider.getRuntimeEnvironmentName()
+                    + " script runtime. For Python 3, launch Ghidra with pyghidraRun.");
+            }
             if (args != null && args.length > 0) {
                 script.setScriptArgs(args);
             }
@@ -185,13 +266,50 @@ public class ScriptService {
             Project effective = project != null ? project : (tool != null ? tool.getProject() : null);
             GhidraState state = new GhidraState(
                 tool, effective, program, location, null, null);
-            script.execute(state, TaskMonitor.DUMMY, writer);
+            executeScript(script, state, writer, errorWriter);
             writer.flush();
-            return new RunResult(file.getName(), sw.toString(), true, null);
+            errorWriter.flush();
+            // Older PyGhidra runners report uncaught Python exceptions through
+            // printerr instead of propagating them to Java.
+            String diagnostic = errors.toString();
+            boolean success = diagnostic.isBlank();
+            return new RunResult(file.getName(), sw.toString(), success,
+                success ? null : diagnostic);
         } catch (Exception e) {
             writer.flush();
+            errorWriter.flush();
             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-            return new RunResult(file.getName(), sw.toString(), false, msg);
+            String diagnostic = errors.toString();
+            return new RunResult(file.getName(), sw.toString(), false,
+                diagnostic.isBlank() ? msg : diagnostic + "\n" + msg);
+        }
+    }
+
+    private static void executeScript(GhidraScript script, GhidraState state,
+            PrintWriter writer, PrintWriter errorWriter) throws Exception {
+        Class<?> controlsClass;
+        try {
+            controlsClass = Class.forName("ghidra.app.script.ScriptControls");
+        } catch (ClassNotFoundException legacyGhidra) {
+            // Ghidra 11 has no separate script error writer.
+            script.execute(state, TaskMonitor.DUMMY, writer);
+            return;
+        }
+        Object controls = controlsClass
+            .getConstructor(PrintWriter.class, PrintWriter.class, TaskMonitor.class)
+            .newInstance(writer, errorWriter, TaskMonitor.DUMMY);
+        try {
+            GhidraScript.class.getMethod("execute", GhidraState.class, controlsClass)
+                .invoke(script, state, controls);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception exception) {
+                throw exception;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new RuntimeException(cause);
         }
     }
 }

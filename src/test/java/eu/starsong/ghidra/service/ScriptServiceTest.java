@@ -5,43 +5,29 @@ import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
 
-/**
- * Pure-logic tests for ad-hoc script language selection. No live Program and no
- * PyGhidra needed: this is the decision that used to be hardcoded to Java and
- * cost Python 3 its .py extension.
- */
+/** Language selection contracts that do not require a running Ghidra application. */
 public class ScriptServiceTest {
 
     @Test
-    public void javaIsStillTheDefault() {
-        assertEquals("java", ScriptService.normalizeLanguage(null, null));
-        assertEquals("java", ScriptService.normalizeLanguage("", ""));
-        assertEquals(".java", ScriptService.extensionFor("java"));
-    }
-
-    @Test
-    public void aPyFilenameSelectsPythonWhenNoLanguageIsGiven() {
+    public void filenameInfersLanguageOnlyWhenLanguageIsAbsent() {
         assertEquals("python", ScriptService.normalizeLanguage(null, "probe.py"));
-        assertEquals("python", ScriptService.normalizeLanguage("", "C:\\work\\probe.PY"));
-        assertEquals(".py", ScriptService.extensionFor("python"));
-    }
-
-    @Test
-    public void explicitLanguageWinsOverTheFilename() {
-        assertEquals("python", ScriptService.normalizeLanguage("python3", "Thing.java"));
-        assertEquals("java", ScriptService.normalizeLanguage("java", "probe.py"));
-        assertEquals("python", ScriptService.normalizeLanguage("PyGhidra", null));
-    }
-
-    @Test
-    public void aJavaFilenameSelectsJava() {
+        assertEquals("python", ScriptService.normalizeLanguage(" ", "C:\\work\\probe.PY"));
         assertEquals("java", ScriptService.normalizeLanguage(null, "MassRename.java"));
     }
 
     @Test
-    public void anUnknownLanguageIsRejectedWithAClearMessage() {
-        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-            () -> ScriptService.normalizeLanguage("ruby", "probe.rb"));
-        assertEquals(true, e.getMessage().contains("java or python"));
+    public void explicitLanguageWinsOverConflictingFilename() {
+        for (String language : new String[] {"python", "python3", "py", "PyGhidra"}) {
+            assertEquals("python", ScriptService.normalizeLanguage(language, "Thing.java"));
+        }
+        assertEquals("java", ScriptService.normalizeLanguage(" JAVA ", "probe.py"));
+    }
+
+    @Test
+    public void unsupportedExplicitLanguageCannotFallBackToRecognizedFilename() {
+        for (String filename : new String[] {"probe.py", "Thing.java", null}) {
+            assertThrows(IllegalArgumentException.class,
+                () -> ScriptService.normalizeLanguage("ruby", filename));
+        }
     }
 }

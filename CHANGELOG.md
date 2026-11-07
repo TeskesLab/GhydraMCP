@@ -9,12 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **Honest CI (I6)**: `run_tests.py` now accepts any number of suite flags in one
   invocation and reports each result separately, plus `--no-ghidra`, which expands
-  to the seven suites that always execute (`--kuna`, `--x64dbg`, `--surface`,
-  `--capabilities`, `--scripts`, `--compatibility`, `--runner`). Both the GitHub
-  Actions and Gitea Actions `build.yml` install the Python package and run exactly
-  that set on every push/PR, so a green run is real evidence instead of a summary
-  made of skipped suites. `test_runner.py` covers the new multi-flag behaviour and
-  the `--no-ghidra` contract; `TESTING.md` documents it.
+  to the suites that always execute. Both the GitHub Actions and Gitea Actions
+  `build.yml` install the Python package and run exactly that set on every push/PR,
+  so a green run is real evidence instead of a summary made of skipped suites.
+  `test_runner.py` covers the new multi-flag behaviour and the `--no-ghidra`
+  contract; `TESTING.md` documents it.
 - **Documentation drift guard (I13)**: `scripts/check_docs.py` counts
   `@mcp.tool()`/`@mcp.prompt()`/`@mcp.resource()` and `FORMATTERS` entries from the
   AST, counts REST routes in the Java resources, and compares them with the
@@ -22,6 +21,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `scripts/version.py --check` and verifies that `ghydra/x64dbg.py` uses
   `__version__` instead of a second hardcoded release number. Wired into CI as the
   `--docs` suite (part of `--no-ghidra`); `test_docs.py` covers the pure checks.
+- **Sync with upstream v3.1.1**: incorporates the merged PyGhidra fix (PR #12)
+  plus the maintainer's runtime-preservation and regression work.
+
+## [3.1.1] - 2026-11-07
+
+### Fixed
+- **Ad-hoc Python 3 execution via PyGhidra**: the v3.0.0 merge that removed
+  `/script/execute` left `ScriptService.runSource` writing only `.java` files and
+  requiring `extends GhidraScript`, so Python 3 source answered `BAD_REQUEST`.
+  `POST /scripts/run`, `scripts_run` and `ghydra scripts run` now accept an explicit
+  `language` (`java`/`python`) and `filename`; a `.py` name (or `language=python`)
+  runs a temporary `.py` file with the PyGhidra provider explicitly selected,
+  independent of Jython defaults or script metadata. Unique temporary directories
+  keep existing user scripts and concurrent requests with the same filename intact;
+  a missing provider names the `pyghidraRun` remedy. Java support and the existing
+  execution opt-in are unchanged. `skills/ghydra-cli/SKILL.md` no longer teaches the
+  removed `script execute` / `script capabilities` commands.
+- **Python script failures on Ghidra 12+:** capture the script error writer as well
+  as stdout. PyGhidra versions that print uncaught exceptions instead of throwing
+  them now return a failed result with the traceback and keep partial output.
+  Ghidra 11 retains its legacy execution API and console-only capture limitations.
+- **The script tools lost their output**: `scripts_list` and `scripts_run` had no
+  `@text_output` and no `FORMATTERS` entry, so the script catalogue and the captured
+  `output` degraded to a bare `"Done"`. Both are formatted now, and `scripts_run`'s
+  `args` is one piece of text instead of a list that some MCP clients flatten.
+- **Java ad-hoc compatibility:** Java sources remain at the script root because
+  Ghidra interprets a subdirectory as a package. Existing Java sources are refused
+  atomically rather than overwritten or deleted; Python uses isolated directories.
+
+Automated by MisterMal
 
 ## [3.1.0] - 2026-11-06
 
@@ -394,7 +423,8 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 - Initial project setup
 - Basic MCP bridge functionality
 
-[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v3.1.0...HEAD
+[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v3.1.1...HEAD
+[3.1.1]: https://github.com/TeskesLab/GhydraMCP/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/TeskesLab/GhydraMCP/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/TeskesLab/GhydraMCP/compare/v2.4.1...v3.0.0
 [3.0.0-rc.1]: https://github.com/starsong-consulting/GhydraMCP/compare/v3.0.0-beta...v3.0.0-rc.1
