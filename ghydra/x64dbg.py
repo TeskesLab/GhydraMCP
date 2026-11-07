@@ -709,6 +709,20 @@ def parse_modules(text: str) -> List[Dict[str, Any]]:
     return modules
 
 
+def path_name(path: str) -> str:
+    """The file name of a path, on any platform.
+
+    os.path.basename only knows the separators of the machine it runs on, so
+    on POSIX it takes the whole "C:\\dir\\cmd.exe" as the name and the
+    by-name module match silently fails. The two sides of this integration
+    always speak Windows paths, so both separators are separators here.
+    """
+    text = str(path or "").strip().strip('"')
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    return text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
 def find_module(modules: List[Dict[str, Any]], binary_path: str) -> Optional[Dict[str, Any]]:
     """The module that is the given binary.
 
@@ -722,10 +736,10 @@ def find_module(modules: List[Dict[str, Any]], binary_path: str) -> Optional[Dic
     for module in modules:
         if normalize_path(module.get("path", "")) == wanted:
             return module
-    wanted_name = os.path.basename(wanted).lower()
+    wanted_name = path_name(wanted).lower()
     for module in modules:
         candidate = normalize_path(module.get("path", ""))
-        if candidate and os.path.basename(candidate).lower() == wanted_name:
+        if candidate and path_name(candidate).lower() == wanted_name:
             return module
     return None
 
