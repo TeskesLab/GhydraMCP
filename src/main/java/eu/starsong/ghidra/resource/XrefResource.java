@@ -5,12 +5,15 @@ import eu.starsong.ghidra.hateoas.Links;
 import eu.starsong.ghidra.hateoas.Paginator;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
+import eu.starsong.ghidra.server.GhydraServer.NotFoundException;
 import eu.starsong.ghidra.server.Resource;
 import eu.starsong.ghidra.service.XrefService;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Function;
 
 /**
@@ -28,6 +31,7 @@ public class XrefResource implements Resource {
     public void register(Javalin app, Function<Context, GhidraContext> contextFactory) {
         app.get("/xrefs", ctx -> list(contextFactory.apply(ctx)));
         app.get("/xrefs/to/{address}", ctx -> getRefsTo(contextFactory.apply(ctx)));
+        app.get("/xrefs/to-name/{name}", ctx -> getRefsToName(contextFactory.apply(ctx)));
         app.get("/xrefs/from/{address}", ctx -> getRefsFrom(contextFactory.apply(ctx)));
         app.get("/xrefs/calls/to/{address}", ctx -> getCallsTo(contextFactory.apply(ctx)));
         app.get("/xrefs/calls/from/{address}", ctx -> getCallsFrom(contextFactory.apply(ctx)));
@@ -82,6 +86,43 @@ public class XrefResource implements Resource {
 
         ctx.json(result.toResponse(ctx.ctx(), ctx.port())
             .link("target", "/functions/{}", address)
+            .link("xrefs", "/xrefs")
+            .build());
+    }
+
+    /**
+     * GET /xrefs/to-name/{name} - Get the references to a symbol found by name
+     *
+     * <p>The name is resolved to the symbols that carry it and the references
+     * to those symbols come back in one answer.
+     */
+    private void getRefsToName(GhidraContext ctx) {
+        var program = ctx.requireProgram();
+        String name = ctx.pathParam("name");
+        var pagination = ctx.pagination();
+
+        XrefService.NameReferences found = xrefService.getReferencesToName(program, name,
+            pagination.offset(), pagination.limit());
+        if (found.symbols().isEmpty()) {
+            throw new NotFoundException("No symbol named '" + name
+                + "' (a bare name matches every namespace; use the fully-qualified name, e.g. NS::"
+                + name + ")", "SYMBOL_NOT_FOUND");
+        }
+
+        int total = found.total();
+        int from = Math.min(pagination.offset(), total);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("name", name);
+        result.put("symbols", found.symbols());
+        result.put("references", found.references());
+        result.put("total", total);
+
+        ctx.json(Response.ok(ctx.ctx(), ctx.port(), result)
+            .meta("total", total)
+            .meta("offset", from)
+            .meta("limit", pagination.limit())
+            .self("/xrefs/to-name/{}", name)
             .link("xrefs", "/xrefs")
             .build());
     }

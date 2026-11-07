@@ -2,6 +2,7 @@
 
 import json
 import click
+from urllib.parse import quote
 
 from ..client.exceptions import GhidraError
 from ..utils import should_page, page_output, rich_echo, validate_address
@@ -98,6 +99,169 @@ def get_callgraph(ctx, name, address, max_depth):
             output = formatter.format_callgraph(response)
         else:
             output = formatter.format_simple_result(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@analysis.command('trace-call-path')
+@click.option('--from', 'from_function', required=True,
+              help='Where the path starts — a function name or an address (hex)')
+@click.option('--to', 'to_function', required=True,
+              help='Where the path must end — a function name or an address (hex)')
+@click.option('--max-depth', type=int, default=8,
+              help='Maximum number of hops to look for (the server accepts at most 16)')
+@click.pass_context
+def trace_call_path(ctx, from_function, to_function, max_depth):
+    """Trace how one function reaches another.
+
+    The call graph says who calls whom; this says which chain of calls goes
+    from one function to another. The path it returns is the shortest one
+    Ghidra knows about.
+
+    \b
+    Examples:
+        ghydra analysis trace-call-path --from main --to strcmp
+        ghydra analysis trace-call-path --from 0x401000 --to 0x402000 --max-depth 12
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        params = {
+            'from': from_function,
+            'to': to_function,
+            'max_depth': max_depth
+        }
+
+        response = client.get('analysis/call-path', params=params)
+        output = formatter.format_call_path(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@analysis.command('callers')
+@click.argument('address')
+@click.option('--offset', type=int, default=0, help='Pagination offset (default: 0)')
+@click.option('--limit', type=int, default=100, help='Maximum items to return (default: 100)')
+@click.pass_context
+def callers(ctx, address, offset, limit):
+    """Get the functions that call this function.
+
+    \b
+    Example:
+        ghydra analysis callers 0x401000
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        response = client.get(f'analysis/callers/{quote(validate_address(address))}',
+                              params={'offset': offset, 'limit': limit})
+        output = formatter.format_callers(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@analysis.command('callees')
+@click.argument('address')
+@click.option('--offset', type=int, default=0, help='Pagination offset (default: 0)')
+@click.option('--limit', type=int, default=100, help='Maximum items to return (default: 100)')
+@click.pass_context
+def callees(ctx, address, offset, limit):
+    """Get the functions this function calls.
+
+    \b
+    Example:
+        ghydra analysis callees 0x401000
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        response = client.get(f'analysis/callees/{quote(validate_address(address))}',
+                              params={'offset': offset, 'limit': limit})
+        output = formatter.format_callees(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@analysis.command('overview')
+@click.option('--imports', 'import_limit', type=int, default=25,
+              help='How many imports to list (default: 25)')
+@click.pass_context
+def overview(ctx, import_limit):
+    """An overview of the loaded binary.
+
+    What it is, how it is laid out, how much is in it, and what it pulls in
+    - the summary a triage pass starts from.
+
+    \b
+    Example:
+        ghydra analysis overview
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        response = client.get('program')
+        segments = client.get('segments')
+        imports = client.get('symbols/imports', params={'limit': import_limit})
+
+        program = response.get('result') or {}
+        statistics = program.get('statistics') or {}
+        meta = imports.get('meta') or {}
+
+        payload = {
+            "success": True,
+            "result": {
+                "program": program,
+                "segments": segments.get('result') or [],
+                "imports": imports.get('result') or [],
+                "statistics": {
+                    "functions": statistics.get('functionCount'),
+                    "symbols": statistics.get('symbolCount'),
+                    "memoryBlocks": statistics.get('memoryBlockCount'),
+                    "imports": meta.get('total'),
+                }
+            }
+        }
+        output = formatter.format_overview(payload)
 
         if should_page(config, ctx.obj['output_json']):
             page_output(output, use_pager=config.page_output)

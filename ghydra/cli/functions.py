@@ -4,7 +4,8 @@ import click
 from urllib.parse import quote
 
 from ..client.exceptions import GhidraError
-from ..utils import should_page, page_output, rich_echo, validate_address
+from ..utils import (MAX_BATCH_TARGETS, should_page, page_output, parse_targets,
+                     rich_echo, validate_address)
 
 DEFAULT_DECOMPILATION_TIMEOUT = 1200
 
@@ -321,6 +322,154 @@ def decompile(ctx, name, address, syntax_tree, style, no_constants, timeout, sta
             client.timeout = original_timeout
 
         output = formatter.format_decompiled_code(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@functions.command('decompile-batch')
+@click.option('--targets', required=True,
+              help='The functions to decompile: JSON text (e.g. \'["main","0x401000"]\'), a comma-separated list, or one name')
+@click.option('--timeout', type=int, default=120,
+              help='Decompilation timeout per function, in seconds (default: 120)')
+@click.pass_context
+def decompile_batch(ctx, targets, timeout):
+    """Decompile a list of functions in one call.
+
+    Each target is a function name or an address. A target that resolves to
+    nothing comes back as a failed entry, so one wrong name does not cost
+    the whole batch.
+
+    \b
+    Examples:
+        ghydra functions decompile-batch --targets '["main","0x401000"]'
+        ghydra functions decompile-batch --targets main,strcmp
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        wanted = parse_targets(targets)
+    except ValueError as e:
+        rich_echo(f"[red]Error:[/red] {e}", err=True)
+        ctx.exit(1)
+
+    if not wanted:
+        rich_echo("[red]Error:[/red] No targets given", err=True)
+        ctx.exit(1)
+
+    try:
+        # Keep the HTTP timeout above the whole batch: every target gets its
+        # own decompilation timeout, and the server runs them one after the
+        # other, so the transport must not fire before the last one is done.
+        # The count is the one the server accepts - a longer batch is refused.
+        original_timeout = client.timeout
+        client.timeout = max(original_timeout,
+                              timeout * min(len(wanted), MAX_BATCH_TARGETS) + 60)
+        try:
+            response = client.post('functions/decompile-batch',
+                                   json_data={'targets': wanted, 'timeout': timeout})
+        finally:
+            client.timeout = original_timeout
+
+        output = formatter.format_batch_decompile(response)
+
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
+
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
+@functions.command('analyze')
+@click.option('--name', '-n', help='Function fully-qualified name (e.g. "FOM::Read"); a bare name matches the global namespace only')
+@click.option('--address', '-a', help='Function address (hex)')
+@click.option('--xref-limit', type=int, default=50, help='How many references to return (default: 50)')
+@click.pass_context
+def analyze(ctx, name, address, xref_limit):
+    """Everything about one function, in one call.
+
+    The decompilation, the callers, the callees and the references - the
+    pieces an agent pays a round trip for when it has just found a
+    function.
+
+    \b
+    Examples:
+        ghydra functions analyze --name main
+        ghydra functions analyze --address 0x401000
+    """
+    if not name and not address:
+        rich_echo("[red]Error:[/red] Either --name or --address is required", err=True)
+        ctx.exit(1)
+    if name and address:
+        rich_echo("[red]Error:[/red] Cannot specify both --name and --address", err=True)
+        ctx.exit(1)
+
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        if address:
+            info = client.get(f'functions/{quote(validate_address(address))}')
+        else:
+            info = client.get(f'functions/by-name/{quote(name)}')
+
+        function = info.get('result') or {}
+        resolved = function.get('address') or address
+        if not resolved:
+            rich_echo(f"[red]Error:[/red] The function '{name or address}' has no address", err=True)
+            ctx.exit(1)
+
+        # A composed answer must not hide a failure, and it must not lose
+        # what it already has: the function was found, and the decompilation
+        # came with it. A part that failed is reported as empty, and only the
+        # function - the thing the caller asked for - decides the success.
+        def _part(call):
+            """One part of the answer, and the reason it is not there."""
+            try:
+                return call(), None
+            except GhidraError as exc:
+                return None, str(exc)
+
+        decompiled, decompile_error = _part(
+            lambda: client.get(f'functions/{quote(resolved)}/decompile'))
+        callers, _ = _part(
+            lambda: client.get(f'analysis/callers/{quote(resolved)}'))
+        callees, _ = _part(
+            lambda: client.get(f'analysis/callees/{quote(resolved)}'))
+        xrefs, _ = _part(
+            lambda: client.get('xrefs', params={'to_addr': resolved, 'limit': xref_limit}))
+
+        def _list_of(response):
+            payload = (response or {}).get('result')
+            return payload if isinstance(payload, list) else []
+
+        code = (decompiled or {}).get('result') or {}
+        payload = {
+            "success": True,
+            "result": {
+                "function": function,
+                "decompilation": code.get('decompilation'),
+                "decompileError": code.get('errorMessage') or decompile_error,
+                "callers": _list_of(callers),
+                "callees": _list_of(callees),
+                "xrefs": _list_of(xrefs),
+            }
+        }
+        output = formatter.format_function_analysis(payload)
 
         if should_page(config, ctx.obj['output_json']):
             page_output(output, use_pager=config.page_output)

@@ -1,5 +1,6 @@
 package eu.starsong.ghidra.resource;
 
+import eu.starsong.ghidra.dto.CallPathDto;
 import eu.starsong.ghidra.dto.FunctionSummaryDto;
 import eu.starsong.ghidra.hateoas.Links;
 import eu.starsong.ghidra.hateoas.Paginator;
@@ -36,6 +37,7 @@ public class AnalysisResource implements Resource {
     @Override
     public void register(Javalin app, java.util.function.Function<Context, GhidraContext> contextFactory) {
         app.get("/analysis/callgraph", ctx -> callGraph(contextFactory.apply(ctx)));
+        app.get("/analysis/call-path", ctx -> callPath(contextFactory.apply(ctx)));
         app.get("/analysis/callers/{address}", ctx -> callers(contextFactory.apply(ctx)));
         app.get("/analysis/callees/{address}", ctx -> callees(contextFactory.apply(ctx)));
         app.get("/analysis/status", ctx -> status(contextFactory.apply(ctx)));
@@ -130,6 +132,33 @@ public class AnalysisResource implements Resource {
             .link("function", "/functions/{}", cg.entryPoint())
             .link("callers", "/analysis/callers/{}", cg.entryPoint())
             .link("callees", "/analysis/callees/{}", cg.entryPoint())
+            .build());
+    }
+
+    /**
+     * GET /analysis/call-path - How does A reach B
+     *
+     * <p>The call graph says who calls whom; this says which chain of calls
+     * goes from one function to another.
+     */
+    private void callPath(GhidraContext ctx) {
+        var program = ctx.requireProgram();
+
+        String from = ctx.queryParam("from");
+        String to = ctx.queryParam("to");
+        if (from == null || from.isEmpty() || to == null || to.isEmpty()) {
+            throw new IllegalArgumentException(
+                "Both 'from' and 'to' query parameters are required (an address or a function name)");
+        }
+
+        // `max_depth` is canonical; `depth` accepted for the callgraph's sake.
+        int maxDepth = ctx.queryParamAsInt("max_depth", ctx.queryParamAsInt("depth", 8));
+
+        CallPathDto path = analysisService.callPath(program, from, to, maxDepth);
+
+        ctx.json(Response.ok(ctx.ctx(), ctx.port(), path)
+            .self("/analysis/call-path")
+            .link("program", "/program")
             .build());
     }
 

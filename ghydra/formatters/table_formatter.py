@@ -6,7 +6,7 @@ import sys
 from typing import Any, Dict
 
 from rich import box
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markup import escape
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -14,6 +14,30 @@ from rich.table import Table
 from rich.tree import Tree
 
 from .base import BaseFormatter
+
+
+def _page_total(data: Dict[str, Any]) -> int | None:
+    """How many items there are, when the answer is one page of more.
+
+    A page that is not the whole list has to say so: "Callers (100)" reads
+    as "there are 100" when there are two hundred and fifty.
+    """
+    meta = data.get("meta")
+    if not isinstance(meta, dict):
+        return None
+    total = meta.get("total")
+    if not isinstance(total, int) or total < 0:
+        return None
+    return total
+
+
+def _page_note(data: Dict[str, Any], items: list) -> str:
+    """The note that says the list is one page of a longer one."""
+    total = _page_total(data)
+    if total is None or total <= len(items):
+        return ""
+    return (f"There are {total} in total - this page holds {len(items)}. "
+            f"Ask for the rest with --offset and --limit.")
 
 
 class TableFormatter(BaseFormatter):
@@ -247,6 +271,354 @@ class TableFormatter(BaseFormatter):
             )
 
         return self._capture(table)
+
+    def format_xrefs_by_name(self, data: Dict[str, Any]) -> str:
+        """Format the references to a symbol name."""
+        result = data.get("result", {})
+        if not isinstance(result, dict):
+            return self._capture("[yellow]No references found[/yellow]")
+
+        symbols = result.get("symbols") or []
+        references = result.get("references") or []
+        total = result.get("total", len(references))
+        label = escape(str(result.get("name") or "?"))
+
+        lines = [f"[cyan]References to '{label}'[/cyan] [dim]({len(references)} of {total})[/dim]"]
+
+        for symbol in symbols:
+            if not isinstance(symbol, dict):
+                continue
+            lines.append(f"  [green]{escape(str(symbol.get('name', '?')))}[/green]  "
+                         f"{escape(str(symbol.get('address', '')))}  "
+                         f"[dim]{escape(str(symbol.get('type', '')))}[/dim]")
+
+        if references:
+            table = Table(show_lines=False)
+            table.add_column("From", style="cyan", no_wrap=True)
+            table.add_column("To", style="green", no_wrap=True)
+            table.add_column("Type", style="yellow")
+            table.add_column("From Function", style="dim")
+
+            for xref in references:
+                if not isinstance(xref, dict):
+                    continue
+                from_func = xref.get("fromFunction") or ""
+                if not from_func and isinstance(xref.get("from_function"), dict):
+                    from_func = xref["from_function"].get("name", "")
+                table.add_row(
+                    escape(str(xref.get("fromAddress") or xref.get("from_addr", "?"))),
+                    escape(str(xref.get("toAddress") or xref.get("to_addr", "?"))),
+                    escape(str(xref.get("refType", "?"))),
+                    escape(str(from_func)),
+                )
+
+            lines.append(self._capture(table))
+        else:
+            lines.append("  [dim](no references)[/dim]")
+
+        return self._capture("\n".join(lines))
+
+    def format_batch_decompile(self, data: Dict[str, Any]) -> str:
+        """Format a batch decompilation."""
+        items = data.get("result", [])
+        if not isinstance(items, list) or not items:
+            return self._capture("[yellow]No decompilation results returned[/yellow]")
+
+        done = [i for i in items if isinstance(i, dict) and i.get("success")]
+        failed = [i for i in items if isinstance(i, dict) and not i.get("success")]
+
+        blocks = []
+        for item in done:
+            name = escape(str(item.get("functionName") or item.get("function_name") or "?"))
+            address = escape(str(item.get("functionAddress") or item.get("function_address") or ""))
+            code = (item.get("decompilation") or "").strip()
+            header = f"[cyan]{name}[/cyan]  [dim]{address}[/dim]"
+            if not code:
+                blocks.append(header + "\n[yellow](no code)[/yellow]")
+                continue
+            syntax = Syntax(code, "c", theme="monokai", line_numbers=True, word_wrap=False)
+            blocks.append(Group(header, syntax))
+
+        summary = f"[cyan]Batch decompile[/cyan] [dim]({len(done)} of {len(items)} succeeded)[/dim]"
+        output = self._capture(summary)
+        if blocks:
+            output += "\n" + self._capture(Group(*blocks))
+
+        if failed:
+            rows = []
+            for item in failed:
+                name = escape(str(item.get("functionName") or item.get("function_name") or "?"))
+                reason = escape(str(item.get("errorMessage") or item.get("error_message") or "unknown error"))
+                rows.append(f"  {name}: {reason}")
+            output += "\n" + self._capture("[red]Failed:[/red]\n" + "\n".join(rows))
+
+        return output
+
+    def format_address_context(self, data: Dict[str, Any]) -> str:
+        """Format what an address holds."""
+        result = data.get("result", {})
+        if not isinstance(result, dict):
+            return self._capture("[yellow]No address context returned[/yellow]")
+
+        address = escape(str(result.get("address", "?")))
+        space = escape(str(result.get("addressSpace", "?")))
+        lines = [f"[cyan]Address {address}[/cyan] [dim]({space})[/dim]"]
+
+        symbol = result.get("symbol") or {}
+        if symbol:
+            lines.append(f"  [green]symbol:[/green]   {escape(str(symbol.get('name', '?')))}"
+                         f" [dim]({escape(str(symbol.get('type', '')))})[/dim]")
+
+        function = result.get("function") or {}
+        if function:
+            lines.append(f"  [green]function:[/green] {escape(str(function.get('name', '?')))}"
+                         f"  {escape(str(function.get('address', '')))}")
+            signature = function.get("signature")
+            if signature:
+                lines.append(f"               [dim]{escape(str(signature))}[/dim]")
+
+        instruction = result.get("instruction") or {}
+        if instruction:
+            lines.append(f"  [green]code:[/green]     {escape(str(instruction.get('address', '')))}"
+                         f"  {escape(str(instruction.get('bytes', '')))}"
+                         f"  {escape(str(instruction.get('mnemonic', '')))}"
+                         f"  {escape(str(instruction.get('operands', '')))}")
+
+        data_item = result.get("data") or {}
+        if data_item:
+            label = escape(str(data_item.get("label") or ""))
+            lines.append(f"  [green]data:[/green]     {escape(str(data_item.get('dataType', '?')))}"
+                         f"  [dim]len={escape(str(data_item.get('length', '?')))}[/dim]  {label}")
+
+        comment = result.get("comment")
+        if comment:
+            lines.append(f"  [green]comment:[/green]  {escape(str(comment))}")
+
+        eol_comment = result.get("eolComment")
+        if eol_comment:
+            lines.append(f"  [green]eol:[/green]      {escape(str(eol_comment))}")
+
+        xrefs_to = result.get("xrefsTo") or []
+        xrefs_from = result.get("xrefsFrom") or []
+
+        lines.append(f"  [green]referenced by[/green] [dim]({len(xrefs_to)})[/dim]")
+        for xref in xrefs_to:
+            if isinstance(xref, dict):
+                lines.append("    " + self._xref_line(xref))
+
+        lines.append(f"  [green]references[/green]     [dim]({len(xrefs_from)})[/dim]")
+        for xref in xrefs_from:
+            if isinstance(xref, dict):
+                lines.append("    " + self._xref_line(xref))
+
+        return self._capture("\n".join(lines))
+
+    def _xref_line(self, xref: Dict[str, Any]) -> str:
+        """One cross-reference, as a line of text."""
+        from_addr = escape(str(xref.get("fromAddress") or xref.get("from_addr", "?")))
+        to_addr = escape(str(xref.get("toAddress") or xref.get("to_addr", "")))
+        ref_type = escape(str(xref.get("refType", "?")))
+        from_func = xref.get("fromFunction") or ""
+        if isinstance(from_func, dict):
+            from_func = from_func.get("name", "")
+
+        line = f"{from_addr}"
+        if to_addr:
+            line += f" -> {to_addr}"
+        line += f"  {ref_type}"
+        if from_func:
+            line += f"  [dim]from {escape(str(from_func))}[/dim]"
+        return line
+
+    def format_call_path(self, data: Dict[str, Any]) -> str:
+        """Format a call path."""
+        result = data.get("result", {})
+        if not isinstance(result, dict):
+            return self._capture("[yellow]No call path returned[/yellow]")
+
+        source = result.get("from") or {}
+        target = result.get("to") or {}
+        source_name = escape(str(source.get("name", "?")))
+        target_name = escape(str(target.get("name", "?")))
+
+        if not result.get("found"):
+            reason = escape(str(result.get("reason") or "no path found"))
+            return self._capture(f"[yellow]No call path from {source_name} to {target_name}:[/yellow] {reason}")
+
+        path = result.get("path") or []
+        lines = [f"[cyan]Call path from {source_name} to {target_name}[/cyan] "
+                 f"[dim]({result.get('depth', '?')} hop(s), "
+                 f"{result.get('visited', '?')} function(s) explored)[/dim]"]
+
+        for index, fn in enumerate(path):
+            if not isinstance(fn, dict):
+                continue
+            name = escape(str(fn.get("name", "?")))
+            address = escape(str(fn.get("address", "")))
+            prefix = "  " if index == 0 else "[green]->[/green] "
+            lines.append(f"  {prefix}{name}  [dim]{address}[/dim]")
+
+        return self._capture("\n".join(lines))
+
+    def format_callers(self, data: Dict[str, Any]) -> str:
+        """Format the callers of a function as a table."""
+        items = data.get("result", [])
+        if not isinstance(items, list) or not items:
+            return self._capture("[yellow]Nobody calls it[/yellow]")
+
+        title = f"Callers ({len(items)})"
+        total = _page_total(data)
+        if total is not None and total > len(items):
+            title += f" of {total}"
+
+        table = Table(title=title, show_lines=False)
+        table.add_column("Name", style="green")
+        table.add_column("Address", style="cyan", no_wrap=True)
+        table.add_column("Signature", style="yellow", overflow="fold")
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            table.add_row(
+                escape(str(item.get("name", "?"))),
+                escape(str(item.get("address", "?"))),
+                escape(str(item.get("signature", ""))),
+            )
+
+        note = _page_note(data, items)
+        if note:
+            return self._capture(Group(table, note))
+
+        return self._capture(table)
+
+    def format_callees(self, data: Dict[str, Any]) -> str:
+        """Format the callees of a function as a table."""
+        items = data.get("result", [])
+        if not isinstance(items, list) or not items:
+            return self._capture("[yellow]It calls nothing[/yellow]")
+
+        title = f"Callees ({len(items)})"
+        total = _page_total(data)
+        if total is not None and total > len(items):
+            title += f" of {total}"
+
+        table = Table(title=title, show_lines=False)
+        table.add_column("Name", style="green")
+        table.add_column("Address", style="cyan", no_wrap=True)
+        table.add_column("Signature", style="yellow", overflow="fold")
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            table.add_row(
+                escape(str(item.get("name", "?"))),
+                escape(str(item.get("address", "?"))),
+                escape(str(item.get("signature", ""))),
+            )
+
+        note = _page_note(data, items)
+        if note:
+            return self._capture(Group(table, note))
+
+        return self._capture(table)
+
+    def format_function_analysis(self, data: Dict[str, Any]) -> str:
+        """Format everything known about one function."""
+        result = data.get("result", {})
+        if not isinstance(result, dict):
+            return self._capture("[yellow]Nothing to analyse[/yellow]")
+
+        function = result.get("function") or {}
+        lines = [f"[cyan]{escape(str(function.get('name', '?')))}[/cyan]  "
+                 f"[dim]{escape(str(function.get('address', '')))}[/dim]"]
+
+        signature = function.get("signature")
+        if signature:
+            lines.append(f"  [dim]{escape(str(signature))}[/dim]")
+
+        code = result.get("decompilation")
+        syntax = None
+        if code:
+            syntax = Syntax(str(code).strip(), "c", theme="monokai",
+                            line_numbers=True, word_wrap=False)
+        else:
+            reason = result.get("decompileError")
+            lines.append("")
+            lines.append(f"[yellow](no decompilation{f': {escape(str(reason))}' if reason else ''})[/yellow]")
+
+        for label, key in (("Callers", "callers"), ("Callees", "callees"), ("References", "xrefs")):
+            items = result.get(key) or []
+            lines.append("")
+            lines.append(f"[green]{label}[/green] [dim]({len(items)})[/dim]")
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if key == "xrefs":
+                    lines.append("    " + self._xref_line(item))
+                else:
+                    lines.append(f"    {escape(str(item.get('name', '?')))}"
+                                 f"  [dim]{escape(str(item.get('address', '')))}[/dim]")
+
+        # The relations are part of the answer even when the decompilation
+        # worked, so the code is rendered after them and not instead of them.
+        if syntax is not None:
+            return self._capture(Group("\n".join(lines), syntax))
+
+        return self._capture("\n".join(lines))
+
+    def format_overview(self, data: Dict[str, Any]) -> str:
+        """Format the overview of the loaded binary."""
+        result = data.get("result", {})
+        if not isinstance(result, dict):
+            return self._capture("[yellow]No overview available[/yellow]")
+
+        program = result.get("program") or {}
+        statistics = result.get("statistics") or {}
+
+        lines = [f"[cyan]{escape(str(program.get('name', '?')))}[/cyan]"]
+        if program.get("path"):
+            lines.append(f"  path:     {escape(str(program['path']))}")
+        lines.append(f"  language: {escape(str(program.get('language', '?')))}")
+        lines.append(f"  base:     {escape(str(program.get('imageBase', '?')))}")
+
+        counts = []
+        for label, key in (("functions", "functions"), ("symbols", "symbols"),
+                           ("imports", "imports"), ("blocks", "memoryBlocks")):
+            value = statistics.get(key)
+            if value is not None:
+                counts.append(f"{value} {label}")
+        if counts:
+            lines.append(f"  holds:    {escape(', '.join(counts))}")
+
+        segments = result.get("segments") or []
+        if segments:
+            table = Table(title=f"Segments ({len(segments)})", show_lines=False)
+            table.add_column("Name", style="green", no_wrap=True)
+            table.add_column("Start", style="cyan", no_wrap=True)
+            table.add_column("End", style="cyan", no_wrap=True)
+            table.add_column("Size", style="yellow", justify="right")
+
+            for segment in segments:
+                if not isinstance(segment, dict):
+                    continue
+                table.add_row(
+                    escape(str(segment.get("name", "?"))),
+                    escape(str(segment.get("start", "?"))),
+                    escape(str(segment.get("end", "?"))),
+                    escape(str(segment.get("size", "?"))),
+                )
+            lines.append("")
+            lines.append(self._capture(table))
+
+        imports = result.get("imports") or []
+        if imports:
+            lines.append("")
+            lines.append(f"[green]Imports[/green] [dim]({len(imports)})[/dim]")
+            for item in imports:
+                if isinstance(item, dict):
+                    lines.append(f"  {escape(str(item.get('name', '?')))}")
+
+        return self._capture("\n".join(lines))
 
     def format_scalars(self, data: Dict[str, Any]) -> str:
         """Format scalar search results as table."""

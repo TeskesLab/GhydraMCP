@@ -58,6 +58,38 @@ class JSONFormatter(BaseFormatter):
         """Format xrefs as JSON."""
         return self._format_json(data)
 
+    def format_xrefs_by_name(self, data: Dict[str, Any]) -> str:
+        """Format the references to a symbol name as JSON."""
+        return self._format_json(data)
+
+    def format_batch_decompile(self, data: Dict[str, Any]) -> str:
+        """Format a batch decompilation as JSON."""
+        return self._format_json(data)
+
+    def format_address_context(self, data: Dict[str, Any]) -> str:
+        """Format what an address holds as JSON."""
+        return self._format_json(data)
+
+    def format_call_path(self, data: Dict[str, Any]) -> str:
+        """Format a call path as JSON."""
+        return self._format_json(data)
+
+    def format_callers(self, data: Dict[str, Any]) -> str:
+        """Format the callers of a function as JSON."""
+        return self._format_json(data)
+
+    def format_callees(self, data: Dict[str, Any]) -> str:
+        """Format the callees of a function as JSON."""
+        return self._format_json(data)
+
+    def format_function_analysis(self, data: Dict[str, Any]) -> str:
+        """Format everything known about one function as JSON."""
+        return self._format_json(data)
+
+    def format_overview(self, data: Dict[str, Any]) -> str:
+        """Format the overview of the loaded binary as JSON."""
+        return self._format_json(data)
+
     def format_scalars(self, data: Dict[str, Any]) -> str:
         """Format scalar search results as JSON."""
         return self._format_json(data)

@@ -107,6 +107,7 @@ from . import (
     x64dbg,
     headless,
     report,
+    inspect_address,
 )
 
 cli.add_command(instances.instances)
@@ -132,6 +133,7 @@ cli.add_command(kuna.kuna)
 cli.add_command(x64dbg.x64dbg)
 cli.add_command(headless.headless)
 cli.add_command(report.report)
+cli.add_command(inspect_address.inspect_address)
 
 
 @cli.command('version')

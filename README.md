@@ -19,11 +19,11 @@ Three surfaces, one assistant:
 
 | | What it is | What it gives the assistant |
 | --- | --- | --- |
-| **Ghidra** | The plugin, inside the CodeBrowser | 72 tools over the program: functions, data, structures, xrefs, the CFG, the decompiler |
+| **Ghidra** | The plugin, inside the CodeBrowser | 80 tools over the program: functions, data, structures, xrefs, the CFG, the decompiler |
 | **x64dbg** | A plugin that lives inside the debugger | The debugger's own 80 tools over the live process: registers, memory, breakpoints, stepping |
 | **Kuna** | A separate decompiler CLI | A second opinion on the same binary, and the recovered C as MCP resources |
 
-The bridge exposes **91 tools** in total: the 72 above, 6 over x64dbg (the pass-through that reaches
+The bridge exposes **99 tools** in total: the 80 above, 6 over x64dbg (the pass-through that reaches
 the debugger's own 80), and 13 for the Kuna exports.
 
 The two debugger sides share one model of addresses, so a static address from Ghidra can be turned
@@ -63,6 +63,40 @@ GhydraMCP started as a fork of [GhidraMCP by Laurie Wired](https://github.com/La
 
 ## What's new
 
+### Where this stands against the REA
+
+The REA's tool catalogue was read off its own server, not off a document: 139 tools in the
+installed version. The comparison, by capability, is in [REA_PARITY.md](REA_PARITY.md) — what is
+covered, what is not, and the four native gaps worth closing.
+
+**Those four are closed now**, each on the three surfaces at once:
+
+| What an agent asks | REST API | Bridge tool | CLI |
+| --- | --- | --- | --- |
+| decompile a list of functions | `POST /functions/decompile-batch` | `functions_batch_decompile` | `ghydra functions decompile-batch --targets '["main","0x401000"]'` |
+| what refers to this *name* | `GET /xrefs/to-name/{name}` | `xrefs_find_by_name` | `ghydra xrefs find-by-name strlen` |
+| what is at this address | `GET /inspect/address/{address}` | `inspect_address` | `ghydra inspect-address 0x140001008` |
+| how does A reach B | `GET /analysis/call-path?from=&to=` | `analysis_trace_call_path` | `ghydra analysis trace-call-path --from main --to strcmp` |
+
+A batch reports each target separately — one name that resolves to nothing does not cost the other
+nine. An address answer holds the symbol, the containing function, the data, the instruction, both
+comments and the references on both sides, gathered in one traversal. A call path is the shortest
+one Ghidra knows about, and when there is none it says how many functions it looked at.
+
+Four more came out of the same comparison — the composed calls the REA has:
+
+| What an agent asks | Bridge tool | CLI |
+| --- | --- | --- |
+| who calls this function | `analysis_callers` | `ghydra analysis callers 0x401000` |
+| what does this function call | `analysis_callees` | `ghydra analysis callees 0x401000` |
+| everything about this function | `functions_analyze` | `ghydra functions analyze --address 0x401000` |
+| what is this binary | `programs_overview` | `ghydra analysis overview` |
+
+The first two were already in the REST API since 3.0.0 — the bridge and the CLI simply never
+exposed them. The other two are compositions of what was already there: one call that gathers the
+function, its decompilation, its callers, its callees and its references, and one that gathers the
+program, its layout, its counts and its imports.
+
 ### The headless GhydraMCP
 
 The API can run without a window. `ghydra headless start <binary>` imports and analyses the binary
@@ -71,8 +105,6 @@ same decompiler service, the same middleware. `ghydra report build <binary>` put
 side by side in one report and writes the annotations for the debugger, so a human opens it and
 finds the interesting functions already marked. Full reference:
 [GHYDRA_HEADLESS.md](GHYDRA_HEADLESS.md).
-
-
 
 ### The x64dbg integration
 
@@ -195,8 +227,6 @@ run. There is no cursor without a window. Every other endpoint behaves the same 
 
 The debugger is a different matter: the x64dbg plugin drives it without a human, but the debugger
 is a program with a window, and there is no build of it that runs without one.
-
-
 
 # The x64dbg integration
 
@@ -610,15 +640,15 @@ Any MCP client works. The bridge is a stdio server:
 }
 ```
 
-The bridge exposes **91 tools in 23 namespaces**. The namespaces are:
+The bridge exposes **99 tools in 24 namespaces**. The namespaces are:
 
 `analysis_*` · `classes_*` · `comments_*` · `data_*` · `datatypes_*` · `functions_*` ·
-`instances_*` · `kuna_*` · `memory_*` · `namespaces_*` · `programs_*` · `project_*` ·
-`projects_*` · `raw_image_*` · `scalars_*` · `scripts_*` · `segments_*` · `structs_*` ·
-`symbols_*` · `ui_*` · `variables_*` · `x64dbg_*` · `xrefs_*`
+`inspect_*` · `instances_*` · `kuna_*` · `memory_*` · `namespaces_*` · `programs_*` ·
+`project_*` · `projects_*` · `raw_image_*` · `scalars_*` · `scripts_*` · `segments_*` ·
+`structs_*` · `symbols_*` · `ui_*` · `variables_*` · `x64dbg_*` · `xrefs_*`
 
 The MCP client setup for Claude Desktop, Claude Code, Cline and 5ire is in
-[Client Setup](#client-setup) below.
+[Client Setup](#client-setup) below, with detailed configuration instructions for each client.
 
 ## API Reference
 

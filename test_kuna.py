@@ -14,6 +14,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -24,6 +25,25 @@ import bridge_mcp_hydra as bridge
 from ghydra import kuna as kuna_helper
 from ghydra.cli import kuna as kuna_cli
 from ghydra.config.config_manager import ConfigManager
+
+
+def wait_for_kuna_export_watchers(timeout: float = 10.0) -> None:
+    """Wait for the export watchers to finish.
+
+    The bridge watches the export process in a daemon thread, and when the
+    process ends that thread writes the sidecar into the work directory. A
+    test that removes the directory while the thread is still running races
+    with it: the directory is not empty when the cleanup walks it, and the
+    suite fails on a filesystem race rather than on the code.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with bridge._kuna_jobs_lock:
+            running = [job for job in bridge._kuna_jobs.values()
+                       if job.get("status") == "running"]
+        if not running:
+            return
+        time.sleep(0.01)
 
 
 KUNA_TOOL_NAMES = [
@@ -435,6 +455,10 @@ class KunaExportAddressingTests(unittest.TestCase):
         for patcher in patches:
             patcher.start()
             self.addCleanup(patcher.stop)
+
+        # Registered last, so it runs first: the watcher thread must be done
+        # with the work directory before the temporary directory goes.
+        self.addCleanup(wait_for_kuna_export_watchers)
 
         # A binary to export, and the export that belongs to it.
         self.binary = os.path.join(self.tmp.name, "target.bin")

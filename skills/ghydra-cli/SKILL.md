@@ -115,6 +115,7 @@ ghydra memory write --address ADDR --bytes-data "4883EC10"  # Write bytes
 ghydra xrefs to ADDR                           # Who calls/refs this address
 ghydra xrefs from ADDR                         # What does this address call/ref
 ghydra xrefs list --to-addr ADDR --type CALL   # Filter by type
+ghydra xrefs find-by-name NAME                 # Who refers to this name (resolved for you)
 ```
 
 ### Analysis
@@ -124,6 +125,22 @@ ghydra analysis status                         # Check analysis status
 ghydra analysis run                            # Trigger analysis
 ghydra analysis get-callgraph --name main --max-depth 5  # Call graph
 ghydra analysis get-dataflow --address ADDR --direction backward  # Data flow
+ghydra analysis trace-call-path --from main --to strcmp  # How A reaches B
+```
+
+### One answer per question
+
+Eight commands that answer in one call what used to take several:
+
+```bash
+ghydra functions decompile-batch --targets '["main","0x401000"]'  # A list of functions
+ghydra xrefs find-by-name NAME                 # The references to a name
+ghydra inspect-address ADDR                    # What is at this address, all of it
+ghydra analysis trace-call-path --from A --to B  # How A reaches B
+ghydra analysis callers ADDR                   # Who calls this function
+ghydra analysis callees ADDR                   # What this function calls
+ghydra functions analyze --address ADDR        # Everything about one function
+ghydra analysis overview                       # What this binary is
 ```
 
 ### Symbols, Segments, Namespaces

@@ -15,10 +15,10 @@ decompilation, annotation, and data manipulation.
   subsequent instances walk up to `MAX_PORT_ATTEMPTS` = 256 ports (8192–8447).
 - The bridge auto-discovers instances on startup and on a daemon timer, but `QUICK_DISCOVERY_RANGE`
   only scans **8192–8201**. Instances above 8202 need `instances_register` / the CLI.
-- 91 MCP tools in 23 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
-  `functions_*`, `instances_*`, `kuna_*`, `memory_*`, `namespaces_*`, `programs_*`, `project_*`,
-  `projects_*`, `raw_image_*`, `scalars_*`, `scripts_*`, `segments_*`, `structs_*`, `symbols_*`,
-  `ui_*`, `variables_*`, `x64dbg_*`, `xrefs_*`.
+- 99 MCP tools in 24 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
+  `functions_*`, `inspect_*`, `instances_*`, `kuna_*`, `memory_*`, `namespaces_*`, `programs_*`,
+  `project_*`, `projects_*`, `raw_image_*`, `scalars_*`, `scripts_*`, `segments_*`, `structs_*`,
+  `symbols_*`, `ui_*`, `variables_*`, `x64dbg_*`, `xrefs_*`.
 - v3.0.0 migrated `HttpServer` → **Javalin** with service/DTO/resource layering. `API_VERSION` is
   **3000** (breaking: fully-qualified names everywhere).
 - The `kuna_*` namespace is **local**: it drives the Kuna decompiler CLI as a subprocess, so it
@@ -27,7 +27,7 @@ decompilation, annotation, and data manipulation.
 ## Layout
 
 ```
-bridge_mcp_hydra.py              # ALL MCP tools + formatters live here (4400+ lines)
+bridge_mcp_hydra.py              # ALL MCP tools + formatters live here (8300+ lines)
 ghydra/                          # standalone Click CLI — does NOT import the bridge
   kuna.py                        # Kuna CLI driver (local, opt-in)
   cli/ client/ config/ formatters/ utils/
@@ -96,7 +96,8 @@ src/test/ghidra -postScript MeasurePerf`) and prints a `RESULT` line per measure
   entity in the program and paginate afterwards: on a binary with 29 587 symbols that
   was 400 ms of DTO work for a 100-item page, against 87 ms when only the page is
   converted (`util/PagedCollector.java`). The response contract is unchanged — `result`
-  is the page, `meta.total` the count.
+  is the page, `meta.total` the count. The references to a *name* are the same case: the
+  count comes from the references themselves, and only the ones of the page become DTOs.
 - **Only skip the counting scan where the native count matches.** `getNumDefinedData()`
   agrees with what `getDefinedData()` yields, so the data listing stops walking as soon
   as the page is full. `getNumSymbols()` (28 993) and `getFunctionCount()` (4 444) do
@@ -240,6 +241,7 @@ SemVer: patch for fixes, minor for features, major for breaking.
 ```bash
 python run_tests.py                      # all suites
 python run_tests.py --http --mcp --data --comments --port --kuna --x64dbg   # or any subset
+python run_tests.py --rea                # the four gaps closed against the REA
 ```
 
 **Every suite skips itself when Ghidra isn't running** (`setUp` → `skipTest("Ghidra not running")`).
@@ -255,6 +257,13 @@ the export readers.
 x64dbg, because it starts a fake plugin that answers like the real one (JSON-RPC over HTTP, a
 bearer token, the tool catalogue with `annotations.readOnlyHint`). It covers the client, the
 config precedence, the address model, the bridge tools and the error taxonomy.
+
+**`--rea` is half of each**: `test_rea_parity.py` splits the contract (the tools are registered, each
+one has a formatter, the CLI has the command, the list of targets is read in every shape — none of
+which needs a Ghidra) from the live half (the API and the bridge over the wire — which does). A skip
+there is usually a stale premise rather than an absence: the suite looks for a caller/callee pair by
+the `CALL` family of reference types, and Ghidra calls them `UNCONDITIONAL_CALL`,
+`CALL_OVERRIDE` and `CALL_INDIRECT`.
 
 **The x64dbg suite is not immune to the network stack.** A local TCP connection is reset every
 now and then on this machine (measured: 7%), so a suite that opens dozens of connections will
@@ -623,6 +632,73 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
   A headless run has no plugin - so what it registers is the map, and the file, the project,
   the executable, the architecture and the image base are there for the clients that pick an
   instance.
+
+## The four gaps closed against the REA
+
+`REA_PARITY.md` compared this project with the REA (139 tools in `rea-agents` 6.0.0) and named four
+gaps that were native and cheap. All four are closed, on the three surfaces at once, and
+`test_rea_parity.py` is what proves they agree:
+
+| REA | REST API | Bridge tool | CLI |
+| --- | --- | --- | --- |
+| `batch_decompile` | `POST /functions/decompile-batch` | `functions_batch_decompile` | `ghydra functions decompile-batch --targets '["main"]'` |
+| `find_xrefs_to_name` | `GET /xrefs/to-name/{name}` | `xrefs_find_by_name` | `ghydra xrefs find-by-name strlen` |
+| `inspect_address_context` | `GET /inspect/address/{address}` | `inspect_address` | `ghydra inspect-address 0x140001008` |
+| `trace_call_path` | `GET /analysis/call-path?from=&to=` | `analysis_trace_call_path` | `ghydra analysis trace-call-path --from main --to strcmp` |
+
+- **A batch reports each target separately.** A target that resolves to nothing comes back as a failed
+  entry with the reason, and the other targets are still decompiled: a triage pass wants to know which
+  ones were wrong, not lose the nine that were right. The server caps a batch at 200 targets.
+- **The list of targets is text.** `functions_batch_decompile` declares `targets` as a `str` (JSON text),
+  because a client that hands over a nested list flattens it - every value arrives as a string. The
+  schema asks for the form that survives the client, and the parser reads a JSON array, a bare name or
+  a comma-separated list.
+- **The deadline of a batch covers the batch.** The server runs the targets one after the other and
+  each of them may take the whole timeout, so the transport deadline is the timeout times the number
+  of targets the server accepts (200). The timeout of a batch travels in the body and not in the
+  query, so a deadline derived from the query alone is one function long - and the bridge answers
+  `REQUEST_TIMEOUT` while the server is still decompiling the targets that are left.
+- **A name is a name.** `xrefs_find_by_name` resolves the name to the symbols that carry it (a bare name
+  matches every namespace, a qualified one matches that namespace) and returns the references to them.
+  A name that resolves to nothing is a 404 with `SYMBOL_NOT_FOUND`, not an empty list. The page is cut
+  before the DTOs are built: each reference resolves the functions on both of its sides, so a hot
+  symbol would make every page pay for the references it does not return.
+- **The address context is one traversal.** `inspect_address` gathers the symbol, the containing
+  function, the data, the instruction, both comments and the references on both sides inside a single
+  `GhidraSwing.runRead`, so the answer is consistent and the agent pays one round trip.
+- **The call path is the shortest one.** `analysis_trace_call_path` is a breadth-first walk over the
+  call edges, bounded by the depth limit (16 at most) and by a cap on the functions it visits. When
+  there is no path it says how many functions it explored and why it gave up - it never says "not
+  found" without saying what it looked at. The path is rebuilt from the last hop back to the source,
+  and every link of it is a node of the path: the function in the middle is not dropped, and the
+  source is not put in twice. When the cap of visited functions cut the search short, the reason
+  says so - a path beyond the cap was not looked for, and "there is none" is not the same answer.
+
+## The composed calls
+
+Four more that the REA has and this project did not, closed the same way: one tool, one command,
+one formatter each. None of them needed a new endpoint - they compose what was already there.
+
+| REA | Bridge tool | CLI | What it composes |
+| --- | --- | --- | --- |
+| `procedure_callers` | `analysis_callers` | `ghydra analysis callers ADDR` | `GET /analysis/callers/{address}` |
+| `procedure_callees` | `analysis_callees` | `ghydra analysis callees ADDR` | `GET /analysis/callees/{address}` |
+| `analyze_function` | `functions_analyze` | `ghydra functions analyze --address ADDR` | the function, its decompilation, its callers, its callees and its references |
+| `binary_overview` | `programs_overview` | `ghydra analysis overview` | the program, its segments, its counts and its imports |
+
+**The callers and the callees existed in the API and in neither of the other two surfaces.** The
+endpoints were there since v3.0.0; the bridge and the CLI simply never exposed them, which is the
+kind of gap that only a real comparison finds.
+
+**A page that is not the whole list says so.** The callers and the callees take an `offset` and a
+`limit`, and the text of the answer says how many there are in total when the page holds fewer - a
+list of 100 that reads as "there are 100" when there are 136 is a lie an agent cannot see.
+
+**A composed answer must not hide a failure.** `functions_analyze` and `programs_overview` gather
+several answers into one, and a part that failed is reported as empty rather than as the whole
+thing having failed. The one part that decides the success is the one the caller asked for: the
+function, and the program. The CLI follows the same rule: a caller, a callee or a reference that
+fails does not throw away the function that was found and the decompilation that came with it.
 
 ## Ghidra API gotchas
 
