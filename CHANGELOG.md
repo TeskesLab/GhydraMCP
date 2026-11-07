@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-11-07
+
 ### Fixed
 - **Ad-hoc Python 3 execution via PyGhidra**: the v3.0.0 merge that removed
   `/script/execute` left `ScriptService.runSource` writing only `.java` files and
@@ -18,9 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a missing provider names the `pyghidraRun` remedy. Java support and the existing
   execution opt-in are unchanged. `skills/ghydra-cli/SKILL.md` no longer teaches the
   removed `script execute` / `script capabilities` commands.
-- **Python script failures:** capture the script error writer as well as stdout.
-  PyGhidra versions that print uncaught exceptions instead of throwing them now
-  return a failed result with the traceback and keep output produced before failure.
+- **Python script failures on Ghidra 12+:** capture the script error writer as well
+  as stdout. PyGhidra versions that print uncaught exceptions instead of throwing
+  them now return a failed result with the traceback and keep partial output.
+  Ghidra 11 retains its legacy execution API and console-only capture limitations.
 - **The script tools lost their output**: `scripts_list` and `scripts_run` had no
   `@text_output` and no `FORMATTERS` entry, so the script catalogue and the captured
   `output` degraded to a bare `"Done"`. Both are formatted now, and `scripts_run`'s
@@ -28,6 +31,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Java ad-hoc compatibility:** Java sources remain at the script root because
   Ghidra interprets a subdirectory as a package. Existing Java sources are refused
   atomically rather than overwritten or deleted; Python uses isolated directories.
+
+Automated by MisterMal
 
 ## [3.1.0] - 2026-11-06
 
@@ -353,7 +358,8 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 - Initial project setup
 - Basic MCP bridge functionality
 
-[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v3.1.0...HEAD
+[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v3.1.1...HEAD
+[3.1.1]: https://github.com/TeskesLab/GhydraMCP/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/TeskesLab/GhydraMCP/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/TeskesLab/GhydraMCP/compare/v2.4.1...v3.0.0
 [3.0.0-rc.1]: https://github.com/starsong-consulting/GhydraMCP/compare/v3.0.0-beta...v3.0.0-rc.1
