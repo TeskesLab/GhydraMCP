@@ -20,6 +20,10 @@ class GhidraConfig:
         kuna_enabled: Enable the Kuna decompiler integration; None means the
             environment decides
         kuna_path: Path to the kuna executable
+        ghidra_home: Path of the Ghidra installation; empty means it is
+            looked for
+        java_home: Path of the JDK Ghidra runs on; empty means it is looked
+            for
         x64dbg_host: Where the x64dbg MCP server is; empty means the default
         x64dbg_port: The port of the x64dbg MCP server; 0 means the default
         x64dbg_token: The bearer token the x64dbg plugin wants
@@ -35,6 +39,8 @@ class GhidraConfig:
     max_pagination: int = 100
     kuna_enabled: Optional[bool] = None
     kuna_path: str = ""
+    ghidra_home: str = ""
+    java_home: str = ""
     x64dbg_host: str = ""
     x64dbg_port: int = 0
     x64dbg_token: str = ""

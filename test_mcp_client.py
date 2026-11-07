@@ -107,6 +107,24 @@ async def test_bridge():
             use_instance_result = await session.call_tool("instances_use", arguments={"port": GHYDRAMCP_TEST_PORT})
             logger.info(f"Use instance result: {use_instance_result}")
 
+            # The resources carry a scheme. A relative URI is refused by the
+            # protocol - the URI of a read is a URL - so a resource nobody
+            # can name is a resource nobody can read.
+            logger.info("Listing the resource templates...")
+            templates = await session.list_resource_templates()
+            uris = {t.uriTemplate for t in templates.resourceTemplates}
+            for expected in (
+                "ghidra://instance/{port}",
+                "ghidra://instance/{port}/function/decompile/address/{address}",
+                "ghidra://instance/{port}/function/decompile/name/{name}",
+                "ghidra://instance/{port}/function/info/address/{address}",
+                "ghidra://instance/{port}/function/info/name/{name}",
+                "ghidra://instance/{port}/function/disassembly/address/{address}",
+                "ghidra://instance/{port}/function/disassembly/name/{name}",
+            ):
+                assert expected in uris, f"Missing the resource template {expected}"
+            logger.info(f"Resource templates: {sorted(uris)}")
+
             # Call the functions_list tool (no port needed now)
             logger.info("Calling functions_list tool...")
             list_functions_result = await session.call_tool(
@@ -162,6 +180,20 @@ async def test_bridge():
                 except (AssertionError, IndexError, TypeError) as e:
                      logger.warning(f"Error processing functions_list data: {e} - skipping mutating tests")
                      return
+
+                # And the resources are read: the disassembly resource used
+                # to answer "could not extract" for a response that carried
+                # the listing.
+                for uri in (
+                    f"ghidra://instance/{GHYDRAMCP_TEST_PORT}/function/disassembly/address/{func_address}",
+                    f"ghidra://instance/{GHYDRAMCP_TEST_PORT}/function/decompile/address/{func_address}",
+                ):
+                    read = await session.read_resource(uri)
+                    text = read.contents[0].text
+                    assert "could not extract" not in text.lower(), \
+                        f"The resource {uri} could not read its own answer: {text[:200]}"
+                    assert text.strip(), f"The resource {uri} answered with nothing"
+                logger.info("The instance resources answer.")
 
                 # Test function renaming using functions_rename
                 original_name = func_name
@@ -249,8 +281,14 @@ async def test_bridge():
                     for field in ("address", "mnemonic"):
                         assert field in first, f"An instruction has no {field}: {first}"
                     assert isinstance(first["address"], str), "The instruction address should be a string"
-                if isinstance(result, dict) and "address" in result:
-                    assert isinstance(result["address"], str), "function address should be a string"
+                    assert isinstance(first["mnemonic"], str), "The mnemonic should be a string"
+
+                # Check additional function info if present
+                if isinstance(result, dict):
+                    if "name" in result:
+                        assert isinstance(result["name"], str), "function name should be a string"
+                    if "address" in result:
+                        assert isinstance(result["address"], str), "function address should be a string"
 
                 logger.info(f"Disassemble function result: {disassemble_result}")
 
@@ -391,8 +429,8 @@ async def test_bridge():
                 # Test data operations (create, rename, change type, delete) using namespaced tools
                 logger.info("Testing data operations...")
                 # The address has to be one where a data item fits: a fixed
-                # address answers with TRANSACTION_FAILED on a program whose
-                # image base is somewhere else.
+                # address from an older API answers with TRANSACTION_FAILED
+                # on a program whose image base is somewhere else.
                 free_addresses = free_data_addresses(BASE_URL, count=4)
                 data_address = free_addresses[0] if free_addresses else None
                 if not data_address:

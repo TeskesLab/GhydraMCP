@@ -111,11 +111,10 @@ public class ScriptService {
             }
             ProgramLocation location =
                 program != null ? new ProgramLocation(program, program.getMinAddress()) : null;
-            // The project comes from the tool when there is one, and from
-            // the context when there is not: a headless instance has no
-            // tool, but it does have the project the analysed program
-            // belongs to, and a script that asks for the current project
-            // needs it.
+            // The project comes from the tool when there is one, and from the
+            // context when there is not: a headless instance has no tool, but
+            // it does have the project the analysed program belongs to, and a
+            // script that asks for the current project needs it.
             Project effective = project != null ? project : (tool != null ? tool.getProject() : null);
             GhidraState state = new GhidraState(
                 tool, effective, program, location, null, null);

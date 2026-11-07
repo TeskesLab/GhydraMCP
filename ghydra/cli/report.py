@@ -8,6 +8,7 @@ import os
 
 import click
 
+from ..progress import Progress
 from ..report import ReportError, ReportRequest, build_report, write_report
 from ..utils import rich_echo
 
@@ -23,6 +24,9 @@ def report():
 
         # Without the debugger annotations
         ghydra report build C:\\bin\\cmd.exe --no-annotations
+
+        # The report, and then put the annotations into the debugger
+        ghydra report build C:\\bin\\cmd.exe --annotate
     """
     pass
 
@@ -71,14 +75,22 @@ def target_endpoint(ctx, host=None, port=None):
               help="How many functions to decompile (default: 12)")
 @click.option('--max-annotations', type=int, default=60,
               help="How many annotations to prepare (default: 60)")
+@click.option('--annotate', is_flag=True,
+              help="Put the annotations into the debugger when the report is done")
+@click.option('--bookmarks', is_flag=True,
+              help="Also set a bookmark at every address (with --annotate)")
+@click.option('--mode', type=click.Choice(['Comment', 'Label']), default='Comment',
+              help="What to put at the address (default: Comment)")
 @click.pass_context
 def build(ctx, binary, output, host, port, ghidra_home, java_home, timeout,
           no_kuna, no_headless, keep, max_functions, max_strings,
-          max_decompile, max_annotations):
+          max_decompile, max_annotations, annotate, bookmarks, mode):
     """Build the report on BINARY.
 
     The report is written as three files: the Markdown one to read, the JSON
-    one to read with a program, and the annotations for the debugger.
+    one to read with a program, and the annotations for the debugger. It
+    says what Ghidra found, what Kuna found, and what one of them saw and
+    the other did not.
 
     \b
     Example:
@@ -105,12 +117,18 @@ def build(ctx, binary, output, host, port, ghidra_home, java_home, timeout,
         max_annotations=max_annotations,
     )
 
+    progress = Progress(enabled=not ctx.obj.get('output_json', False))
     try:
-        data = build_report(request)
-        paths = write_report(data, output)
+        data = build_report(request, progress=progress)
+        with progress.step("writing the report"):
+            paths = write_report(data, output)
     except ReportError as exc:
         rich_echo(formatter.format_error(exc), err=True)
         ctx.exit(1)
+
+    applied = None
+    if annotate:
+        applied = _annotate(ctx, paths["annotations"], mode, bookmarks)
 
     payload = {
         "success": True,
@@ -121,6 +139,38 @@ def build(ctx, binary, output, host, port, ghidra_home, java_home, timeout,
             "annotations": paths["annotations"],
             "functions": len(data.get("functions") or []),
             "decompiled": len(data.get("decompiled") or []),
+            "kuna_code": len(data.get("kuna_code") or []),
+            "comparison": data.get("comparison") or {},
         },
     }
+    if applied is not None:
+        payload["result"]["annotated"] = applied
     click.echo(formatter.format_simple_result(payload))
+
+
+def _annotate(ctx, path, mode, bookmarks):
+    """Put the annotations of the report into the debugger."""
+    from .. import x64dbg as x64dbg_helper
+
+    config = ctx.obj['config']
+    section = {
+        "host": config.x64dbg_host,
+        "port": config.x64dbg_port,
+        "token": config.x64dbg_token,
+        "path": config.x64dbg_path,
+    }
+    try:
+        client = x64dbg_helper.Client(
+            **{k: v for k, v in x64dbg_helper.resolve_config(section).items()
+               if k in ("host", "port", "token")}
+        )
+        loaded = x64dbg_helper.load_annotations(path)
+        result = x64dbg_helper.apply_annotations(
+            client, loaded, mode=mode, bookmarks=bookmarks)
+    except x64dbg_helper.X64dbgError as exc:
+        rich_echo(f"Error [{exc.code}]: {exc}", err=True)
+        return None
+    return {
+        "applied": len(result.get("applied") or []),
+        "failed": len(result.get("failed") or []),
+    }

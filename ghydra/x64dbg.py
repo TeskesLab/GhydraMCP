@@ -66,6 +66,26 @@ READ_TIMEOUT = 30.0
 PROBE_CONNECT_TIMEOUT = 0.35
 PROBE_READ_TIMEOUT = 2.0
 
+# How many times the ports where the server almost always is - the configured
+# one and the two defaults - are probed. The walk asks for one attempt per
+# port: a closed port stays closed, and every extra attempt costs the whole
+# connect timeout again. The likely ones get more, because the machine
+# resets about one loopback connection in fourteen, and one reset must not
+# make the client say that the debugger is not there.
+PROBE_ATTEMPTS = 3
+
+# How long the likely ports are given to answer. A closed port is out at the
+# connect stage, so this only bounds a server that accepted the connection
+# and went quiet - and a loaded machine can take a couple of seconds to give
+# that answer. Writing the debugger off for that would be wrong.
+LIKELY_PROBE_READ_TIMEOUT = 5.0
+
+# Where the plugin was found, keyed by the configuration it was found with.
+# The plugin does not move while the debugger runs, and the scan that looks
+# for it opens ninety connections - so the port is kept and probed once
+# before it is used.
+_INSTANCE_CACHE: Dict[str, Dict[str, Any]] = {}
+
 ENV_HOST = "GHYDRA_X64DBG_HOST"
 ENV_PORT = "GHYDRA_X64DBG_PORT"
 ENV_TOKEN = "GHYDRA_X64DBG_TOKEN"
@@ -557,34 +577,63 @@ def discover(section: Optional[dict] = None, timeout: Optional[float] = None) ->
         )
     connect_limit = PROBE_CONNECT_TIMEOUT if timeout is None else timeout
     read_limit = PROBE_READ_TIMEOUT if timeout is None else timeout
+    likely_read_limit = LIKELY_PROBE_READ_TIMEOUT if timeout is None else timeout
 
     likely, others = candidate_ports(settings["port"])
 
-    def _probe(port: int) -> Optional[str]:
-        """The port that answered, or None."""
-        client = Client(settings["host"], port, settings["token"], timeout=read_limit)
+    def _probe(port: int, patient: bool) -> Optional[str]:
+        """The port that answered, or None.
+
+        The likely ports are probed with more than one attempt and given more
+        time to answer: the machine resets about one loopback connection in
+        fourteen, and a single reset - or a loaded machine that takes a
+        moment to answer - must not be reported as "the debugger is not
+        running".
+        """
+        client = Client(settings["host"], port, settings["token"],
+                        timeout=likely_read_limit if patient else read_limit)
         try:
-            # A closed port stays closed, so the scan asks for one attempt:
-            # every extra one costs the whole connect timeout again.
-            client.initialize(timeout=read_limit, connect_timeout=connect_limit,
-                              connect_attempts=1)
+            # A closed port stays closed, so the walk asks for one attempt:
+            # every extra one costs the whole connect timeout again. The
+            # ports where the server almost always is get more.
+            client.initialize(timeout=likely_read_limit if patient else read_limit,
+                              connect_timeout=connect_limit,
+                              connect_attempts=PROBE_ATTEMPTS if patient else 1)
         except X64dbgError as exc:
             return "unauthorized" if exc.code == "X64DBG_UNAUTHORIZED" else None
         return str(port)
 
+    # The plugin does not move while the debugger runs, so the port it was
+    # found on is kept. The scan opens ninety connections, and a machine
+    # under load resets one of them in fourteen - so a scan per call is a
+    # lot of exposure for an answer that does not change. The port that was
+    # found is probed once before it is used, and a port that stops
+    # answering sends the scan back out.
+    cache_key = f"{settings['host']}:{settings['port']}:{settings['token']}"
+    cached = _INSTANCE_CACHE.get(cache_key)
+    if cached:
+        answer = _probe(cached["port"], True)
+        if answer and answer != "unauthorized":
+            return cached
+        # The port stopped answering, or the token was refused: the scan
+        # says so, and says it properly.
+        _INSTANCE_CACHE.pop(cache_key, None)
+
     unauthorized: Optional[Dict[str, Any]] = None
-    for group in (likely, others):
+    for group, patient in ((likely, True), (others, False)):
         if not group:
             continue
         with ThreadPoolExecutor(max_workers=min(16, len(group))) as pool:
-            answers = list(pool.map(_probe, group))
+            answers = list(pool.map(lambda port: _probe(port, patient), group))
         for port, answer in zip(group, answers):
             if answer and answer != "unauthorized":
-                return {
+                found = {
                     "host": settings["host"], "port": port,
                     "token": settings["token"], "path": settings["path"],
                     "unauthorized": False,
                 }
+                _INSTANCE_CACHE[cache_key] = found
+                return found
         for port, answer in zip(group, answers):
             if answer == "unauthorized":
                 unauthorized = {
@@ -897,3 +946,83 @@ def apply_annotations(client: Client, annotations: Dict[str, Any],
         "applied": applied,
         "failed": failed,
     }
+
+
+# ------------------------------------------------------- finding the plugin
+
+
+def candidate_installs() -> List[str]:
+    """The places x64dbg is usually installed."""
+    home = os.path.expanduser("~")
+    candidates: List[str] = []
+    if os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA", "")
+        program = os.environ.get("ProgramFiles", r"C:\Program Files")
+        if local:
+            candidates.append(os.path.join(local, "Programs", "x64dbg"))
+        if program:
+            candidates.append(os.path.join(program, "x64dbg"))
+        candidates.append(os.path.join(home, "scoop", "apps", "x64dbg", "current"))
+    else:
+        candidates.extend([
+            "/opt/x64dbg",
+            "/usr/local/x64dbg",
+            os.path.join(home, "x64dbg"),
+            os.path.join(home, "opt", "x64dbg"),
+        ])
+    return candidates
+
+
+def _walk_for_plugin_config(root: str, max_depth: int = 4) -> List[str]:
+    """The plugin's own settings file, wherever it is under a root.
+
+    The plugin asks the operating system for the path of the *process*, so
+    the file lands next to x64dbg.exe and not next to the DLL - and which
+    directory that is depends on how x64dbg was unpacked. So the tree is
+    walked, a few levels deep, and the first file that is found wins.
+    """
+    found: List[str] = []
+    root = os.path.abspath(os.path.expanduser(root))
+    if not os.path.isdir(root):
+        return found
+    base_depth = root.rstrip(os.sep).count(os.sep)
+    for current, directories, files in os.walk(root):
+        if current.count(os.sep) - base_depth >= max_depth:
+            directories[:] = []
+            continue
+        directories[:] = [name for name in directories
+                          if not name.startswith(".")]
+        if PLUGIN_CONFIG_NAME in files:
+            found.append(os.path.join(current, PLUGIN_CONFIG_NAME))
+    return found
+
+
+def find_plugin_config(install: str = "") -> Dict[str, Any]:
+    """The plugin's own settings: where they are, and what they say.
+
+    The token is the one thing about the x64dbg side that cannot be
+    guessed, and this is where it is: the plugin writes it to its own
+    ``mcp_config.json`` next to x64dbg.exe. Finding that file is what
+    turns the x64dbg integration from "type the token by hand" into "point
+    at the installation".
+    """
+    roots: List[str] = []
+    if install:
+        roots.append(install)
+    else:
+        roots.extend(candidate_installs())
+
+    for root in roots:
+        path = os.path.join(os.path.abspath(os.path.expanduser(root)), PLUGIN_CONFIG_NAME)
+        data = read_plugin_config(root)
+        if data:
+            return {"path": path, "config": data, "root": root}
+        for found in _walk_for_plugin_config(root):
+            try:
+                with open(found, "r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict):
+                return {"path": found, "config": data, "root": root}
+    return {"path": "", "config": {}, "root": roots[0] if roots else ""}

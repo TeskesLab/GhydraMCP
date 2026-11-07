@@ -38,16 +38,10 @@ public class GhidraHeadlessServer extends GhidraScript {
 
         int port = portFromArgs();
         Map<Integer, Object> instances = new ConcurrentHashMap<>();
+        instances.put(port, snapshotFor(port, program, project));
 
         GhydraServerFactory.Handle handle =
             GhydraServerFactory.startHeadless(program, project, port, instances, true);
-        // The registry of the instances is read by the /instances route, and
-        // it knows two things: the plugin of a CodeBrowser, and a map that
-        // carries the snapshot of the program. A headless run has no plugin
-        // - so the snapshot is what is registered, and the file, the
-        // project, the executable, the architecture and the image base are
-        // there for the clients that pick an instance.
-        instances.put(port, snapshot(program, project, port));
 
         System.out.println("[GhidraMCP] HEADLESS READY port=" + port
             + " program=" + program.getName()
@@ -81,12 +75,22 @@ public class GhidraHeadlessServer extends GhidraScript {
         System.out.flush();
     }
 
-    /** What /instances says about this run. */
-    private Map<String, Object> snapshot(Program program, Project project, int port) {
+    /**
+     * What this instance says about itself.
+     *
+     * <p>There is no CodeBrowser behind a headless run, so there is no
+     * plugin to ask. The snapshot is built here and registered instead, so
+     * that "/instances" tells the same story about a headless instance as
+     * about a windowed one - and says that it is headless, which is what
+     * lets a client know that the endpoints that need a window are not
+     * there.
+     */
+    private Map<String, Object> snapshotFor(int port, Program program, Project project) {
         Map<String, Object> snapshot = new java.util.LinkedHashMap<>();
         snapshot.put("port", port);
         snapshot.put("url", "http://localhost:" + port);
         snapshot.put("isBaseInstance", true);
+        snapshot.put("headless", true);
         snapshot.put("toolName", null);
         snapshot.put("project", project != null ? project.getName() : null);
         snapshot.put("file", program.getName());
@@ -102,8 +106,7 @@ public class GhidraHeadlessServer extends GhidraScript {
      * It sits with the other state of the launcher, in the home directory of
      * the user that runs the analysis.
      */
-    private java.io.File stopFile(int port) {
-        String home = System.getProperty("user.home", ".");
+    private java.io.File stopFile(int port) {        String home = System.getProperty("user.home", ".");
         java.io.File dir = new java.io.File(home, ".ghidra");
         dir.mkdirs();
         return new java.io.File(dir, "headless-" + port + ".stop");

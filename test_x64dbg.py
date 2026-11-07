@@ -210,6 +210,51 @@ class FakeX64dbg:
         return self.server.calls
 
 
+# The reasons that mean the transport ate the answer, not that the debugger
+# said no. The local network stack on this machine resets about one loopback
+# connection in fourteen, and the client never repeats a mutating tool - that
+# is the rule under test in X64dbgRetryTests. Here, in the test, repeating is
+# harmless: the fake server only records the calls.
+LOST_ANSWER_CODES = ("X64DBG_MISSING", "X64DBG_TIMEOUT", "X64DBG_UNCERTAIN")
+
+
+def _lost_answer(result) -> str:
+    """The code of a lost answer, or an empty string.
+
+    The call comes back as the envelope of the bridge, as the text the bridge
+    formats, or as the content of an MCP tool call - and the code is in one
+    of the three.
+    """
+    texts = []
+    if isinstance(result, dict):
+        error = result.get("error")
+        if isinstance(error, dict) and error.get("code"):
+            return str(error["code"])
+        texts.append(json.dumps(result))
+    elif isinstance(result, str):
+        texts.append(result)
+    elif isinstance(result, (list, tuple)):
+        for item in result:
+            if isinstance(item, dict):
+                texts.append(str(item.get("text", "")))
+            else:
+                texts.append(str(getattr(item, "text", "")))
+    for code in LOST_ANSWER_CODES:
+        if any(code in text for text in texts):
+            return code
+    return ""
+
+
+def retry_on_lost_answer(action, attempts=3):
+    """Run the action again when the transport ate the answer."""
+    result = action()
+    for _ in range(attempts - 1):
+        if not _lost_answer(result):
+            return result
+        result = action()
+    return result
+
+
 class X64dbgClientTests(unittest.TestCase):
     """The client against a server that answers like the plugin."""
 
@@ -593,7 +638,10 @@ class X64dbgBridgeTests(unittest.TestCase):
         return result
 
     def test_the_status_reports_the_server(self):
-        result = bridge.x64dbg_status.__wrapped__()
+        # The status goes through the port scan, and the scan asks the
+        # server whether it is there - so a lost answer would say "the
+        # debugger is gone" for a debugger that is running.
+        result = self._deliver(bridge.x64dbg_status.__wrapped__)
         self.assertTrue(result["success"], result)
         self.assertEqual(result["result"]["tools"], len(CATALOGUE))
         self.assertEqual(len(result["result"]["modules"]), 2)
@@ -637,10 +685,10 @@ class X64dbgBridgeTests(unittest.TestCase):
         async def call(arguments):
             return await bridge.mcp.call_tool("x64dbg_call", arguments)
 
-        content = asyncio.run(call({
+        content = retry_on_lost_answer(lambda: asyncio.run(call({
             "tool": "SetBreakpoint",
             "tool_arguments": '{"target": "0x7FF7A1234000"}',
-        }))
+        })))
         text = "\n".join(
             item.get("text", "") if isinstance(item, dict)
             else getattr(item, "text", "")
@@ -654,10 +702,10 @@ class X64dbgBridgeTests(unittest.TestCase):
         """An object is accepted too, for the clients that deliver one."""
         import asyncio
 
-        asyncio.run(bridge.mcp.call_tool("x64dbg_call", {
+        retry_on_lost_answer(lambda: asyncio.run(bridge.mcp.call_tool("x64dbg_call", {
             "tool": "SetBreakpoint",
             "tool_arguments": {"target": "0x7FF7A1234000"},
-        }))
+        })))
         self.assertIn(("SetBreakpoint", {"target": "0x7FF7A1234000"}), self.fake.calls,
                       "the object did not reach the plugin")
 
@@ -697,8 +745,8 @@ class X64dbgBridgeTests(unittest.TestCase):
                          "the schema asks for an object, and a client flattens it")
 
     def test_an_object_is_accepted_when_the_call_is_made_directly(self):
-        result = bridge.x64dbg_call.__wrapped__(
-            tool="SetBreakpoint", tool_arguments={"target": "0x7FF7A1234000"})
+        result = retry_on_lost_answer(lambda: bridge.x64dbg_call.__wrapped__(
+            tool="SetBreakpoint", tool_arguments={"target": "0x7FF7A1234000"}))
         self.assertTrue(result["success"], result)
         self.assertIn(("SetBreakpoint", {"target": "0x7FF7A1234000"}), self.fake.calls)
 

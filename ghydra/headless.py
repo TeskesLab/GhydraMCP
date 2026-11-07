@@ -38,11 +38,19 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
+from . import launcher as ghidra_launcher
+from .launcher import LauncherError, binary_name
+
 # The port the first instance binds. The bridge scans 8192-8201 on its own.
 DEFAULT_PORT = 8192
 
 # The script that starts the server and keeps the headless run alive.
 SCRIPT_NAME = "GhidraHeadlessServer"
+
+# What tells a headless run apart from any other process: the script name
+# travels in the command line of the launcher and of the JVM it starts, so
+# a process that does not carry it is not ours.
+OWNERSHIP_MARKER = SCRIPT_NAME
 
 ENV_GHIDRA_HOME = "GHIDRA_HOME"
 ENV_JAVA_HOME = "JAVA_HOME"
@@ -141,28 +149,19 @@ def clear_stop_flag(port: int) -> None:
         pass
 
 
+# The launcher speaks its own codes; the headless runner speaks its own.
+# The mapping keeps a caller of the runner from having to know that the
+# finding came from the launcher.
+_HEADLESS_CODES = {
+    "LAUNCHER_NO_GHIDRA": "HEADLESS_NO_GHIDRA",
+    "LAUNCHER_NO_JDK": "HEADLESS_NO_JDK",
+    "LAUNCHER_NO_UTILITY": "HEADLESS_NO_UTILITY",
+}
+
+
 def candidate_homes() -> List[str]:
     """The places Ghidra is usually installed."""
-    home = os.path.expanduser("~")
-    candidates: List[str] = []
-    if os.name == "nt":
-        local = os.environ.get("LOCALAPPDATA", "")
-        program = os.environ.get("ProgramFiles", r"C:\Program Files")
-        if local:
-            candidates.append(os.path.join(local, "Programs", "Ghidra"))
-        if program:
-            candidates.append(os.path.join(program, "Ghidra"))
-        candidates.append(os.path.join(home, "scoop", "apps", "ghidra", "current"))
-        candidates.append(os.path.join(home, "ghidra"))
-    else:
-        candidates.extend([
-            "/opt/ghidra",
-            "/usr/local/ghidra",
-            "/usr/share/ghidra",
-            os.path.join(home, "ghidra"),
-            os.path.join(home, "opt", "ghidra"),
-        ])
-    return candidates
+    return ghidra_launcher.candidate_homes()
 
 
 def find_ghidra_home(explicit: Optional[str] = None) -> str:
@@ -171,17 +170,10 @@ def find_ghidra_home(explicit: Optional[str] = None) -> str:
     The explicit path wins over ``GHIDRA_HOME``, and both win over the places
     Ghidra is usually installed.
     """
-    for candidate in (explicit, os.environ.get(ENV_GHIDRA_HOME)):
-        if candidate and os.path.isdir(candidate):
-            return os.path.abspath(candidate)
-    for candidate in candidate_homes():
-        if os.path.isdir(candidate):
-            return os.path.abspath(candidate)
-    raise HeadlessError(
-        "no Ghidra installation found. Set GHIDRA_HOME, or pass --ghidra-home "
-        "with the path of the installation.",
-        code="HEADLESS_NO_GHIDRA",
-    )
+    try:
+        return ghidra_launcher.find_ghidra_home(explicit, candidates=candidate_homes())
+    except LauncherError as exc:
+        raise HeadlessError(str(exc), code=_HEADLESS_CODES.get(exc.code, exc.code)) from None
 
 
 def launcher_for(ghidra_home: str) -> str:
@@ -201,17 +193,6 @@ def launcher_for(ghidra_home: str) -> str:
         f"no headless launcher in {support}. The installation looks incomplete.",
         code="HEADLESS_NO_LAUNCHER",
     )
-
-
-def binary_name(path: str) -> str:
-    """The name of the file a path points at, with either separator.
-
-    A Windows path handed to a POSIX machine is still a path with a file
-    name at the end, so the backslash is a separator there too - and Ghidra
-    identifies a program by that name.
-    """
-    normalized = str(path).replace("\\", os.sep).replace("/", os.sep)
-    return os.path.basename(normalized)
 
 
 def slug_for(binary: str) -> str:
@@ -425,6 +406,23 @@ def port_is_open(host: str, port: int, timeout: float = 0.5) -> bool:
         return False
 
 
+def free_port(host: str, start: int, attempts: int = 256) -> int:
+    """The first port that nothing is serving on, from ``start`` upwards.
+
+    It is what a second run uses when the first port is taken: the port
+    that was asked for is kept when it is free, and the next one is used
+    when it is not.
+    """
+    for offset in range(max(1, int(attempts))):
+        candidate = int(start) + offset
+        if not port_is_open(host, candidate):
+            return candidate
+    raise HeadlessError(
+        f"no free port between {start} and {int(start) + int(attempts) - 1}",
+        code="HEADLESS_NO_PORT",
+    )
+
+
 def api_answers(host: str, port: int, timeout: float = 5.0) -> bool:
     """Whether the API answers on the port.
 
@@ -625,6 +623,7 @@ class HeadlessRunner:
         ghidra_home: Optional[str] = None,
         java_home: Optional[str] = None,
         host: str = "127.0.0.1",
+        configured_java_homes: Optional[List[str]] = None,
     ) -> None:
         self.binary = os.path.abspath(os.path.expanduser(binary))
         self.port = int(port)
@@ -638,7 +637,13 @@ class HeadlessRunner:
             )
         self.host = host
         self.ghidra_home = find_ghidra_home(ghidra_home)
+        # What the caller asked for, and what the machine has. They are
+        # kept apart: an explicit JDK that is too old is an error, while an
+        # environment that points at one that is too old is only a place
+        # the search did not stop.
+        self.requested_java_home = java_home or ""
         self.java_home = java_home or os.environ.get(ENV_JAVA_HOME, "")
+        self.configured_java_homes = list(configured_java_homes or [])
         self.project_name = project_name or default_project_name(self.binary)
         if project_dir:
             self.project_dir = os.path.abspath(os.path.expanduser(project_dir))
@@ -668,6 +673,43 @@ class HeadlessRunner:
         """Whether the program is already in the project."""
         return project_has_program(self.project_dir, self.project_name, self.binary)
 
+    def resolve_java_home(self) -> str:
+        """The JDK the analysis runs on.
+
+        It is found when it is needed rather than when the runner is built,
+        because a run that only has to talk to an instance that is already
+        serving does not need a JDK at all.
+
+        The JDK that is too old for the installation is not used: the
+        installation's own VM arguments carry flags that only the newer JVMs
+        take, and the run would die with a message about a flag instead of
+        about the JDK.
+        """
+        required = ghidra_launcher.required_jdk_major(self.ghidra_home)
+
+        if self.requested_java_home:
+            version = ghidra_launcher.java_version(self.requested_java_home)
+            if version and required and version[0] < required:
+                raise HeadlessError(
+                    f"the JDK that was asked for ({self.requested_java_home}) is a "
+                    f"JDK {version[0]}, and this Ghidra asks for a JDK {required} "
+                    "or newer",
+                    code="HEADLESS_NO_JDK",
+                )
+            self.java_home = self.requested_java_home
+            return self.java_home
+
+        try:
+            found = ghidra_launcher.find_java_home(
+                ghidra_home=self.ghidra_home,
+                required_major=required,
+                configured=self.configured_java_homes,
+            )
+        except LauncherError as exc:
+            raise HeadlessError(str(exc), code=exc.code) from None
+        self.java_home = found
+        return found
+
     def command(self) -> List[str]:
         """The command that starts the run.
 
@@ -675,33 +717,64 @@ class HeadlessRunner:
         that is not is imported. Importing a program that is already there
         fails, and the run never reaches the script that starts the server.
 
-        A program that is in the project but is not the file that is on disk
-        now - the binary was rebuilt - is imported again, with the file that
-        is there, so the analysis is of the bytes that exist.
+        The command is the JVM invocation the launcher makes, not the
+        launcher itself: the Windows launcher asks "press any key to
+        continue" when it fails, because it cannot tell a double-click from
+        a shell - and a launcher that was started by another program is
+        exactly the case it cannot handle. It also sends the output of the
+        run somewhere else, and the log of the run is the only place the
+        reason for a failure is.
         """
-        launcher = launcher_for(self.ghidra_home)
-        in_project = self.program_in_project()
-        current = in_project and project_is_current(
+        process = self.program_in_project()
+        current = process and project_is_current(
             self.project_dir, self.project_name, self.binary)
+        overwrite = process and not current
+        utility = os.path.join(
+            self.ghidra_home, "Ghidra", "Framework", "Utility", "lib", "Utility.jar")
+        if os.path.isfile(utility):
+            java = self.resolve_java_home()
+            try:
+                return ghidra_launcher.headless_command(
+                    self.ghidra_home,
+                    java,
+                    self.project_dir,
+                    self.project_name,
+                    self.binary,
+                    self.port,
+                    process=current,
+                    overwrite=overwrite,
+                    script=SCRIPT_NAME,
+                    script_args=[f"port={self.port}"],
+                )
+            except LauncherError as exc:
+                raise HeadlessError(str(exc), code=exc.code) from None
         return build_command(
-            launcher,
+            launcher_for(self.ghidra_home),
             self.project_dir,
             self.project_name,
             self.binary,
             self.port,
             process=current,
-            overwrite=in_project and not current,
+            overwrite=overwrite,
         )
 
     def environment(self) -> Dict[str, str]:
         """The environment the run gets.
 
         ``JAVA_HOME`` is passed through: Ghidra 12 needs a JDK 21 or newer,
-        and the machine's default is often an older one.
+        and the machine's default is often an older one. The variables the
+        installation asks for are added too - they come from Ghidra's own
+        ``launch.properties``, and the launcher is what would have set them.
         """
         env = dict(os.environ)
         if self.java_home:
             env[ENV_JAVA_HOME] = self.java_home
+        try:
+            for key, value in ghidra_launcher.env_vars(
+                    self.ghidra_home, self.java_home).items():
+                env.setdefault(key, value)
+        except Exception:
+            pass
         return env
 
     # -- the run -------------------------------------------------------

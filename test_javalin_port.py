@@ -19,7 +19,7 @@ import unittest
 
 import requests
 
-from ghydra.testing import instance_is_headless
+from ghydra.testing import free_data_addresses, instance_is_headless
 
 DEFAULT_PORT = int(os.getenv("GHYDRAMCP_TEST_PORT") or "8192")
 BASE = os.getenv("GHYDRAMCP_TEST_HOST") or "localhost"
@@ -95,25 +95,15 @@ class JavalinPortTests(unittest.TestCase):
 
     def test_data_rename_without_type_is_edit_label(self):
         """PATCH /data/{addr} with only name — no data should be defined."""
-        # Pick an address that has no defined data but is inside a valid memory block.
-        # /strings returns defined data; we want the opposite, so pick a memory
-        # block and use an address inside. Fall back to skip if we can't find one.
-        mem = _as_json(requests.get(f"{URL}/memory"))
-        blocks = mem.get("result", [])
-        target = None
-        for b in blocks:
-            if b.get("permissions", "").startswith("r"):
-                target = b["start"]
-                break
-        if target is None:
-            self.skipTest("No readable memory block found")
+        # Pick an address that holds no data. The memory map says which
+        # blocks can be written to, and the probe says which addresses are
+        # still free - the API answers 200 with isDefined false for those,
+        # not a 404.
+        free = free_data_addresses(URL, count=1)
+        if not free:
+            self.skipTest("No free address found in a writable block")
 
-        # Add an offset to avoid hitting existing defined data at the block start.
-        probe = hex(int(target, 16) + 0x100)
-
-        existing = requests.get(f"{URL}/data/{probe}")
-        if existing.status_code == 200:
-            self.skipTest(f"Probe address {probe} already has defined data")
+        probe = free[0]
 
         label = "ghydra_edit_label_test"
         r = requests.patch(f"{URL}/data/{probe}", json={"name": label})
@@ -121,10 +111,17 @@ class JavalinPortTests(unittest.TestCase):
             self.skipTest(f"Could not label probe address: {r.text}")
         body = _as_json(r)
         self.assertEqual(label, body["result"]["name"])
-        # A pure label edit must NOT define data at the address.
+        # A pure label edit must NOT define data at the address. The API
+        # answers 200 with isDefined false while the listing still holds an
+        # undefined item there, and 404 when it does not - both say that
+        # there is no data at this address.
         after = requests.get(f"{URL}/data/{probe}")
-        self.assertEqual(404, after.status_code,
-                         "Data should not be defined after an Edit Label rename")
+        if after.status_code == 200:
+            self.assertFalse(_as_json(after).get("result", {}).get("isDefined"),
+                             "Data should not be defined after an Edit Label rename")
+        else:
+            self.assertEqual(404, after.status_code,
+                             f"Unexpected answer for an address with no data: {after.text[:160]}")
 
     # ---- Struct field replacement validation ----------------------------
 
@@ -249,10 +246,14 @@ class JavalinPortTests(unittest.TestCase):
             json={"name": new_name})
         self.assertTrue(r.ok, r.text)
 
-        # Rename back so subsequent runs find the same target.
-        requests.patch(
+        # Rename back so subsequent runs find the same target. A local that
+        # has been renamed is a unique symbol, and it has to be found under
+        # that name too - otherwise the same variable cannot be renamed
+        # twice, and the rename it was given cannot be undone.
+        back = requests.patch(
             f"{URL}/functions/{func_addr}/variables/{new_name}",
             json={"name": old_var_name})
+        self.assertTrue(back.ok, f"the rename could not be undone: {back.text}")
 
 
 # ========================================================================
@@ -484,16 +485,19 @@ class MutationTests(unittest.TestCase):
 
     def test_symbol_patch_rename(self):
         """Rename a symbol then rename it back."""
-        syms = requests.get(f"{URL}/symbols", params={"limit": 50}).json().get("result", [])
+        syms = requests.get(f"{URL}/symbols", params={"limit": 500}).json().get("result", [])
         target = None
         for s in syms:
             addr = s.get("address", "")
             name = s.get("name", "")
-            # External addresses ("EXTERNAL:00000001") aren't renameable the same
-            # way, and entry-point symbols (often starts with '_') are fragile.
-            if addr and name and not name.startswith("_") and not addr.startswith("EXTERNAL"):
-                target = s
-                break
+            # An imported symbol has no address in the program to rename,
+            # and the entry-point symbols are fragile to rename.
+            if s.get("isExternal") or not addr or not name:
+                continue
+            if addr.startswith("EXTERNAL") or name.startswith("_"):
+                continue
+            target = s
+            break
         if target is None:
             self.skipTest("No renamable symbol found")
 
@@ -522,12 +526,11 @@ class MutationTests(unittest.TestCase):
     def test_memory_write_roundtrip(self):
         """PATCH /programs/current/memory/{addr} writes bytes; read them back and restore."""
         # Find a writable memory block to avoid clobbering read-only code.
+        # The map says which blocks can be written to with isWrite.
         blocks = requests.get(f"{URL}/memory").json().get("result", [])
         target = None
         for b in blocks:
-            perms = b.get("permissions", "")
-            # permissions string is something like "rwx" — need 'w'.
-            if "w" in perms.lower():
+            if b.get("isWrite"):
                 target = b
                 break
         if target is None:
@@ -591,22 +594,9 @@ class MutationTests(unittest.TestCase):
     # --- Data mutations via both PUT and POST /data/{address} ---
 
     def _find_undefined_address(self):
-        """Find an address inside a readable block with no defined data or function."""
-        blocks = requests.get(f"{URL}/memory").json().get("result", [])
-        for b in blocks:
-            if not b.get("permissions", "").lower().startswith("r"):
-                continue
-            try:
-                base = int(b["start"], 16)
-            except (KeyError, ValueError):
-                continue
-            # Walk forward in small jumps until we find something undefined.
-            for probe_offset in (0x20, 0x80, 0x100, 0x200):
-                probe = hex(base + probe_offset)
-                d = requests.get(f"{URL}/data/{probe}")
-                if d.status_code == 404:
-                    return probe
-        return None
+        """Find an address inside a writable block with no defined data."""
+        free = free_data_addresses(URL, count=1)
+        return free[0] if free else None
 
     def test_data_put_sets_type_and_delete_clears(self):
         """PUT /data/{addr} creates data; DELETE /data/{addr} clears it."""
@@ -619,59 +609,96 @@ class MutationTests(unittest.TestCase):
 
         got = requests.get(f"{URL}/data/{addr}")
         self.assertTrue(got.ok, "data should be defined after PUT")
+        self.assertTrue(_as_json(got).get("result", {}).get("isDefined"),
+                        "the data should be defined after the PUT")
 
         dele = requests.delete(f"{URL}/data/{addr}")
         self.assertTrue(dele.ok, f"DELETE /data/{addr} failed: {dele.text}")
         self.assertEqual("data", dele.json()["result"]["cleared"])
 
+        # No data is left: the API answers 200 with isDefined false while
+        # the listing still holds an undefined item there, and 404 when it
+        # does not.
         after = requests.get(f"{URL}/data/{addr}")
-        self.assertEqual(404, after.status_code)
+        if after.status_code == 200:
+            self.assertFalse(_as_json(after).get("result", {}).get("isDefined"),
+                             "the data should be gone after the DELETE")
+        else:
+            self.assertEqual(404, after.status_code)
 
-    def test_data_delete_legacy_alias(self):
-        """POST /data/delete clears data at the body-supplied address."""
+    def test_data_type_alias_sets_the_type_and_not_the_name(self):
+        """PATCH /data/{addr}/type sets the type; it never renames."""
         addr = self._find_undefined_address()
         if addr is None:
             self.skipTest("No undefined address found")
 
         requests.put(f"{URL}/data/{addr}", json={"type": "byte"})
-        r = requests.post(f"{URL}/data/delete", json={"address": addr})
-        self.assertTrue(r.ok, f"POST /data/delete failed: {r.text}")
-        after = requests.get(f"{URL}/data/{addr}")
-        self.assertEqual(404, after.status_code)
+        r = requests.patch(f"{URL}/data/{addr}/type", json={"type": "word"})
+        self.assertTrue(r.ok, f"PATCH /data/{addr}/type failed: {r.text}")
+
+        got = _as_json(requests.get(f"{URL}/data/{addr}"))
+        self.assertEqual("word", got["result"]["dataType"])
+
+        requests.delete(f"{URL}/data/{addr}")
 
     # --- Function create / rename / delete cycle ---
 
     def _find_unused_function_address(self):
-        """An address inside an executable block with no function yet."""
+        """Addresses where a function could start.
+
+        A function has to start at an instruction, so the candidates come
+        from the disassembly - an address in the middle of an instruction
+        is refused with "the body must contain the entrypoint". On a binary
+        that is fully analysed every instruction already belongs to a
+        function, and then there is nowhere left to create one: the test
+        says so and skips.
+        """
         blocks = requests.get(f"{URL}/memory").json().get("result", [])
+        candidates = []
         for b in blocks:
-            if "x" not in b.get("permissions", "").lower():
+            # The memory map says which blocks can be executed - the flags
+            # are isRead, isWrite and isExecute.
+            if not b.get("isExecute"):
                 continue
-            try:
-                base = int(b["start"], 16)
-                end = int(b["end"], 16)
-            except (KeyError, ValueError):
-                continue
-            for offset in range(0x100, min(0x4000, end - base), 0x100):
-                probe = hex(base + offset)
-                existing = requests.get(f"{URL}/functions/{probe}")
-                if existing.status_code == 404:
-                    return probe
-        return None
+            listing = requests.get(f"{URL}/memory/{b['start']}/disassembly",
+                                    params={"limit": 200}, timeout=60).json().get("result") or []
+            for instruction in listing:
+                addr = instruction.get("address")
+                if not addr:
+                    continue
+                existing = requests.get(f"{URL}/functions/{addr}")
+                if existing.status_code != 404:
+                    continue
+                candidates.append(addr)
+                if len(candidates) >= 20:
+                    return candidates
+        return candidates
 
     def test_functions_create_rename_delete_cycle(self):
         """Exercises POST /functions, PATCH /functions/{addr}, PATCH /functions/by-name/{name},
         DELETE /functions/by-name/{name}, DELETE /functions/{addr} on a synthesised function."""
-        addr = self._find_unused_function_address()
-        if addr is None:
+        candidates = self._find_unused_function_address()
+        if not candidates:
             self.skipTest("No unused executable address found")
 
         initial = "ghydra_created_fn"
-        created = requests.post(f"{URL}/functions", json={"address": addr, "name": initial})
-        if not created.ok:
-            # Function creation can fail legitimately when the address isn't valid code.
-            # In that case we skip rather than asserting, since we can't control the target binary.
-            self.skipTest(f"POST /functions not viable at {addr}: {created.text[:200]}")
+        # A function cannot start in the middle of another one's body, and
+        # the lookup for a function is an exact one - so an address that
+        # holds no function may still be inside one. The candidates are
+        # tried until one takes.
+        addr = None
+        created = None
+        for candidate in candidates:
+            created = requests.post(f"{URL}/functions", json={"address": candidate, "name": initial})
+            if created.ok:
+                addr = candidate
+                break
+        if addr is None:
+            # Function creation can fail legitimately when the address isn't
+            # valid code. Then we skip rather than asserting, since we can't
+            # control the target binary.
+            self.skipTest(f"POST /functions not viable at any of {len(candidates)} "
+                          f"candidates: {created.text[:200] if created is not None else 'no answer'}")
         self.assertEqual(initial, created.json()["result"]["name"])
 
         # PATCH /functions/{address} — rename by address.

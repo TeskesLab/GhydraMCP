@@ -118,6 +118,7 @@ public class GhydraPlugin extends Plugin implements ApplicationLevelPlugin {
         snapshot.put("port", port);
         snapshot.put("url", "http://localhost:" + port);
         snapshot.put("isBaseInstance", isBaseInstance);
+        snapshot.put("headless", false);
         snapshot.put("toolName", tool != null ? tool.getName() : null);
 
         ghidra.framework.model.Project project = tool != null ? tool.getProject() : null;

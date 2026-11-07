@@ -101,6 +101,9 @@ public class ProgramResource implements Resource {
             d.put("name", program.getName());
             d.put("programId", programId);
             d.put("path", program.getExecutablePath());
+            // Whether this instance runs without a CodeBrowser. A client that
+            // knows it can stop asking for the endpoints that need a window.
+            d.put("headless", ctx.isHeadless());
             d.put("language", program.getLanguageID().getIdAsString());
             d.put("languageId", program.getLanguageID().getIdAsString());
             d.put("compiler", program.getCompilerSpec().getCompilerSpecID().getIdAsString());

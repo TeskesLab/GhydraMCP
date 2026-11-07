@@ -5,10 +5,6 @@ that read the cursor answer 503, because there is no window to read it
 from. The suites that exercise those endpoints have to know which kind of
 instance they are talking to - otherwise they report a failure for a
 limitation of the instance and not a defect of the code.
-
-The same goes for the addresses of the data tests: an address that
-already holds a data item refuses to be defined again, so the addresses
-are asked about before they are used.
 """
 
 from __future__ import annotations
