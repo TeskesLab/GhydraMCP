@@ -16,6 +16,7 @@
 import base64
 import functools
 import hashlib
+import math
 import json
 import os
 import re
@@ -73,10 +74,10 @@ MAX_BATCH_TARGETS = 200
 
 current_instance_port = DEFAULT_GHIDRA_PORT
 
-# The tools answer in text, because a table is what a human - or an LLM -
-# reads best. A machine wants the envelope itself, so GHYDRA_MCP_OUTPUT=json
-# hands it the raw response as one JSON document. The default stays text:
-# that is the contract the agents are written against.
+# The tools answer in text, because a human - or an LLM - reads a table
+# better than a JSON envelope. A machine wants the envelope itself, so
+# GHYDRA_MCP_OUTPUT=json hands it the raw response as one JSON document.
+# The default stays text: that is the contract the agents are written against.
 RAW_OUTPUT = os.environ.get("GHYDRA_MCP_OUTPUT", "").strip().lower() in ("json", "raw")
 
 # ================= HTTP session =================
@@ -2622,6 +2623,93 @@ def format_x64dbg_go_to(response: dict, **kwargs) -> str:
     ])
 
 
+def format_headless(response: dict, **kwargs) -> str:
+    """A headless run: where it serves, and what it analyses."""
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return format_error(response)
+    lines = [f"The API is serving on port {result.get('port', '?')}"]
+    if result.get("binary"):
+        lines.append(f"  Binary: {result.get('binary')}")
+    if result.get("project"):
+        lines.append(f"  Project: {result.get('project')}")
+    if result.get("pid"):
+        lines.append(f"  Process: {result.get('pid')}")
+    if result.get("log"):
+        lines.append(f"  Log: {result.get('log')}")
+    return "\n".join(lines)
+
+
+def format_doctor(response: dict, **kwargs) -> str:
+    """The checks of the doctor, one per line."""
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return format_error(response)
+    marks = {"ok": "ok", "warn": "warn", "fail": "FAIL"}
+    lines = []
+    for check in result.get("checks") or []:
+        status = check.get("status", "")
+        lines.append(f"[{marks.get(status, '?'):>4}] {check.get('name')}: {check.get('detail')}")
+        if check.get("hint") and status != "ok":
+            lines.append(f"         -> {check.get('hint')}")
+    return "\n".join(lines)
+
+
+def format_evidence(response: dict, **kwargs) -> str:
+    """The findings of a ledger."""
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return format_error(response)
+    findings = result.get("findings") or []
+    if not findings:
+        return "No findings."
+    lines = []
+    for finding in findings:
+        lines.append(f"{finding.get('id', '')}  {str(finding.get('kind', '')):<14} "
+                     f"{str(finding.get('address', '')):<14} {finding.get('name', '')}")
+        if finding.get("note"):
+            lines.append(f"      {finding.get('note')}")
+    return "\n".join(lines)
+
+
+def format_sessions(response: dict, **kwargs) -> str:
+    """The sessions, and what state they are in."""
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return format_error(response)
+    sessions = result.get("sessions") or []
+    if not sessions:
+        return "No sessions."
+    lines = []
+    for session in sessions:
+        lines.append(f"{session.get('id', '')}  {str(session.get('state', '')):<8} "
+                     f"port {session.get('port', '?')}  {session.get('name', '')}")
+        if session.get("binary"):
+            lines.append(f"      {session.get('binary')}")
+    return "\n".join(lines)
+
+
+def format_triage(response: dict, **kwargs) -> str:
+    """What a target is, and what it needs."""
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return format_error(response)
+    lines = [f"{result.get('path', '')}", f"  format: {result.get('format', 'unknown')}"]
+    if result.get("size"):
+        lines.append(f"  size: {result.get('size')} bytes")
+    facts = result.get("facts") or {}
+    for key, value in facts.items():
+        if isinstance(value, (list, tuple)):
+            value = ", ".join(str(item) for item in value[:8])
+        lines.append(f"  {key}: {value}")
+    recommendations = result.get("recommendations") or []
+    if recommendations:
+        lines.append("")
+        for item in recommendations:
+            lines.append(f"  - {item}")
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -2694,6 +2782,17 @@ FORMATTERS = {
     "x64dbg_breakpoint_at": format_x64dbg_breakpoint_at,
     "x64dbg_go_to": format_x64dbg_go_to,
     "inspect_address": format_address_context,
+    "inspect_target": format_triage,
+    "headless_start": format_headless,
+    "headless_stop": format_generic_dict,
+    "headless_status": format_generic_dict,
+    "doctor_check": format_doctor,
+    "evidence_add": format_generic_dict,
+    "evidence_list": format_evidence,
+    "evidence_export": format_generic_dict,
+    "session_open": format_generic_dict,
+    "session_list": format_sessions,
+    "session_close": format_generic_dict,
 }
 
 
@@ -2707,11 +2806,8 @@ def text_output(func):
         if isinstance(response, str):
             return response
 
-        # GHYDRA_MCP_OUTPUT=json asks for the raw envelope instead of the
-        # text: a machine that parses the answer wants the structure - the
-        # id, the instance, the success flag and the result. The default
-        # stays text, because that is the contract the agents are written
-        # against.
+        # GHYDRA_MCP_OUTPUT=json: the raw envelope, for a machine that
+        # parses it. The error envelope goes out the same way.
         if RAW_OUTPUT:
             try:
                 return json.dumps(response, default=str)
@@ -2913,6 +3009,7 @@ def register_instance(port: int, url: str | None = None) -> str:
                                 project_info["language_id"] = result.get("languageId", "")
                                 project_info["compiler_spec_id"] = result.get("compilerSpecId", "")
                                 project_info["image_base"] = result.get("imageBase", result.get("image_base", ""))
+                                project_info["headless"] = bool(result.get("headless", False))
                                 
                                 # Store _links from result for HATEOAS navigation
                                 if "_links" in result:
@@ -3106,8 +3203,13 @@ def handle_sigint(signum, frame):
 # ================= MCP Resources =================
 # Resources provide information that can be loaded directly into context
 # They focus on data and minimize metadata
+#
+# The URIs carry the ghidra:// scheme because a relative one is refused:
+# the protocol types the URI of a read as a URL, and the server validates
+# it before the resource is looked up. A resource whose URI no client can
+# name is a resource nobody can read.
 
-@mcp.resource(uri="/instance/{port}")
+@mcp.resource(uri="ghidra://instance/{port}")
 def ghidra_instance(port: int | None = None) -> dict:
     """Get detailed information about a Ghidra instance and the loaded program
     
@@ -3155,7 +3257,7 @@ def ghidra_instance(port: int | None = None) -> dict:
     
     return instance_info
 
-@mcp.resource(uri="/instance/{port}/function/decompile/address/{address}")
+@mcp.resource(uri="ghidra://instance/{port}/function/decompile/address/{address}")
 def decompiled_function_by_address(port: int | None = None, address: str | None = None) -> str:
     """Get decompiled C code for a function by address
     
@@ -3204,7 +3306,7 @@ def decompiled_function_by_address(port: int | None = None, address: str | None 
     
     return "Error: Could not extract decompiled code from response"
 
-@mcp.resource(uri="/instance/{port}/function/decompile/name/{name}")
+@mcp.resource(uri="ghidra://instance/{port}/function/decompile/name/{name}")
 def decompiled_function_by_name(port: int | None = None, name: str | None = None) -> str:
     """Get decompiled C code for a function by name
     
@@ -3253,7 +3355,7 @@ def decompiled_function_by_name(port: int | None = None, name: str | None = None
     
     return "Error: Could not extract decompiled code from response"
 
-@mcp.resource(uri="/instance/{port}/function/info/address/{address}")
+@mcp.resource(uri="ghidra://instance/{port}/function/info/address/{address}")
 def function_info_by_address(port: int | None = None, address: str | None = None) -> dict:
     """Get detailed information about a function by address
     
@@ -3297,7 +3399,7 @@ def function_info_by_address(port: int | None = None, address: str | None = None
     # Return just the function data without API metadata
     return simplified["result"]
 
-@mcp.resource(uri="/instance/{port}/function/info/name/{name}")
+@mcp.resource(uri="ghidra://instance/{port}/function/info/name/{name}")
 def function_info_by_name(port: int | None = None, name: str | None = None) -> dict:
     """Get detailed information about a function by name
     
@@ -3341,7 +3443,43 @@ def function_info_by_name(port: int | None = None, name: str | None = None) -> d
     # Return just the function data without API metadata
     return simplified["result"]
 
-@mcp.resource(uri="/instance/{port}/function/disassembly/address/{address}")
+def _disassembly_text(result) -> str:
+    """Turn a disassembly result into text.
+
+    The v3000 API hands the instruction list back as the result itself; the
+    older API nested it under result["instructions"]. Both shapes are read
+    here, so the resources do not answer "could not extract" for a response
+    that plainly carries the listing.
+    """
+    if isinstance(result, list):
+        instructions = result
+    elif isinstance(result, dict):
+        if isinstance(result.get("disassembly_text"), str):
+            return result["disassembly_text"]
+        instructions = result.get("instructions") or []
+        if not instructions and isinstance(result.get("disassembly"), str):
+            return result["disassembly"]
+    else:
+        instructions = []
+
+    if not instructions:
+        return "Error: Could not extract disassembly from response"
+
+    lines = []
+    for instr in instructions:
+        if not isinstance(instr, dict):
+            continue
+        addr = instr.get("address", "")
+        bytes_str = instr.get("bytes", "")
+        mnemonic = instr.get("mnemonic", "")
+        operands = instr.get("operands", "")
+        # Format: address: bytes  mnemonic operands
+        lines.append(f"{addr}: {bytes_str.ljust(10)}  {mnemonic} {operands}")
+
+    return "\n".join(lines)
+
+
+@mcp.resource(uri="ghidra://instance/{port}/function/disassembly/address/{address}")
 def disassembly_by_address(port: int | None = None, address: str | None = None) -> str:
     """Get disassembled instructions for a function by address
     
@@ -3375,33 +3513,11 @@ def disassembly_by_address(port: int | None = None, address: str | None = None) 
     
     # For a resource, we want to directly return just the disassembly text
     result = simplified["result"]
-    
-    # Check if we have a disassembly_text field already
-    if isinstance(result, dict) and "disassembly_text" in result:
-        return result["disassembly_text"]
-    
-    # Otherwise if we have raw instructions, format them ourselves
-    if isinstance(result, dict) and "instructions" in result and isinstance(result["instructions"], list):
-        disasm_text = ""
-        for instr in result["instructions"]:
-            if isinstance(instr, dict):
-                addr = instr.get("address", "")
-                mnemonic = instr.get("mnemonic", "")
-                operands = instr.get("operands", "")
-                bytes_str = instr.get("bytes", "")
-                
-                # Format: address: bytes  mnemonic operands
-                disasm_text += f"{addr}: {bytes_str.ljust(10)}  {mnemonic} {operands}\n"
-        
-        return disasm_text
-    
-    # If we have a direct disassembly field, try that as well
-    if isinstance(result, dict) and "disassembly" in result:
-        return result["disassembly"]
-    
-    return "Error: Could not extract disassembly from response"
 
-@mcp.resource(uri="/instance/{port}/function/disassembly/name/{name}")
+    return _disassembly_text(result)
+
+
+@mcp.resource(uri="ghidra://instance/{port}/function/disassembly/name/{name}")
 def disassembly_by_name(port: int | None = None, name: str | None = None) -> str:
     """Get disassembled instructions for a function by name
     
@@ -3435,31 +3551,8 @@ def disassembly_by_name(port: int | None = None, name: str | None = None) -> str
     
     # For a resource, we want to directly return just the disassembly text
     result = simplified["result"]
-    
-    # Check if we have a disassembly_text field already
-    if isinstance(result, dict) and "disassembly_text" in result:
-        return result["disassembly_text"]
-    
-    # Otherwise if we have raw instructions, format them ourselves
-    if isinstance(result, dict) and "instructions" in result and isinstance(result["instructions"], list):
-        disasm_text = ""
-        for instr in result["instructions"]:
-            if isinstance(instr, dict):
-                addr = instr.get("address", "")
-                mnemonic = instr.get("mnemonic", "")
-                operands = instr.get("operands", "")
-                bytes_str = instr.get("bytes", "")
-                
-                # Format: address: bytes  mnemonic operands
-                disasm_text += f"{addr}: {bytes_str.ljust(10)}  {mnemonic} {operands}\n"
-        
-        return disasm_text
-    
-    # If we have a direct disassembly field, try that as well
-    if isinstance(result, dict) and "disassembly" in result:
-        return result["disassembly"]
-    
-    return "Error: Could not extract disassembly from response"
+
+    return _disassembly_text(result)
 
 # ================= MCP Prompts =================
 # Prompts define reusable templates for LLM interactions
@@ -3700,7 +3793,8 @@ def instances_list() -> dict:
                     "port": port,
                     "url": info["url"],
                     "project": info.get("project", ""),
-                    "file": info.get("file", "")
+                    "file": info.get("file", ""),
+                    "headless": bool(info.get("headless", False))
                 }
                 for port, info in active_instances.items()
             ]
@@ -3736,7 +3830,8 @@ def instances_discover(host: str | None = None) -> dict:
                     "port": port,
                     "url": info["url"],
                     "project": info.get("project", ""),
-                    "file": info.get("file", "")
+                    "file": info.get("file", ""),
+                    "headless": bool(info.get("headless", False))
                 }
                 for port, info in active_instances.items()
             ]
@@ -4531,6 +4626,22 @@ def memory_read(address: str, length: int = 16, format: str = "hex", segment: st
             memory_info["bytes"] = result["bytes"]
         if "rawBytes" in result:
             memory_info["rawBytes"] = result["rawBytes"]
+        elif "bytes" in result and isinstance(result["bytes"], list):
+            # The server answers with an int array; the tool promises base64.
+            try:
+                memory_info["rawBytes"] = base64.b64encode(
+                    bytes(int(b) & 0xFF for b in result["bytes"])
+                ).decode("ascii")
+            except (TypeError, ValueError):
+                pass
+        elif isinstance(memory_info.get("hexBytes"), str):
+            # The server answers with hex; the tool promises base64 as well.
+            try:
+                memory_info["rawBytes"] = base64.b64encode(
+                    bytes.fromhex(memory_info["hexBytes"])
+                ).decode("ascii")
+            except ValueError:
+                pass
         if "block" in result:
             memory_info["block"] = result["block"]
             memory_info["permissions"] = result.get("permissions")
@@ -6454,6 +6565,20 @@ X64DBG_READ_TIMEOUT = 30.0
 X64DBG_PROBE_CONNECT_TIMEOUT = 0.35
 X64DBG_PROBE_READ_TIMEOUT = 2.0
 
+# How many times the ports where the server almost always is - the configured
+# one and the two defaults - are probed. The walk asks for one attempt per
+# port: a closed port stays closed, and every extra attempt costs the whole
+# connect timeout again. The likely ones get more, because the machine
+# resets about one loopback connection in fourteen, and one reset must not
+# make the bridge say that the debugger is not there.
+X64DBG_PROBE_ATTEMPTS = 3
+
+# How long the likely ports are given to answer. A closed port is out at the
+# connect stage, so this only bounds a server that accepted the connection
+# and went quiet - and a loaded machine can take a couple of seconds to give
+# that answer. Writing the debugger off for that would be wrong.
+X64DBG_LIKELY_PROBE_READ_TIMEOUT = 5.0
+
 # Which plugin tools may be repeated when the transport fails. The plugin
 # marks every tool as read-only or not, and the hint is in its catalogue.
 _X64DBG_READ_ONLY: Dict[str, bool] = {}
@@ -6462,6 +6587,12 @@ _X64DBG_READ_ONLY: Dict[str, bool] = {}
 # type every parameter is, which is what puts back the types a client
 # flattened into text.
 _X64DBG_SCHEMAS: Dict[str, dict] = {}
+
+# Where the plugin was found, keyed by the configuration it was found with.
+# The plugin does not move while the debugger runs, and the scan that looks
+# for it opens ninety connections - so the port is kept and probed once
+# before it is used.
+_X64DBG_INSTANCE: Dict[str, dict] = {}
 
 # The machine-readable reasons a call can fail. The CLI carries the same list,
 # so an agent sees one taxonomy whichever side it drives.
@@ -6809,19 +6940,40 @@ def _x64dbg_instance() -> dict:
             "X64DBG_DISABLED",
         )
 
-    def _probe(port: int) -> Optional[str]:
-        """The port that answered, or None."""
+    def _probe(port: int, patient: bool) -> Optional[str]:
+        """The port that answered, or None.
+
+        The likely ports are probed with more than one attempt: the machine
+        resets about one loopback connection in fourteen, and a single reset
+        must not be reported as "the debugger is not running".
+        """
         try:
             _x64dbg_post(settings["host"], port, settings["token"], "initialize", {
                 "protocolVersion": X64DBG_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {"name": "ghydramcp", "version": BRIDGE_VERSION},
-            }, timeout=X64DBG_PROBE_READ_TIMEOUT,
+            }, timeout=X64DBG_LIKELY_PROBE_READ_TIMEOUT if patient else X64DBG_PROBE_READ_TIMEOUT,
                 connect_timeout=X64DBG_PROBE_CONNECT_TIMEOUT, idempotent=True,
-                connect_attempts=1)
+                connect_attempts=X64DBG_PROBE_ATTEMPTS if patient else 1)
         except _X64dbgFailure as exc:
             return "unauthorized" if exc.code == "X64DBG_UNAUTHORIZED" else None
         return str(port)
+
+    # The plugin does not move while the debugger runs, so the port it was
+    # found on is kept. The scan opens ninety connections, and a machine
+    # under load resets one of them in fourteen - so a scan per call is a
+    # lot of exposure for an answer that does not change. The port that was
+    # found is probed once before it is used, and a port that stops
+    # answering sends the scan back out.
+    cache_key = f"{settings['host']}:{settings['port']}:{settings['token']}"
+    cached = _X64DBG_INSTANCE.get(cache_key)
+    if cached:
+        answer = _probe(cached["port"], True)
+        if answer and answer != "unauthorized":
+            return cached
+        # The port stopped answering, or the token was refused: the scan
+        # says so, and says it properly.
+        _X64DBG_INSTANCE.pop(cache_key, None)
 
     # The configured port and the two defaults are where the server almost
     # always is, so they are probed first, and the wider walk only happens
@@ -6829,17 +6981,19 @@ def _x64dbg_instance() -> dict:
     likely, others = _x64dbg_candidate_ports(settings["port"])
 
     unauthorized = False
-    for group in (likely, others):
+    for group, patient in ((likely, True), (others, False)):
         if not group:
             continue
         with ThreadPoolExecutor(max_workers=min(16, len(group))) as pool:
-            answers = list(pool.map(_probe, group))
+            answers = list(pool.map(lambda port: _probe(port, patient), group))
         for port, answer in zip(group, answers):
             if answer and answer != "unauthorized":
-                return {
+                instance = {
                     "host": settings["host"], "port": port, "token": settings["token"],
                     "path": settings["path"], "unauthorized": False,
                 }
+                _X64DBG_INSTANCE[cache_key] = instance
+                return instance
         if any(answer == "unauthorized" for answer in answers):
             unauthorized = True
             break
@@ -8291,6 +8445,1326 @@ def raw_image_cleanup(address: str = "", all: bool = False,
 def _missing_param(msg: str) -> dict:
     return {"success": False, "error": {"code": "MISSING_PARAMETER", "message": msg},
             "timestamp": int(time.time() * 1000)}
+
+
+# ================= The target triage =================
+#
+# What is this file, and what does it need? The format comes from the bytes
+# and never from the name of the file.
+#
+# The bridge ships as one file and imports nothing from the "ghydra"
+# package, so the identification is written out here. The CLI carries the
+# deeper version - the resources of a PE, the sections of an ELF, the
+# entries of an APK - and this one answers the question the agent asks
+# first: which tool is this for.
+
+TRIAGE_MAX_LIST = 200
+
+
+def _triage_read(path: str, length: int = 4096) -> bytes:
+    """The first bytes of a file, or nothing."""
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(length)
+    except OSError:
+        return b""
+
+
+def _triage_entropy(data: bytes) -> float:
+    """The Shannon entropy of the bytes, in bits per byte."""
+    if not data:
+        return 0.0
+    counts = [0] * 256
+    for byte in data:
+        counts[byte] += 1
+    total = float(len(data))
+    entropy = 0.0
+    for count in counts:
+        if count:
+            share = count / total
+            entropy -= share * math.log(share, 2)
+    return entropy
+
+
+def _triage_u16(data: bytes, offset: int) -> int:
+    return int.from_bytes(data[offset:offset + 2], "little") if len(data) >= offset + 2 else 0
+
+
+def _triage_u32(data: bytes, offset: int) -> int:
+    return int.from_bytes(data[offset:offset + 4], "little") if len(data) >= offset + 4 else 0
+
+
+def _triage_u64(data: bytes, offset: int) -> int:
+    return int.from_bytes(data[offset:offset + 8], "little") if len(data) >= offset + 8 else 0
+
+
+def _triage_is_text(data: bytes) -> bool:
+    """Whether the bytes look like text."""
+    if not data:
+        return False
+    printable = sum(1 for byte in data if 32 <= byte < 127 or byte in (9, 10, 13))
+    return printable / len(data) > 0.85
+
+
+def _triage_identify(path: str) -> dict:
+    """What the file is, from its bytes."""
+    data = _triage_read(path)
+    facts: dict = {}
+    fmt = "unknown"
+
+    if data[:2] == b"MZ":
+        fmt = "pe"
+        lfanew = _triage_u32(data, 0x3c)
+        facts["machine"] = _triage_u16(data, lfanew + 4)
+        facts["section_count"] = _triage_u16(data, lfanew + 6)
+        facts["timestamp"] = _triage_u32(data, lfanew + 8)
+        optional = lfanew + 24
+        magic = _triage_u16(data, optional)
+        facts["is_64bit"] = magic == 0x20b
+        facts["subsystem"] = _triage_u16(data, optional + 68)
+        facts["image_base"] = hex(_triage_u64(data, optional + 24) if magic == 0x20b
+                                  else _triage_u32(data, optional + 28))
+        facts["entry_point"] = hex(_triage_u32(data, optional + 16))
+        characteristics = _triage_u16(data, lfanew + 22)
+        facts["is_dll"] = bool(characteristics & 0x2000)
+        # The COM descriptor is the fifteenth data directory: a managed
+        # assembly has one, and a native one does not.
+        directories = optional + (112 if magic == 0x20b else 96)
+        facts["is_dotnet"] = _triage_u32(data, directories + 14 * 8) != 0
+    elif data[:4] == b"\x7fELF":
+        fmt = "elf"
+        is_64 = data[4] == 2
+        little = data[5] == 1
+        order = "little" if little else "big"
+        facts["class"] = 64 if is_64 else 32
+        facts["endianness"] = order
+        facts["type"] = int.from_bytes(data[16:18], order)
+        facts["machine"] = int.from_bytes(data[18:20], order)
+        facts["is_core"] = facts["type"] == 4
+        if facts["is_core"]:
+            fmt = "core"
+        facts["entry_point"] = hex(int.from_bytes(data[24:32] if is_64 else data[24:28], order))
+    elif data[:4] in (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+                      b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe"):
+        fmt = "mach-o"
+        facts["bits"] = 64 if data[4] in (0xCF, 0xCF) or data[:4] in (b"\xfe\xed\xfa\xcf",
+                                                                     b"\xcf\xfa\xed\xfe") else 32
+        facts["cputype"] = int.from_bytes(data[4:8], "little")
+        facts["filetype"] = int.from_bytes(data[12:16], "little")
+    elif data[:4] == b"dex\n":
+        fmt = "dex"
+        facts["version"] = data[4:7].decode("ascii", "replace")
+        facts["class_count"] = _triage_u32(data, 96)
+    elif data[:4] == b"\x00asm":
+        fmt = "wasm"
+        facts["version"] = int.from_bytes(data[4:8], "little")
+    elif data[:4] == b"CAFE":
+        fmt = "class"
+        facts["version"] = f"{_triage_u16(data, 6)}.{_triage_u16(data, 4)}"
+    elif data[:4] == b"MDMP":
+        fmt = "core"
+        facts["kind"] = "windows minidump"
+    elif data[:3] == b"\x60\x80\x60":
+        fmt = "evm"
+        facts["code_size"] = len(data)
+    elif data[:2] == b"PK":
+        fmt = "zip"
+        try:
+            import zipfile
+            with zipfile.ZipFile(path) as archive:
+                names = archive.namelist()
+            facts["entry_count"] = len(names)
+            if any(name.startswith("AndroidManifest.xml") for name in names):
+                fmt = "apk"
+                facts["entry_count"] = len(names)
+                facts["has_dex"] = any(name.endswith(".dex") for name in names)
+                facts["native_libraries"] = [
+                    name for name in names if name.endswith(".so")][:TRIAGE_MAX_LIST]
+            elif any(name.endswith("app.asar") or "/app.asar" in name for name in names):
+                facts["has_asar"] = True
+        except Exception:
+            facts["entry_count"] = 0
+    elif data[:2] == b"\x1f\x8b":
+        fmt = "gzip"
+    elif data[:4] == b"%PDF":
+        fmt = "pdf"
+    elif data[:16] == b"SQLite format 3\x00":
+        fmt = "sqlite"
+    elif data[:6] in (b"bplist", b"<?xml "):
+        fmt = "plist"
+    elif data[:4] == b"\x27\x05\x19\x56":
+        fmt = "firmware"
+        facts["kind"] = "uImage"
+        facts["payload_size"] = _triage_u32(data, 4)
+    elif data[:4] == b"hsqs":
+        fmt = "firmware"
+        facts["kind"] = "squashfs"
+    elif data[:4] == b"\x85\x19\x19\x98":
+        fmt = "firmware"
+        facts["kind"] = "jffs2"
+    elif data[:4] == b"\x45\x3d\xcd\x28":
+        fmt = "firmware"
+        facts["kind"] = "cramfs"
+    elif _triage_is_text(data):
+        fmt = "text"
+        stripped = data.strip()
+        if stripped.startswith(b"{") and b'"log"' in stripped:
+            try:
+                import json
+                document = json.loads(open(path, "r", encoding="utf-8",
+                                          errors="replace").read())
+                entries = (document.get("log") or {}).get("entries")
+                if isinstance(entries, list):
+                    fmt = "har"
+                    facts["entry_count"] = len(entries)
+            except Exception:
+                pass
+
+    # A script is a script, whatever it holds. The extension is the only
+    # thing that says so here - the bytes of a JavaScript file are text,
+    # and text is not a format on its own.
+    if fmt in ("text", "unknown") and path.lower().endswith((".js", ".mjs", ".cjs")):
+        fmt = "javascript"
+        facts["kind"] = "javascript"
+
+    return {"format": fmt, "facts": facts}
+
+
+def _triage_recommendations(fmt: str, facts: dict) -> list:
+    """What a target of this kind needs."""
+    out = []
+    if fmt == "pe":
+        if facts.get("is_dotnet"):
+            out.append("managed .NET assembly: a .NET decompiler will read it "
+                       "better than a native one")
+        else:
+            out.append("native PE: run 'ghydra report build <path>'")
+        if facts.get("is_64bit"):
+            out.append("64-bit: the pointers are eight bytes wide")
+    elif fmt == "elf":
+        out.append("native ELF: run 'ghydra report build <path>'")
+    elif fmt == "mach-o":
+        out.append("Mach-O: run 'ghydra report build <path>'")
+    elif fmt == "dex":
+        out.append("Android DEX: the classes are Dalvik bytecode, not native code")
+    elif fmt == "apk":
+        out.append("Android package: unpack it and look at the classes.dex and "
+                   "the native libraries")
+    elif fmt == "wasm":
+        out.append("WASM module: the exports are the entry points")
+    elif fmt == "evm":
+        out.append("EVM contract: the 4-byte selectors are in the dispatcher")
+    elif fmt == "core":
+        out.append("core dump: the registers of the crashing thread are the "
+                   "beginning of the analysis")
+    elif fmt == "javascript":
+        out.append("JavaScript: look for the entry point and the source maps")
+    elif fmt == "firmware":
+        out.append("firmware image: unpack it before anything else")
+    elif fmt == "har":
+        out.append("HAR capture: the requests are the surface of the "
+                   "application")
+    return out
+
+
+@mcp.tool()
+@text_output
+def inspect_target(path: str) -> dict:
+    """Say what a file is, and what it needs.
+
+    The format comes from the bytes and never from the name of the file: a
+    PE, an ELF, a Mach-O, a DEX, an APK, a WASM module, an EVM contract, a
+    firmware image, a JavaScript or Electron application, a core dump, a
+    plist, a HAR capture. It needs neither Ghidra nor the network.
+
+    Args:
+        path: The file to look at
+
+    Returns:
+        dict: The format, the facts that identify it, and what it needs
+    """
+    target = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(target):
+        return {"success": False,
+                "error": {"code": "TRIAGE_NO_FILE",
+                          "message": f"no such file: {path}"}}
+    try:
+        identified = _triage_identify(target)
+    except Exception as exc:
+        return {"success": False,
+                "error": {"code": "TRIAGE_ERROR", "message": str(exc)}}
+
+    size = 0
+    try:
+        size = os.path.getsize(target)
+    except OSError:
+        pass
+
+    facts = identified.get("facts") or {}
+    fmt = identified.get("format", "unknown")
+    return {"success": True,
+            "result": {
+                "path": target,
+                "format": fmt,
+                "size": size,
+                "facts": facts,
+                "recommendations": _triage_recommendations(fmt, facts),
+            }}
+
+
+
+
+# ================= Headless: the API without a window =================
+#
+# The bridge is a standalone script: it ships as one file and imports
+# nothing from the "ghydra" package. The helpers below are therefore the
+# same ones the CLI has, written out again - the pattern the Kuna
+# integration already follows.
+#
+# What is here: a headless Ghidra run that serves the same REST API from
+# an analysis, with no window and nobody watching. The run outlives the
+# call that started it, so an agent can analyse a binary and then use the
+# ordinary tools on it.
+
+HEADLESS_DEFAULT_PORT = 8192
+HEADLESS_SCRIPT = "GhidraHeadlessServer"
+HEADLESS_POLL = 0.25
+
+# The headless analyzer's own heap default, and the two flags it uses to
+# keep the GC and the JIT compiler from taking a thread per core.
+HEADLESS_MAXMEM = "2G"
+HEADLESS_VMARGS = ["-XX:ParallelGCThreads=2", "-XX:CICompilerCount=2"]
+
+
+def _headless_state_dir() -> str:
+    """Where the state of the runs lives."""
+    base = os.environ.get("GHYDRA_STATE_DIR")
+    if not base:
+        base = os.path.join(os.path.expanduser("~"), ".ghydra")
+    try:
+        os.makedirs(base, exist_ok=True)
+    except OSError:
+        pass
+    return base
+
+
+def _headless_state_path(port: int) -> str:
+    return os.path.join(_headless_state_dir(), f"headless-{int(port)}.json")
+
+
+def _headless_log_path(port: int) -> str:
+    return os.path.join(_headless_state_dir(), f"headless-{int(port)}.log")
+
+
+def _headless_stop_file(port: int) -> str:
+    """The file the launcher leaves behind to stop the run."""
+    return os.path.join(os.path.expanduser("~"), ".ghidra", f"headless-{int(port)}.stop")
+
+
+def _headless_candidate_homes() -> list:
+    """The places Ghidra is usually installed."""
+    home = os.path.expanduser("~")
+    candidates = []
+    if os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA", "")
+        program = os.environ.get("ProgramFiles", r"C:\Program Files")
+        if local:
+            candidates.append(os.path.join(local, "Programs", "Ghidra"))
+        if program:
+            candidates.append(os.path.join(program, "Ghidra"))
+        candidates.append(os.path.join(home, "scoop", "apps", "ghidra", "current"))
+        candidates.append(os.path.join(home, "ghidra"))
+    else:
+        candidates.extend(["/opt/ghidra", "/usr/local/ghidra", "/usr/share/ghidra",
+                           os.path.join(home, "ghidra"), os.path.join(home, "opt", "ghidra")])
+    return candidates
+
+
+def _headless_find_ghidra(explicit: str = "") -> str:
+    """Where the Ghidra installation is."""
+    for candidate in (explicit, os.environ.get("GHIDRA_HOME")):
+        if candidate and os.path.isdir(candidate):
+            return os.path.abspath(candidate)
+    for candidate in _headless_candidate_homes():
+        if os.path.isdir(candidate):
+            return os.path.abspath(candidate)
+    raise FileNotFoundError(
+        "no Ghidra installation found. Set GHIDRA_HOME, or pass ghidra_home.")
+
+
+def _headless_properties(path: str) -> dict:
+    """The key/value pairs of a Java properties file."""
+    out = {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for raw in handle:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                if key.strip():
+                    out[key.strip()] = value.strip()
+    except OSError:
+        pass
+    return out
+
+
+def _headless_java_version(java_home: str):
+    """The version of a JDK, read from the release file it ships."""
+    try:
+        with open(os.path.join(java_home, "release"), "r", encoding="utf-8",
+                  errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return None
+    match = re.search(r'JAVA_VERSION="?(\d+)', text)
+    return int(match.group(1)) if match else None
+
+
+def _headless_find_java(ghidra_home: str, explicit: str = "") -> str:
+    """The JDK to run Ghidra with.
+
+    Ghidra's own LaunchSupport is asked first when there is a java to ask
+    it with: it answers with a JDK the installation supports, which is
+    better than any search.
+    """
+    properties = _headless_properties(
+        os.path.join(ghidra_home, "Ghidra", "application.properties"))
+    required = properties.get("application.java.min", "")
+    try:
+        required = int(required) if required else 0
+    except ValueError:
+        required = 0
+
+    candidates = []
+    if explicit:
+        candidates.append(explicit)
+    env_home = os.environ.get("JAVA_HOME", "")
+    if env_home:
+        candidates.append(env_home)
+
+    support = os.path.join(ghidra_home, "support", "LaunchSupport.jar")
+    probe = os.path.join(env_home, "bin", "java.exe" if os.name == "nt" else "java")
+    if not os.path.isfile(probe):
+        probe = shutil.which("java") or ""
+    if probe and os.path.isfile(support):
+        try:
+            output = subprocess.run(
+                [probe, "-cp", support, "LaunchSupport", ghidra_home, "-jdk_home", "-save"],
+                capture_output=True, text=True, timeout=120).stdout or ""
+            for line in output.splitlines():
+                candidate = line.strip()
+                if candidate and os.path.isdir(candidate):
+                    candidates.append(candidate)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    for candidate in candidates:
+        version = _headless_java_version(candidate)
+        if version is None:
+            continue
+        if required and version < required:
+            continue
+        return os.path.abspath(candidate)
+
+    raise FileNotFoundError(
+        f"no JDK {required or ''} or newer was found. Set JAVA_HOME, or pass "
+        "java_home.")
+
+
+def _headless_vmargs(ghidra_home: str, java_home: str) -> list:
+    """The VM arguments of the installation, as Ghidra itself reads them."""
+    support = os.path.join(ghidra_home, "support", "LaunchSupport.jar")
+    java = os.path.join(java_home, "bin", "java.exe" if os.name == "nt" else "java")
+    if not os.path.isfile(support) or not os.path.isfile(java):
+        return []
+    try:
+        output = subprocess.run(
+            [java, "-cp", support, "LaunchSupport", ghidra_home, "-vmargs"],
+            capture_output=True, text=True, timeout=120).stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def _headless_project_index(project_dir: str, project_name: str) -> str:
+    """The index of the files in a project.
+
+    Ghidra keeps it as plain text: one line per file, with the name of the
+    file and the id of its content. It is what says whether a program is
+    already in the project.
+    """
+    path = os.path.join(project_dir, f"{project_name}.rep", "idata", "~index.dat")
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+    except OSError:
+        return ""
+
+
+def _headless_program_in_project(project_dir: str, project_name: str, program: str) -> bool:
+    """Whether the program is already in the project.
+
+    Importing a program that is already there fails, and the run ends
+    without ever reaching the script that starts the server. When the
+    program is there, the run has to process it instead of importing it.
+    """
+    index = _headless_project_index(project_dir, project_name)
+    if not index:
+        return False
+    return f":{os.path.basename(program)}:" in index
+
+
+def _headless_command(ghidra_home: str, java_home: str, project_dir: str,
+                      project_name: str, binary: str, port: int,
+                      process: bool = False) -> list:
+    """The command that starts a headless run.
+
+    It is the JVM invocation the launcher makes, not the launcher itself:
+    the Windows launcher asks "press any key to continue" when it fails,
+    because it cannot tell a double-click from a shell - and a launcher
+    that was started by another program is exactly that case.
+    """
+    utility = os.path.join(ghidra_home, "Ghidra", "Framework", "Utility", "lib", "Utility.jar")
+    if not os.path.isfile(utility):
+        raise FileNotFoundError(f"no Utility.jar in {utility}")
+    java = os.path.join(java_home, "bin", "java.exe" if os.name == "nt" else "java")
+    command = [java]
+    command += _headless_vmargs(ghidra_home, java_home)
+    command.append(f"-Xmx{HEADLESS_MAXMEM}")
+    command += HEADLESS_VMARGS
+    for name in ("GHIDRA_JAVA_OPTIONS", "GHIDRA_HEADLESS_JAVA_OPTIONS"):
+        value = os.environ.get(name, "")
+        if value.strip():
+            command += [part for part in re.split(r"\s+", value.strip()) if part]
+    command.append(f"-Duser.home={os.path.expanduser('~')}")
+    command += ["-cp", utility, "ghidra.Ghidra", "ghidra.app.util.headless.AnalyzeHeadless"]
+    command += [project_dir, project_name]
+    if process:
+        command += ["-process", os.path.basename(binary)]
+    else:
+        command += ["-import", binary]
+    command += ["-postScript", HEADLESS_SCRIPT, f"port={int(port)}"]
+    return command
+
+
+def _headless_project_dir() -> str:
+    """Where the projects live.
+
+    Ghidra refuses a project path with an element that starts with a dot,
+    and ".ghidra" is exactly that - so the projects live in Ghidra's own
+    convention, in the home directory.
+    """
+    return os.path.join(os.path.expanduser("~"), "ghidra_projects")
+
+
+def _headless_api_answers(host: str, port: int, timeout: float = 5.0) -> bool:
+    """Whether the API answers on the port."""
+    try:
+        response = requests.get(f"http://{host}:{int(port)}/", timeout=timeout)
+    except Exception:
+        return False
+    return response.status_code == 200
+
+
+def _headless_process_alive(pid: int) -> bool:
+    """Whether the process of a run is still there."""
+    if not pid:
+        return False
+    if os.name == "nt":
+        try:
+            output = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
+                                    capture_output=True, text=True, timeout=10).stdout or ""
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return str(pid) in output
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _headless_process_is_ours(pid: int) -> bool:
+    """Whether the process is the headless run this bridge started.
+
+    A PID on its own says nothing - the operating system reuses them, and
+    a run that died leaves its state behind. The command line is read, and
+    the process is only ours when it carries the marker of the headless
+    script.
+    """
+    if not pid:
+        return False
+    try:
+        if os.name == "nt":
+            command = ("Get-CimInstance Win32_Process -Filter "
+                       f"'ProcessId={int(pid)}' | Select-Object -ExpandProperty CommandLine")
+            output = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+                capture_output=True, text=True, timeout=30).stdout or ""
+        else:
+            output = subprocess.run(["ps", "-p", str(int(pid)), "-o", "command="],
+                                    capture_output=True, text=True, timeout=30).stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return HEADLESS_SCRIPT.lower() in (output or "").lower()
+
+
+def _headless_load_state(port: int) -> dict:
+    """The run remembered for a port."""
+    try:
+        with open(_headless_state_path(port), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _headless_save_state(port: int, state: dict) -> None:
+    """Remember a run."""
+    try:
+        with open(_headless_state_path(port), "w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2)
+    except OSError:
+        pass
+
+
+def _headless_clear_state(port: int) -> None:
+    """Forget a run."""
+    try:
+        os.remove(_headless_state_path(port))
+    except OSError:
+        pass
+
+
+def _headless_slug(binary: str) -> str:
+    """A project name for a binary."""
+    stem = os.path.splitext(os.path.basename(binary))[0]
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("_") or "binary"
+
+
+@mcp.tool()
+@text_output
+def headless_start(binary: str, port: int = HEADLESS_DEFAULT_PORT,
+                   timeout: int = 900, ghidra_home: str = "",
+                   java_home: str = "") -> dict:
+    """Analyse a binary and serve the API from it, with no window.
+
+    The run imports the binary, analyses it, and then answers the ordinary
+    GhidraMCP tools on that analysis - with no CodeBrowser and nobody
+    watching. It outlives this call: the tools keep working until
+    "headless_stop" is called.
+
+    The analysis of a big binary takes minutes, so the call waits for the
+    API to come up (the "timeout" is how long it waits).
+
+    Args:
+        binary: The file to analyse
+        port: The port to serve on (default: 8192)
+        timeout: Seconds to wait for the API (default: 900)
+        ghidra_home: Path of the Ghidra installation (default: GHIDRA_HOME)
+        java_home: Path of the JDK (default: the one Ghidra supports)
+
+    Returns:
+        dict: The port, the url, the pid, the project and the log
+    """
+    return _headless_start_raw(binary, port, timeout, ghidra_home, java_home)
+
+
+def _headless_start_raw(binary: str, port: int = HEADLESS_DEFAULT_PORT,
+                        timeout: int = 900, ghidra_home: str = "",
+                        java_home: str = "") -> dict:
+    """The run itself, without the tool around it.
+
+    The session tools need the same thing the headless tools do, so the
+    work is here and the tool is the wrapper around it.
+    """
+    path = os.path.abspath(os.path.expanduser(binary))
+    if not os.path.isfile(path):
+        return {"success": False,
+                "error": {"code": "HEADLESS_NO_FILE",
+                          "message": f"no such binary: {path}"}}
+
+    try:
+        home = _headless_find_ghidra(ghidra_home)
+    except FileNotFoundError as exc:
+        return {"success": False,
+                "error": {"code": "HEADLESS_NO_GHIDRA", "message": str(exc)}}
+
+    try:
+        java = _headless_find_java(home, java_home)
+    except FileNotFoundError as exc:
+        return {"success": False,
+                "error": {"code": "HEADLESS_NO_JDK", "message": str(exc)}}
+
+    if _headless_api_answers(ghidra_host, port):
+        return {"success": False,
+                "error": {"code": "HEADLESS_PORT_IN_USE",
+                          "message": f"something is already serving the API on "
+                                     f"{ghidra_host}:{port}"}}
+
+    project_dir = _headless_project_dir()
+    project_name = _headless_slug(path)
+    try:
+        os.makedirs(project_dir, exist_ok=True)
+    except OSError as exc:
+        return {"success": False,
+                "error": {"code": "HEADLESS_BAD_PROJECT_DIR", "message": str(exc)}}
+
+    try:
+        command = _headless_command(
+            home, java, project_dir, project_name, path, port,
+            process=_headless_program_in_project(project_dir, project_name, path))
+    except FileNotFoundError as exc:
+        return {"success": False,
+                "error": {"code": "HEADLESS_LAUNCH", "message": str(exc)}}
+
+    log = _headless_log_path(port)
+    try:
+        handle = open(log, "a", encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return {"success": False,
+                "error": {"code": "HEADLESS_LAUNCH", "message": str(exc)}}
+
+    kwargs = {"stdout": handle, "stderr": subprocess.STDOUT,
+              "stdin": subprocess.DEVNULL, "cwd": project_dir}
+    if os.name == "nt":
+        kwargs["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP
+                                   | getattr(subprocess, "DETACHED_PROCESS", 0))
+    else:
+        kwargs["start_new_session"] = True
+
+    try:
+        process = subprocess.Popen(command, **kwargs)
+    except OSError as exc:
+        handle.close()
+        return {"success": False,
+                "error": {"code": "HEADLESS_LAUNCH", "message": str(exc)}}
+    finally:
+        handle.close()
+
+    _headless_save_state(port, {
+        "port": int(port), "pid": process.pid, "binary": path,
+        "project_dir": project_dir, "project_name": project_name,
+        "ghidra_home": home, "java_home": java, "log": log,
+        "started_at": time.time(),
+    })
+
+    deadline = time.time() + max(1, int(timeout))
+    while time.time() < deadline:
+        if process.poll() is not None:
+            return {"success": False,
+                    "error": {"code": "HEADLESS_DIED",
+                              "message": f"the headless run ended before the API came "
+                                         f"up. See {log}"}}
+        if _headless_api_answers(ghidra_host, port):
+            register_instance(int(port), f"http://{ghidra_host}:{int(port)}")
+            return {"success": True,
+                    "result": {
+                        "message": f"The API is serving on http://{ghidra_host}:{int(port)}",
+                        "port": int(port), "pid": process.pid, "binary": path,
+                        "project": f"{project_dir}/{project_name}", "log": log}}
+        time.sleep(HEADLESS_POLL)
+
+    return {"success": False,
+            "error": {"code": "HEADLESS_TIMEOUT",
+                      "message": f"the API did not answer within {timeout}s. See {log}"}}
+
+
+@mcp.tool()
+@text_output
+def headless_stop(port: int = HEADLESS_DEFAULT_PORT, timeout: int = 20) -> dict:
+    """Stop a headless run, saving the analysis on its way out.
+
+    The stop is polite: the run is asked to end, so that Ghidra saves the
+    program and closes the project, and the project is left unlocked. The
+    analysis stays in the project and the program can be opened in Ghidra
+    later.
+
+    Args:
+        port: The port of the run (default: 8192)
+        timeout: Seconds to wait for the run to end (default: 20)
+
+    Returns:
+        dict: Whether the run was stopped and whether it was saved
+    """
+    return _headless_stop_raw(port, timeout)
+
+
+def _headless_stop_raw(port: int = HEADLESS_DEFAULT_PORT, timeout: int = 20) -> dict:
+    """The stop itself, without the tool around it."""
+    state = _headless_load_state(port)
+    if not state:
+        return {"success": False,
+                "error": {"code": "HEADLESS_NO_RUN",
+                          "message": f"no headless run is known on port {port}"}}
+
+    saved = False
+    try:
+        requests.post(f"http://{ghidra_host}:{int(port)}/program/save", timeout=30)
+        saved = True
+    except Exception:
+        saved = False
+
+    pid = int(state.get("pid") or 0)
+    if not pid or not _headless_process_is_ours(pid):
+        # The state outlived the run, and the PID may belong to something
+        # else by now. Nothing is killed.
+        _headless_clear_state(port)
+        return {"success": True,
+                "result": {"message": f"the run on port {port} was not there "
+                                      f"anymore; the stale state was cleared",
+                           "port": int(port), "saved": saved, "stopped": False}}
+
+    flag = _headless_stop_file(port)
+    try:
+        os.makedirs(os.path.dirname(flag), exist_ok=True)
+        with open(flag, "w", encoding="utf-8") as handle:
+            handle.write(str(time.time()))
+    except OSError:
+        flag = ""
+
+    stopped = False
+    if flag:
+        deadline = time.time() + max(1, int(timeout))
+        while time.time() < deadline:
+            if not _headless_process_alive(pid):
+                stopped = True
+                break
+            time.sleep(HEADLESS_POLL)
+
+    if not stopped:
+        if os.name == "nt":
+            try:
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                               capture_output=True, timeout=timeout)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        else:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        deadline = time.time() + max(1, int(timeout))
+        while time.time() < deadline and _headless_process_alive(pid):
+            time.sleep(HEADLESS_POLL)
+        if _headless_process_alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        stopped = True
+
+    _headless_clear_state(port)
+    with instances_lock:
+        active_instances.pop(int(port), None)
+    return {"success": True,
+            "result": {"message": f"the run on port {port} was stopped",
+                       "port": int(port), "saved": saved, "stopped": True}}
+
+
+@mcp.tool()
+@text_output
+def headless_status(port: int = HEADLESS_DEFAULT_PORT) -> dict:
+    """What is known about the headless run on a port.
+
+    Args:
+        port: The port to look at (default: 8192)
+
+    Returns:
+        dict: Whether the run is alive, what it analyses and where its log is
+    """
+    state = _headless_load_state(port)
+    if not state:
+        return {"success": True,
+                "result": {"port": int(port), "known": False, "running": False,
+                           "api": _headless_api_answers(ghidra_host, port)}}
+    pid = int(state.get("pid") or 0)
+    return {"success": True,
+            "result": {"port": int(port), "known": True,
+                       "running": _headless_process_alive(pid),
+                       "api": _headless_api_answers(ghidra_host, port),
+                       "pid": pid, "binary": state.get("binary", ""),
+                       "project_dir": state.get("project_dir", ""),
+                       "project_name": state.get("project_name", ""),
+                       "log": state.get("log", ""),
+                       "started_at": state.get("started_at", 0)}}
+
+
+# ================= The doctor =================
+
+@mcp.tool()
+@text_output
+def doctor_check() -> dict:
+    """Check that everything is in place, and say what is not.
+
+    The Ghidra installation, the JDK it needs, the extension, the port,
+    the project directory, the API, Kuna and the x64dbg plugin. Every
+    problem comes with the command that solves it.
+
+    Returns:
+        dict: One entry per check, with its status and its hint
+    """
+    checks = []
+
+    def add(name: str, status: str, detail: str, hint: str = "") -> None:
+        checks.append({"name": name, "status": status, "detail": detail, "hint": hint})
+
+    home = ""
+    try:
+        home = _headless_find_ghidra()
+        properties = _headless_properties(
+            os.path.join(home, "Ghidra", "application.properties"))
+        version = properties.get("application.version", "")
+        add("ghidra", "ok", f"{home}" + (f" (version {version})" if version else ""))
+    except FileNotFoundError as exc:
+        add("ghidra", "fail", str(exc),
+            'Set GHIDRA_HOME, or put "ghidra_home" in ~/.ghydra/config.json.')
+
+    if home:
+        try:
+            java = _headless_find_java(home)
+            version = _headless_java_version(java)
+            add("jdk", "ok", f"{java}" + (f" (JDK {version})" if version else ""))
+        except FileNotFoundError as exc:
+            add("jdk", "fail", str(exc),
+                'Install a JDK and point at it: "java_home" in ~/.ghydra/config.json.')
+
+        settings = os.path.join(os.environ.get("APPDATA", ""), "ghidra") if os.name == "nt" \
+            else os.path.join(os.path.expanduser("~"), ".config", "ghidra")
+        installed = False
+        for root, directories, files in os.walk(settings):
+            if "extension.properties" in files and "Ghydra" in root:
+                installed = True
+                break
+            if len(root.split(os.sep)) > len(settings.split(os.sep)) + 3:
+                directories[:] = []
+        add("extension", "ok" if installed else "fail",
+            "installed" if installed else f"not installed under {settings}",
+            "" if installed else "Install the extension in the directory Ghidra loads from.")
+    else:
+        add("jdk", "warn", "not checked - there is no Ghidra installation")
+        add("extension", "warn", "not checked - there is no Ghidra installation")
+
+    api = _headless_api_answers(ghidra_host, DEFAULT_GHIDRA_PORT)
+    add("api", "ok" if api else "warn",
+        f"an instance is serving on {ghidra_host}:{DEFAULT_GHIDRA_PORT}" if api
+        else f"nothing is serving on {ghidra_host}:{DEFAULT_GHIDRA_PORT}",
+        "" if api else "A headless run starts one when it is needed.")
+
+    failures = [check for check in checks if check["status"] == "fail"]
+    return {"success": not failures,
+            "result": {"ok": not failures, "checks": checks,
+                       "failures": len(failures),
+                       "warnings": len([c for c in checks if c["status"] == "warn"])}}
+
+
+# ================= The evidence ledger =================
+#
+# Every finding gets an ID, and the ledger can be exported as a bundle.
+# It is what keeps the result of an analysis from dying with the session
+# it was made in.
+
+EVIDENCE_KINDS = ("function", "string", "xref", "data", "note", "vulnerability", "custom")
+EVIDENCE_ID_PREFIX = "EV-"
+EVIDENCE_ID_WIDTH = 4
+
+
+def _evidence_dir() -> str:
+    """Where the ledgers live."""
+    base = os.path.join(_headless_state_dir(), "evidence")
+    try:
+        os.makedirs(base, exist_ok=True)
+    except OSError:
+        pass
+    return base
+
+
+def _evidence_path(name: str) -> str:
+    """The file of a ledger."""
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(name or "default")).strip("_") or "default"
+    return os.path.join(_evidence_dir(), f"{clean}.json")
+
+
+def _evidence_normalize_address(address: str) -> str:
+    """The address in one shape: a lowercase hex with the 0x in front."""
+    text = str(address or "").strip()
+    if not text:
+        return ""
+    try:
+        return hex(int(text, 16))
+    except ValueError:
+        return text
+
+
+def _evidence_load(name: str) -> dict:
+    """The ledger, as it is on disk."""
+    try:
+        with open(_evidence_path(name), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _evidence_save(name: str, data: dict) -> None:
+    """Write the ledger."""
+    try:
+        with open(_evidence_path(name), "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+def _evidence_next_id(data: dict) -> str:
+    """The next ID. An ID is never given out twice."""
+    highest = 0
+    for finding in data.get("findings") or []:
+        text = str(finding.get("id") or "")
+        if text.startswith(EVIDENCE_ID_PREFIX):
+            try:
+                highest = max(highest, int(text[len(EVIDENCE_ID_PREFIX):]))
+            except ValueError:
+                continue
+    try:
+        highest = max(highest, int(data.get("next_id") or 0))
+    except (TypeError, ValueError):
+        pass
+    return f"{EVIDENCE_ID_PREFIX}{highest + 1:0{EVIDENCE_ID_WIDTH}d}"
+
+
+@mcp.tool()
+@text_output
+def evidence_add(kind: str, address: str = "", name: str = "", note: str = "",
+                  tags: str = "", source: str = "", code: str = "",
+                  confidence: str = "medium", ledger: str = "default") -> dict:
+    """Record a finding, and give it an ID.
+
+    A finding is something that was learned about the binary: a function
+    that matters, a string that is a key, an xref that explains a call. It
+    gets an ID that never changes, so it can be referred to later - in a
+    report, in a note, in a conversation.
+
+    Args:
+        kind: What the finding is: function, string, xref, data, note,
+            vulnerability or custom
+        address: Where it is, as the static address (0x140001000)
+        name: The name of the thing
+        note: What was learned about it
+        tags: Tags, separated by commas
+        source: Where it was seen - a tool, an instance, a report
+        code: A snippet of code, when there is one
+        confidence: high, medium or low (default: medium)
+        ledger: The ledger to write into (default: "default")
+
+    Returns:
+        dict: The finding, with the ID it was given
+    """
+    if kind not in EVIDENCE_KINDS:
+        return {"success": False,
+                "error": {"code": "EVIDENCE_BAD_KIND",
+                          "message": f"'{kind}' is not a kind. Use one of: "
+                                     + ", ".join(EVIDENCE_KINDS)}}
+    if confidence not in ("high", "medium", "low"):
+        confidence = "medium"
+
+    data = _evidence_load(ledger)
+    data.setdefault("name", ledger)
+    data.setdefault("created_at", time.time())
+    findings = data.get("findings")
+    if not isinstance(findings, list):
+        findings = []
+    finding_id = _evidence_next_id(data)
+    tag_list = [tag.strip() for tag in str(tags or "").split(",") if tag.strip()]
+    finding = {
+        "id": finding_id,
+        "kind": kind,
+        "address": _evidence_normalize_address(address),
+        "name": str(name or ""),
+        "note": str(note or ""),
+        "tags": tag_list,
+        "source": str(source or ""),
+        "code": str(code or ""),
+        "confidence": confidence,
+        "created_at": time.time(),
+    }
+    findings.append(finding)
+    data["findings"] = findings
+    data["updated_at"] = time.time()
+    data["next_id"] = int(finding_id[len(EVIDENCE_ID_PREFIX):]) + 1
+    _evidence_save(ledger, data)
+
+    return {"success": True, "result": {"message": f"{finding_id} was recorded",
+                                        "finding": finding,
+                                        "ledger": _evidence_path(ledger)}}
+
+
+@mcp.tool()
+@text_output
+def evidence_list(ledger: str = "default", kind: str = "", tag: str = "",
+                  address: str = "", query: str = "") -> dict:
+    """The findings of a ledger.
+
+    Args:
+        ledger: The ledger to read (default: "default")
+        kind: Only the findings of this kind
+        tag: Only the findings with this tag
+        address: Only the findings at this address
+        query: Only the findings whose name, note or address holds this text
+
+    Returns:
+        dict: The findings that matched
+    """
+    data = _evidence_load(ledger)
+    findings = data.get("findings") or []
+    wanted_address = _evidence_normalize_address(address)
+    lowered = str(query or "").lower()
+
+    out = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        if kind and finding.get("kind") != kind:
+            continue
+        if tag and tag not in (finding.get("tags") or []):
+            continue
+        if wanted_address and finding.get("address") != wanted_address:
+            continue
+        if lowered:
+            haystack = " ".join([
+                str(finding.get("name") or ""),
+                str(finding.get("note") or ""),
+                str(finding.get("address") or ""),
+            ]).lower()
+            if lowered not in haystack:
+                continue
+        out.append(finding)
+
+    return {"success": True,
+            "result": {"ledger": ledger, "count": len(out),
+                       "total": len(findings), "findings": out}}
+
+
+@mcp.tool()
+@text_output
+def evidence_export(ledger: str = "default", output: str = "",
+                    binary: str = "") -> dict:
+    """Export the ledger as a bundle: a document to read and one to read
+    with a program.
+
+    Args:
+        ledger: The ledger to export (default: "default")
+        output: The directory the files go to (default: the current one)
+        binary: The binary the findings are about, for the header
+
+    Returns:
+        dict: Where the two files are, and how many findings there are
+    """
+    data = _evidence_load(ledger)
+    findings = data.get("findings") or []
+    directory = os.path.abspath(os.path.expanduser(output)) if output else os.getcwd()
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except OSError as exc:
+        return {"success": False,
+                "error": {"code": "EVIDENCE_IO", "message": str(exc)}}
+
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(ledger or "default")).strip("_") or "default"
+    markdown_path = os.path.join(directory, f"{stem}-evidence.md")
+    json_path = os.path.join(directory, f"{stem}-evidence.json")
+
+    lines = [f"# {ledger} - evidence\n"]
+    if binary:
+        lines.append(f"- Binary: `{binary}`")
+    lines.append(f"- Exported: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"- Findings: {len(findings)}\n")
+
+    by_kind = {}
+    for finding in findings:
+        by_kind.setdefault(str(finding.get("kind") or "note"), 0)
+        by_kind[str(finding.get("kind") or "note")] += 1
+    if by_kind:
+        lines.append("| Kind | How many |")
+        lines.append("| --- | --- |")
+        for kind in sorted(by_kind):
+            lines.append(f"| {kind} | {by_kind[kind]} |")
+        lines.append("")
+
+    for finding in findings:
+        lines.append(f"## {finding.get('id')} - {finding.get('name') or finding.get('kind')}\n")
+        lines.append(f"- Kind: {finding.get('kind')}")
+        if finding.get("address"):
+            lines.append(f"- Address: `{finding.get('address')}`")
+        if finding.get("tags"):
+            lines.append(f"- Tags: {', '.join(finding.get('tags') or [])}")
+        if finding.get("source"):
+            lines.append(f"- Source: {finding.get('source')}")
+        lines.append(f"- Confidence: {finding.get('confidence', 'medium')}")
+        if finding.get("note"):
+            lines.append(f"\n{finding.get('note')}")
+        if finding.get("code"):
+            lines.append("\n```c")
+            lines.append(str(finding.get("code")).rstrip())
+            lines.append("```")
+        lines.append("")
+
+    try:
+        with open(markdown_path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines))
+        with open(json_path, "w", encoding="utf-8") as handle:
+            json.dump({"ledger": ledger, "binary": binary,
+                       "exported_at": time.time(), "findings": findings},
+                      handle, indent=2, ensure_ascii=False)
+    except OSError as exc:
+        return {"success": False,
+                "error": {"code": "EVIDENCE_IO", "message": str(exc)}}
+
+    return {"success": True,
+            "result": {"message": f"the bundle is in {directory}",
+                       "markdown": markdown_path, "json": json_path,
+                       "findings": len(findings)}}
+
+
+# ================= Sessions =================
+#
+# A session is a named working context: the binary, the port that serves
+# it, and the state. It survives the shell that opened it.
+
+def _sessions_path() -> str:
+    """Where the sessions are kept."""
+    return os.path.join(_headless_state_dir(), "sessions.json")
+
+
+def _sessions_load() -> list:
+    """The sessions, as they are on disk."""
+    try:
+        with open(_sessions_path(), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        sessions = data.get("sessions") if isinstance(data, dict) else None
+        return sessions if isinstance(sessions, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _sessions_save(sessions: list) -> None:
+    """Write the sessions."""
+    try:
+        with open(_sessions_path(), "w", encoding="utf-8") as handle:
+            json.dump({"sessions": sessions}, handle, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+def _session_id(name: str, created_at: float) -> str:
+    """A short, stable ID for a session."""
+    digest = hashlib.sha256(f"{name}:{created_at}".encode("utf-8")).hexdigest()
+    return f"s-{digest[:8]}"
+
+
+@mcp.tool()
+@text_output
+def session_open(binary: str, name: str = "", port: int = HEADLESS_DEFAULT_PORT,
+                 timeout: int = 900) -> dict:
+    """Open a session on a binary: analyse it and keep it available.
+
+    A session is a named working context - the binary, the port that
+    serves it and the state of the work. It outlives the call that opened
+    it, and the tools keep working on it until it is closed.
+
+    Args:
+        binary: The file to analyse
+        name: What to call the session (default: the name of the binary)
+        port: The port to serve on (default: 8192)
+        timeout: Seconds to wait for the API (default: 900)
+
+    Returns:
+        dict: The session, with its ID and the port it serves on
+    """
+    path = os.path.abspath(os.path.expanduser(binary))
+    label = name or _headless_slug(path)
+    sessions = _sessions_load()
+    for session in sessions:
+        if session.get("name") == label:
+            return {"success": False,
+                    "error": {"code": "SESSION_ALREADY",
+                              "message": f"there is already a session named '{label}'"}}
+
+    started = _headless_start_raw(path, port, timeout)
+    if not started.get("success"):
+        return started
+
+    created = time.time()
+    session = {
+        "id": _session_id(label, created),
+        "name": label,
+        "binary": path,
+        "port": int(port),
+        "provider": "ghidra",
+        "state": "running",
+        "pid": started.get("result", {}).get("pid", 0),
+        "project": started.get("result", {}).get("project", ""),
+        "created_at": created,
+        "updated_at": created,
+        "extra": {},
+    }
+    sessions.append(session)
+    _sessions_save(sessions)
+    return {"success": True, "result": {"message": f"the session '{label}' is open",
+                                        "session": session}}
+
+
+@mcp.tool()
+@text_output
+def session_list() -> dict:
+    """The sessions that are open, and the ones that were closed.
+
+    Returns:
+        dict: Every session, with its state
+    """
+    sessions = _sessions_load()
+    for session in sessions:
+        pid = int(session.get("pid") or 0)
+        if session.get("state") == "running" and pid and not _headless_process_alive(pid):
+            session["state"] = "stopped"
+    _sessions_save(sessions)
+    return {"success": True, "result": {"count": len(sessions), "sessions": sessions}}
+
+
+@mcp.tool()
+@text_output
+def session_close(session_id: str) -> dict:
+    """Close a session, saving the analysis on its way out.
+
+    Args:
+        session_id: The ID of the session, as "session_list" shows it
+
+    Returns:
+        dict: Whether the session was closed and whether it was saved
+    """
+    sessions = _sessions_load()
+    for session in sessions:
+        if session.get("id") != session_id:
+            continue
+        if session.get("state") != "running":
+            return {"success": False,
+                    "error": {"code": "SESSION_NOT_RUNNING",
+                              "message": f"the session '{session.get('name')}' is "
+                                         f"not running"}}
+        stopped = _headless_stop_raw(int(session.get("port") or 8192))
+        session["state"] = "stopped"
+        session["updated_at"] = time.time()
+        _sessions_save(sessions)
+        return {"success": True,
+                "result": {"message": f"the session '{session.get('name')}' was closed",
+                           "session": session, "stopped": stopped}}
+
+    return {"success": False,
+            "error": {"code": "SESSION_NO_SUCH",
+                      "message": f"no session with the ID '{session_id}'"}}
 
 
 # ================= Startup =================

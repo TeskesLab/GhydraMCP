@@ -422,9 +422,131 @@ and `GHYDRA_X64DBG_TOKEN` do the same from the environment. The config file wins
 
 **[GHYDRA_X64DBG.md](GHYDRA_X64DBG.md)** is the full reference.
 
-## Remaining Command Groups to Implement
+### Doctor, Inspect, Evidence and Session Commands
 
-The following command groups follow the same pattern as `instances` and `functions`. Here's how to implement them:
+```bash
+# Is everything in place on this machine, and what is not?
+ghydra doctor
+
+# What is this target, and what does it need?
+ghydra inspect C:\bin\cmd.exe
+
+# Record a finding, and give it an ID
+ghydra evidence add --kind function --address 0x140001000 \
+    --name decrypt_blob --note "the key comes from the serial" --tags crypto
+
+# What was found
+ghydra evidence list --tag crypto
+
+# Take the findings with you
+ghydra evidence export --output out
+
+# Open a binary and keep it available under a name
+ghydra session open C:\bin\cmd.exe --name cmd
+
+# What is open
+ghydra session list
+
+# End it; the analysis is saved first
+ghydra session close s-3f9a21c4
+```
+
+| Command | What it does |
+| --- | --- |
+| `ghydra doctor` | checks the installation, the JDK it needs, the extension, the port, the project directory, the API, Kuna and the x64dbg plugin; every problem carries the command that solves it |
+| `ghydra inspect <target>` | identifies a file from its bytes - a PE, an ELF, a Mach-O, a DEX, an APK, a WASM module, an EVM contract, a firmware image, a JavaScript or Electron application, a core dump, a plist, a HAR capture - and says what each one needs |
+| `ghydra evidence add` | records a finding and gives it an ID (`EV-0001`) that never changes and is never given out twice |
+| `ghydra evidence list` | filters the findings by kind, tag, address or text |
+| `ghydra evidence export` | writes the ledger as a bundle: a Markdown document to read and a JSON one to read with a program |
+| `ghydra session open` | analyses a binary and keeps it available under a name; the session outlives the shell that opened it |
+| `ghydra session list` | the sessions, and what state they are in |
+| `ghydra session close` | ends a session, saving the analysis on the way out |
+
+The `doctor` exits with a non-zero status when something is wrong, so it can be used as a gate.
+
+## The other command groups
+
+The following command groups follow the same pattern as `instances` and `functions`.
+
+### Headless Commands
+
+Run the GhidraMCP API without a window. A headless Ghidra run imports and analyses the binary and
+then serves the same REST API the CodeBrowser plugin serves. See
+[GHYDRA_HEADLESS.md](GHYDRA_HEADLESS.md) for the full reference.
+
+```bash
+# Analyse a binary and serve the API on 8192
+ghydra headless start C:\bin\cmd.exe --port 8192
+
+# What is running
+ghydra headless status
+
+# End it; the analysis is saved first
+ghydra headless stop
+```
+
+| Option | What it is |
+| --- | --- |
+| `--port`, `-p` | the port to serve on (default: 8192) |
+| `--project-dir` | where the Ghidra project lives (default: `~/ghidra_projects`) |
+| `--project-name` | the name of the project (default: the name of the binary, with a mark of its path) |
+| `--ghidra-home` | the Ghidra installation (default: `GHIDRA_HOME`) |
+| `--java-home` | the JDK (default: `JAVA_HOME`) |
+| `--timeout` | how long to wait for the API, in seconds (default: 900) |
+
+The project goes to `ghidra_projects` in your home directory: Ghidra refuses a project path with an
+element that starts with a dot, so `~/.ghidra` is not a place a project can live.
+
+### Report Commands
+
+Build a report on a binary: Ghidra and Kuna side by side, and the annotations for the debugger.
+
+```bash
+# The whole report: the document, the data and the annotations
+ghydra report build C:\bin\cmd.exe --output out
+
+# Without Kuna
+ghydra report build C:\bin\cmd.exe --no-kuna
+```
+
+| Option | What it is |
+| --- | --- |
+| `--output`, `-o` | where the files go (default: the current directory) |
+| `--port`, `-p` | the port of the Ghidra instance (default: 8192) |
+| `--ghidra-home` | the Ghidra installation (default: `GHIDRA_HOME`) |
+| `--java-home` | the JDK (default: `JAVA_HOME`) |
+| `--timeout` | how long to wait for the analysis and the API (default: 900) |
+| `--no-kuna` | do not run Kuna; the report carries Ghidra alone |
+| `--no-headless` | do not start a headless run; use the instance that is already there |
+| `--keep` | leave the headless run running when the report is done |
+| `--max-functions` | how many functions to read (default: 400) |
+| `--max-strings` | how many strings to read (default: 300) |
+| `--max-decompile` | how many functions to decompile (default: 12) |
+| `--max-annotations` | how many annotations to prepare (default: 60) |
+
+The three files are `<name>-report.md`, `<name>-report.json` and `<name>-x64dbg.json`.
+
+### x64dbg Report and Annotations
+
+Take down what the debugger is doing, and put the annotations of a report into it.
+
+```bash
+# The snapshot: state, registers, modules, breakpoints, disassembly, stack, memory map
+ghydra x64dbg report --output out
+
+# Put the annotations of a report into the debugger
+ghydra x64dbg annotate out\cmd-x64dbg.json --bookmarks
+```
+
+| Option | What it is |
+| --- | --- |
+| `--output`, `-o` | where the files go (default: the current directory) |
+| `--name` | the name of the files (default: `x64dbg-report`) |
+| `--instructions` | how many instructions to disassemble (default: 16) |
+
+The annotations take the addresses in the file — the ones in the binary — and translate them into
+the addresses of the live process. `--mode Label` sets labels instead of comments, and `--limit`
+says how many of them to apply.
 
 ### Headless Commands
 

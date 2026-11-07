@@ -119,30 +119,26 @@ public class InstanceResource implements Resource {
 
     /**
      * Query the live plugin on that port for its project/program snapshot.
-     * A headless run has no plugin behind it - the script builds the snapshot
-     * of the program it imported and registers it - so the map entry is read
-     * as it is. Falls back to the bare port/url pair if the map entry is
-     * neither (keeps the route honest).
+     * Falls back to the bare port/url pair if the map entry isn't a GhydraPlugin
+     * (shouldn't happen in practice but keeps the route honest).
+     *
+     * <p>A headless instance has no plugin: it registers the snapshot it
+     * built itself, so the entry is a map and it is read as one.
      */
     private Map<String, Object> snapshotFor(Integer port, Map<Integer, ?> instances) {
         Object pluginInstance = instances.get(port);
         if (pluginInstance instanceof eu.starsong.ghidra.GhydraPlugin p) {
             return new LinkedHashMap<>(p.getInstanceSnapshot());
         }
-        if (pluginInstance instanceof Map<?, ?> snapshot) {
-            Map<String, Object> out = new LinkedHashMap<>();
-            for (Map.Entry<?, ?> entry : snapshot.entrySet()) {
-                if (entry.getKey() != null) {
-                    out.put(String.valueOf(entry.getKey()), entry.getValue());
-                }
-            }
-            out.putIfAbsent("port", port);
-            out.putIfAbsent("url", "http://localhost:" + port);
-            return out;
+        if (pluginInstance instanceof Map<?, ?> given) {
+            Map<String, Object> snapshot = new LinkedHashMap<>();
+            given.forEach((key, value) -> snapshot.put(String.valueOf(key), value));
+            return snapshot;
         }
         Map<String, Object> fallback = new LinkedHashMap<>();
         fallback.put("port", port);
         fallback.put("url", "http://localhost:" + port);
+        fallback.put("headless", false);
         return fallback;
     }
 }

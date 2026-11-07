@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional
 from . import kuna
 from .client import GhidraHTTPClient
 from .client.exceptions import GhidraError
-from .headless import HeadlessError, HeadlessRunner, api_answers, binary_name
+from .headless import HeadlessError, HeadlessRunner, api_answers, binary_name, free_port
 
 
 def is_local_host(host: str) -> bool:
@@ -272,6 +272,42 @@ def collect_kuna_code(kuna_data: Dict[str, Any], chosen: List[Dict[str, Any]],
     return out
 
 
+def compare_tools(ghidra: Dict[str, Any], kuna_data: Dict[str, Any]) -> Dict[str, Any]:
+    """What one of the two tools saw and the other did not.
+
+    Both tools work on the same file and report the same addresses, so their
+    functions can be put side by side. A function only one of them found is
+    a fact about the two tools rather than about the binary - and it is the
+    fastest way to see where the two decompilers disagree.
+    """
+    ghidra_addresses: Dict[str, Dict[str, Any]] = {}
+    for function in ghidra.get("functions") or []:
+        address = _hex(function.get("address"))
+        if address:
+            ghidra_addresses[address] = function
+    kuna_addresses = kuna_functions_by_address(kuna_data.get("index") or [])
+
+    both = sorted(set(ghidra_addresses) & set(kuna_addresses))
+    only_ghidra = sorted(set(ghidra_addresses) - set(kuna_addresses))
+    only_kuna = sorted(set(kuna_addresses) - set(ghidra_addresses))
+
+    def describe(addresses: List[str], source: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {"address": address, "name": str((source.get(address) or {}).get("name", ""))}
+            for address in addresses[:60]
+        ]
+
+    return {
+        "both_count": len(both),
+        "only_ghidra_count": len(only_ghidra),
+        "only_kuna_count": len(only_kuna),
+        "ghidra_reported": len(ghidra_addresses),
+        "kuna_reported": len(kuna_addresses),
+        "only_ghidra": describe(only_ghidra, ghidra_addresses),
+        "only_kuna": describe(only_kuna, kuna_addresses),
+    }
+
+
 def kuna_functions_by_address(records: List[dict]) -> Dict[str, dict]:
     """The Kuna index, keyed by the address it gives.
 
@@ -414,6 +450,12 @@ def build_annotations(binary: str, program: Dict[str, Any],
     }
 
 
+def progress_note(progress: Any, message: str) -> None:
+    """Say something about a phase, when there is somebody to say it to."""
+    if progress is not None and hasattr(progress, "note"):
+        progress.note(message)
+
+
 def _instance_binary(client: GhidraHTTPClient) -> str:
     """The binary the instance has open, as the instance reports it.
 
@@ -472,16 +514,67 @@ def _serves_binary(client: GhidraHTTPClient, binary: str) -> bool:
     return binary_name(actual).lower() == wanted
 
 
-def build_report(request: ReportRequest) -> Dict[str, Any]:
-    """Collect everything and put it together."""
+def build_report(request: ReportRequest, progress: Any = None) -> Dict[str, Any]:
+    """Collect everything and put it together.
+
+    The phases are said out loud when a progress reporter is given: an
+    analysis of a big binary takes minutes, and a decompiler that loads
+    the whole image on every run takes more.
+    """
+
+    def step(message: str):
+        """A phase, said out loud - or nothing at all."""
+        if progress is None:
+            import contextlib
+            return contextlib.nullcontext()
+        return progress.step(message)
+
     binary = os.path.abspath(os.path.expanduser(request.binary))
     if not os.path.isfile(binary):
         raise ReportError(f"no such binary: {request.binary}", code="REPORT_NO_FILE")
 
     runner: Optional[HeadlessRunner] = None
     started = False
+    port = request.port
 
-    if not api_answers(request.host, request.port):
+    if api_answers(request.host, port):
+        # An instance is already serving. It has to be serving THIS binary.
+        client = GhidraHTTPClient(host=request.host, port=port, timeout=request.timeout)
+        if not _serves_binary(client, binary):
+            if not request.with_headless:
+                raise ReportError(
+                    f"the instance on {request.host}:{port} has another binary "
+                    f"open, not {os.path.basename(binary)}",
+                    code="REPORT_WRONG_BINARY",
+                )
+            # Another run is started, on the next free port, for the binary
+            # that was asked for.
+            if not is_local_host(request.host):
+                raise ReportError(
+                    f"the instance on {request.host}:{port} has another binary "
+                    f"open, not {os.path.basename(binary)}, and a headless run "
+                    "only serves this machine. Start the run there, or point the "
+                    "report at this machine.",
+                    code="REPORT_WRONG_BINARY",
+                )
+            port = free_port(request.host, port)
+            with step("starting a headless run for this binary"):
+                runner = HeadlessRunner(
+                    binary=binary,
+                    port=port,
+                    ghidra_home=request.ghidra_home,
+                    java_home=request.java_home,
+                    host=request.host,
+                )
+                try:
+                    runner.start(timeout=request.timeout)
+                except HeadlessError as exc:
+                    # The run that was started is not left behind: it would
+                    # keep the port and the project busy.
+                    runner.stop()
+                    raise ReportError(str(exc), code=exc.code) from None
+            started = True
+    else:
         if not request.with_headless:
             raise ReportError(
                 f"no Ghidra instance is serving on {request.host}:{request.port}",
@@ -490,58 +583,57 @@ def build_report(request: ReportRequest) -> Dict[str, Any]:
         if not is_local_host(request.host):
             # A headless run is started here, on this machine, and it serves
             # this machine. A remote target has to be up already - starting
-            # a run for it would wait for an answer that cannot come, and
-            # leave the analyzer behind.
+            # a run for it would wait for an answer that cannot come.
             raise ReportError(
-                f"no Ghidra instance is serving on {request.host}:{request.port}, and "
-                "a headless run only serves this machine. Start the instance there, "
-                "or point the report at this machine.",
+                f"no Ghidra instance is serving on {request.host}:{request.port}, "
+                "and a headless run only serves this machine. Start the instance "
+                "there, or point the report at this machine.",
                 code="REPORT_NO_INSTANCE",
             )
         try:
-            runner = HeadlessRunner(
-                binary=binary,
-                port=request.port,
-                ghidra_home=request.ghidra_home,
-                java_home=request.java_home,
-                host=request.host,
-            )
-            runner.start(timeout=request.timeout)
+            with step("starting a headless run (the analysis takes a while)"):
+                runner = HeadlessRunner(
+                    binary=binary,
+                    port=port,
+                    ghidra_home=request.ghidra_home,
+                    java_home=request.java_home,
+                    host=request.host,
+                )
+                runner.start(timeout=request.timeout)
         except HeadlessError as exc:
-            # The run that was started is not left behind: it would keep the
-            # port and the project busy, with nothing serving on it.
             if runner is not None:
                 runner.stop()
             raise ReportError(str(exc), code=exc.code) from None
         started = True
-    else:
-        # An instance is already serving. It has to be serving THIS binary.
-        client = GhidraHTTPClient(host=request.host, port=request.port, timeout=request.timeout)
-        if not _serves_binary(client, binary):
-            raise ReportError(
-                f"the instance on {request.host}:{request.port} has another binary "
-                f"open, not {os.path.basename(binary)}",
-                code="REPORT_WRONG_BINARY",
-            )
 
     try:
-        client = GhidraHTTPClient(host=request.host, port=request.port, timeout=request.timeout)
-        ghidra = collect_ghidra(client, request)
+        client = GhidraHTTPClient(host=request.host, port=port, timeout=request.timeout)
+        with step("reading the program from Ghidra"):
+            ghidra = collect_ghidra(client, request)
 
         kuna_data: Dict[str, Any] = {"enabled": False, "errors": [], "index": []}
         if request.with_kuna:
-            kuna_data = collect_kuna(binary, request)
+            with step("running Kuna (it loads and analyses the whole image)"):
+                kuna_data = collect_kuna(binary, request)
+            if kuna_data.get("enabled"):
+                if kuna_data.get("reused"):
+                    progress_note(progress, "the export was reused - no analysis was needed")
+                else:
+                    progress_note(progress,
+                                  f"{kuna_data.get('functions', 0)} functions recovered")
 
-        chosen = interesting_functions(ghidra, kuna_data, request.max_annotations)
-        addresses = [item["address"] for item in chosen]
-        decompiled = decompile_top(client, addresses, request.max_decompile)
-        kuna_code = collect_kuna_code(kuna_data, chosen, request.max_decompile)
+        with step("decompiling the functions that matter"):
+            chosen = interesting_functions(ghidra, kuna_data, request.max_annotations)
+            addresses = [item["address"] for item in chosen]
+            decompiled = decompile_top(client, addresses, request.max_decompile)
+            kuna_code = collect_kuna_code(kuna_data, chosen, request.max_decompile)
 
         report = {
             "generated_at": time.time(),
             "binary": binary,
             "ghidra": ghidra,
             "kuna": {key: value for key, value in kuna_data.items() if key != "index"},
+            "comparison": compare_tools(ghidra, kuna_data),
             "functions": chosen,
             "decompiled": decompiled,
             "kuna_code": kuna_code,
@@ -665,6 +757,37 @@ def render_markdown(report: Dict[str, Any]) -> str:
             out.append(f"- {error}")
         out.append("")
 
+    comparison = report.get("comparison") or {}
+    if comparison:
+        out.append("## What one tool saw and the other did not\n")
+        out.append(_table(
+            ["", "Ghidra", "Kuna"],
+            [
+                ["Functions reported", comparison.get("ghidra_reported", 0),
+                 comparison.get("kuna_reported", 0)],
+                ["Seen by both", comparison.get("both_count", 0), ""],
+                ["Seen by this one only", comparison.get("only_ghidra_count", 0),
+                 comparison.get("only_kuna_count", 0)],
+            ],
+        ))
+        out.append("The two tools work on the same file, so their functions "
+                   "line up by address. A function only one of them found is "
+                   "a difference between the tools, not a fact about the "
+                   "binary - and it is where the two decompilers disagree.\n")
+        only_kuna = comparison.get("only_kuna") or []
+        if only_kuna:
+            out.append("### Only Kuna found them\n")
+            out.append(_table(["Address", "Name"],
+                              [[item.get("address", ""), item.get("name", "")]
+                               for item in only_kuna]))
+        only_ghidra = comparison.get("only_ghidra") or []
+        if only_ghidra:
+            out.append("### Only Ghidra found them\n")
+            out.append(_table(["Address", "Name"],
+                              [[item.get("address", ""), item.get("name", "")]
+                               for item in only_ghidra]))
+        out.append("")
+
     out.append("## The functions worth a look\n")
     rows = []
     for item in chosen[:60]:
@@ -690,34 +813,25 @@ def render_markdown(report: Dict[str, Any]) -> str:
             out.append(f"\n_and {len(strings) - 40} more in the JSON report_\n")
 
     decompiled = report.get("decompiled") or []
-    kuna_code = report.get("kuna_code") or []
-    if decompiled or kuna_code:
+    if decompiled:
         out.append("## Decompilation\n")
         by_address = {item["address"]: item for item in chosen}
-        ghidra_by_address = {item["address"]: item for item in decompiled}
-        kuna_by_address = {item["address"]: item for item in kuna_code}
-        addresses: List[str] = []
         for item in decompiled:
-            if item["address"] not in addresses:
-                addresses.append(item["address"])
+            name = by_address.get(item["address"], {}).get("name", item["address"])
+            out.append(f"### {name} (`{item['address']}`)\n")
+            out.append("```c")
+            out.append(item["code"].rstrip())
+            out.append("```\n")
+
+    kuna_code = report.get("kuna_code") or []
+    if kuna_code:
+        out.append("## What Kuna recovered\n")
         for item in kuna_code:
-            if item["address"] not in addresses:
-                addresses.append(item["address"])
-        for address in addresses:
-            name = by_address.get(address, {}).get("name", address)
-            out.append(f"### {name} (`{address}`)\n")
-            ghidra_item = ghidra_by_address.get(address)
-            if ghidra_item:
-                out.append("_Ghidra_\n")
-                out.append("```c")
-                out.append(ghidra_item["code"].rstrip())
-                out.append("```\n")
-            kuna_item = kuna_by_address.get(address)
-            if kuna_item:
-                out.append("_Kuna_\n")
-                out.append("```c")
-                out.append(kuna_item["code"].rstrip())
-                out.append("```\n")
+            out.append(f"### {item.get('name') or item.get('address')} "
+                       f"(`{item.get('address')}`)\n")
+            out.append("```c")
+            out.append(str(item.get("code", "")).rstrip())
+            out.append("```\n")
 
     annotations = (report.get("annotations") or {}).get("annotations") or []
     if annotations:

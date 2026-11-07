@@ -15,10 +15,11 @@ decompilation, annotation, and data manipulation.
   subsequent instances walk up to `MAX_PORT_ATTEMPTS` = 256 ports (8192–8447).
 - The bridge auto-discovers instances on startup and on a daemon timer, but `QUICK_DISCOVERY_RANGE`
   only scans **8192–8201**. Instances above 8202 need `instances_register` / the CLI.
-- 99 MCP tools in 24 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
-  `functions_*`, `inspect_*`, `instances_*`, `kuna_*`, `memory_*`, `namespaces_*`, `programs_*`,
-  `project_*`, `projects_*`, `raw_image_*`, `scalars_*`, `scripts_*`, `segments_*`, `structs_*`,
-  `symbols_*`, `ui_*`, `variables_*`, `x64dbg_*`, `xrefs_*`.
+- 110 MCP tools in 28 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
+  `doctor_*`, `evidence_*`, `functions_*`, `headless_*`, `inspect_*`, `instances_*`, `kuna_*`,
+  `memory_*`, `namespaces_*`, `programs_*`, `project_*`, `projects_*`, `raw_image_*`, `scalars_*`,
+  `scripts_*`, `segments_*`, `session_*`, `structs_*`, `symbols_*`, `ui_*`, `variables_*`,
+  `x64dbg_*`, `xrefs_*`.
 - v3.0.0 migrated `HttpServer` → **Javalin** with service/DTO/resource layering. `API_VERSION` is
   **3000** (breaking: fully-qualified names everywhere).
 - The `kuna_*` namespace is **local**: it drives the Kuna decompiler CLI as a subprocess, so it
@@ -27,9 +28,18 @@ decompilation, annotation, and data manipulation.
 ## Layout
 
 ```
-bridge_mcp_hydra.py              # ALL MCP tools + formatters live here (8300+ lines)
+bridge_mcp_hydra.py              # ALL MCP tools + formatters live here (9700+ lines)
 ghydra/                          # standalone Click CLI — does NOT import the bridge
+  launcher.py                    # the Ghidra installation, the JDK it needs, the command
+  headless.py                    # the headless runner: start, stop, status
+  report.py                      # Ghidra + Kuna on one binary, and the debugger annotations
+  doctor.py                      # what is missing on this machine, and the fix for each
+  evidence.py                    # the ledger: findings with IDs that never change
+  sessions.py                    # a named working context that outlives the shell
+  triage.py                      # what a target is, from its bytes
   kuna.py                        # Kuna CLI driver (local, opt-in)
+  x64dbg.py                      # the x64dbg driver (local)
+  progress.py                    # what a long step is doing, and how long it took
   cli/ client/ config/ formatters/ utils/
 src/main/java/eu/starsong/ghidra/
   GhydraPlugin.java              # server lifecycle + resource registration
@@ -378,10 +388,15 @@ The bridge's env vars are a *different, asymmetric* set: `GHYDRA_HYDRA_HOST` > `
 plus `GHYDRA_TIMEOUT`, `GHYDRA_DECOMP_TIMEOUT`, `GHYDRA_ALLOWED_ORIGINS`. **The bridge never reads
 `GHYDRA_PORT`.**
 
-`GHYDRA_MCP_OUTPUT=json` is the exception to the rule that the bridge answers in **text**: it hands
-the raw envelope as one JSON document instead of the formatted table. The default stays text — that
-is the contract the agents are written against — and the mode exists for a machine that parses the
-answer (the MCP test suite drives the bridge this way).
+`GHYDRA_MCP_OUTPUT=json` is the exception to the rule that the bridge answers in **text**: it hands the
+raw envelope as one JSON document instead of the formatted table. The default stays text — that is the
+contract the agents are written against — and the mode exists for a machine that parses the answer
+(the MCP test suite drives the bridge this way).
+
+**The MCP resources carry the `ghidra://` scheme.** A relative URI is refused: the protocol types the
+URI of a read as a URL, and the server validates it before the resource is looked up, so
+`/instance/{port}/...` was a template no client could name and no client could read. The templates are
+`ghidra://instance/{port}`, `ghidra://instance/{port}/function/{decompile,info,disassembly}/{address,name}/...`.
 
 CLI multi-instance selection is in-process only — `ghydra instances use -p` mutates the client, and
 `instances unregister` is a documented no-op.
@@ -472,6 +487,18 @@ plugin API, so it changes neither `API_VERSION` nor the Java side.
   and the scan reaches as far as the fixed plugin can go. The walk starts from the **configured**
   port as well as from the two defaults, because that is where the fixed build starts: a server
   on the configured port plus one has to be found too.
+- **The likely ports are probed with more patience than the walk.** The scan asks for one
+  attempt per port in the walk — a closed port stays closed, and every extra attempt costs the
+  whole connect timeout again — but the configured port and the two defaults are probed three
+  times and get five seconds to answer. The machine resets about one loopback connection in
+  fourteen and a loaded machine can take a couple of seconds to answer, and a debugger that is
+  running must never be written off because of it.
+- **The port the plugin was found on is kept.** The plugin does not move while the debugger
+  runs, and the scan opens ninety connections — so a scan per call is a lot of exposure for an
+  answer that does not change (and the machine resets one connection in fourteen). The port is
+  probed once before it is used, and a port that stops answering — or a token that is refused —
+  sends the scan back out. The cache is keyed by the configuration it was found with, so a
+  different host, port or token never reads another one's answer.
 - **The plugin's file fills the blanks and only the blanks.** It says which address the plugin
   listens on, and that is used when nothing else says so — but a host or a port that came from
   the config file or from the environment is a decision the user made, and the plugin's file
@@ -544,6 +571,28 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
   the script returns when it sees it; the headless analyzer then saves the program and closes the
   project, and the project is left unlocked. Killing the process instead leaves the lock file
   behind, and the next run refuses to open the project.
+- **The launcher builds the JVM invocation itself** (`ghydra/launcher.py`), and does not call
+  Ghidra's launcher script. It is the same invocation the launcher makes - the installation's own VM
+  arguments, from Ghidra's `LaunchSupport`, the headless heap and thread flags, and the analyzer
+  class. Three things fall out of it: the log of the run is the log that was asked for; the Windows
+  launcher no longer asks "press any key to continue" when it fails (it cannot tell a double-click
+  from a shell, and a launcher started by another program is exactly that case); and the JDK is
+  found by asking Ghidra which one it supports.
+- **The JDK is versioned against the installation, not guessed.** `application.java.min` says which
+  JDK the Ghidra needs (21 for the 11.x series, 25 for 12.2), and the installation's VM arguments
+  carry flags that only the newer JVMs take - so a JDK that is too old dies with a message about a
+  flag instead of about the JDK. The layers, in the order of how explicit the decision is: what the
+  caller asked for, what `~/.ghydra/config.json` says, `JAVA_HOME`, the JDK Ghidra itself would use
+  (`LaunchSupport -jdk_home -save`), and the places a JDK is usually installed. An explicit JDK that
+  is too old is an error; an environment that points at one that is too old is only a place the
+  search did not stop.
+- **A headless run only signals its own process.** A run that crashed leaves its state file behind,
+  and the operating system hands its PID to somebody else - so the command line is read before
+  anything is killed, and a process that does not carry the marker of the headless script is left
+  alone. The child that was started is polled rather than looked for: polling reaps it, and a child
+  that was never reaped stays a zombie, which `kill(pid, 0)` still finds alive.
+- **A port that is already served is refused.** Starting on it would make the wait accept the server
+  that is already there, and the command would report a run that never bound the port.
 - **A headless run has to stop the server it started.** The threads of a Jetty are not daemons, and
   a JVM with a live Jetty does not exit: the run stayed alive after the analyzer had saved the
   program, and the launcher had to kill it - the polite stop turned into the blunt one, and the
@@ -555,9 +604,6 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
   answer is built from the project instead: Ghidra writes the content of the program under
   `<project>.rep/idata/` in a file whose name starts with `db.`, and that is the witness of the
   save.
-- **The launcher is cross-platform**: `support/analyzeHeadless` on POSIX,
-  `support/analyzeHeadless.bat` on Windows. The JDK comes from `JAVA_HOME`, and Ghidra 12 needs a
-  JDK 21 or newer - the machine's default is often an older one.
 - **A program that is already in the project is processed again; one that is not is imported.**
   Importing a program that is already there fails, and the run never reaches the script that
   starts the server. The index of the project (`<project>.rep/idata/~index.dat`) is plain text and
@@ -610,8 +656,8 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
   is a different file; and the sidecar is written when the run is serving, not before it - a run
   that failed left behind the sidecar of a binary that was never in the project.
 - **A run that is still analysing keeps the port.** It has not bound the API yet, so the port
-  looks free - but the PID that is remembered is checked before anything is started, or a second
-  run would take the state of the first and leave it untracked.
+  looks free - but the PID that is remembered for the port is checked before anything is started,
+  or a second run would take the state of the first and leave it untracked.
 - **The port is claimed before the child is launched.** Two starts that arrive together both
   find the port free, and both launch an analyzer: the one that binds the API first answers
   both waits, and the state file ends up naming the loser - so one report can combine the
@@ -632,6 +678,28 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
   A headless run has no plugin - so what it registers is the map, and the file, the project,
   the executable, the architecture and the image base are there for the clients that pick an
   instance.
+
+## The doctor, the evidence ledger and the sessions
+
+Three things that exist because the work outlives the moment it was done.
+
+- **`ghydra doctor` looks at everything at once** (`ghydra/doctor.py`): the installation, the JDK it
+  needs, the extension and the version it was built for, the port, the project directory, the API,
+  Kuna and the x64dbg plugin. Every problem carries the command that solves it - a check that fails
+  is never a dead end. The doctor resolves the installation *first* and asks about the JDK and the
+  extension in terms of that installation: a JDK that is too old for the Ghidra that is actually
+  installed is a failure, not a warning.
+- **The evidence ledger gives every finding an ID** (`ghydra/evidence.py`). The IDs are `EV-0001`
+  and they are never given out twice, even after the finding is removed - the counter is the highest
+  ID ever issued, kept in the ledger itself. The ledger lives in `~/.ghidra/evidence/<name>.json`
+  and is exported as a bundle: a Markdown document to read and a JSON one to read with a program.
+- **A session is a named working context** (`ghydra/sessions.py`): the binary, the port that serves
+  it, the state. It outlives the shell that opened it, and `close_session` stops the run the polite
+  way, so the analysis is saved and the project is left unlocked.
+- **The bridge does not import the `ghydra` package** - it ships as one file - so the headless,
+  doctor, evidence and session helpers are written out in `bridge_mcp_hydra.py` too, the way the
+  Kuna ones are. The two sides have to agree about the file formats: the ledger and the sessions
+  are read and written by both.
 
 ## The four gaps closed against the REA
 
@@ -700,6 +768,20 @@ thing having failed. The one part that decides the success is the one the caller
 function, and the program. The CLI follows the same rule: a caller, a callee or a reference that
 fails does not throw away the function that was found and the decompilation that came with it.
 
+## The target triage
+
+`ghydra/triage.py` identifies a file from its bytes - never from its extension - and says what
+each kind needs: a PE (with its sections, its imports, its resources and whether it is managed),
+an ELF (with its sections, its segments and its shared libraries), a Mach-O, a DEX, an APK, a
+WASM module, an EVM contract (with the 4-byte selectors its dispatcher compares), a firmware image,
+a JavaScript or Electron application, a core dump, a plist, a HAR capture. It needs neither Ghidra
+nor the network, and it is the answer to "which tool do I use for this?".
+
+- **Never guess a fact.** Everything it reports comes from the bytes; what cannot be read is
+  omitted, and a truncated or corrupt file yields the facts that could be read rather than an error.
+- **The asar archive is not a ZIP.** It is a pickle header with the size of a JSON header, then the
+  JSON header, then the files - and an Electron application is a directory of them.
+
 ## Ghidra API gotchas
 
 Signatures that do not match the obvious guess:
@@ -762,6 +844,17 @@ Verified rough edges — check before trusting anything downstream:
   both: `GHIDRA_HOME=/path/to/ghidra_12.1.2_PUBLIC mvn clean package -Dghidra.version=12.1.2`. GitHub
   Actions does exactly that per matrix leg. Refresh `lib/` and bump the pom default if you want the
   no-flag build to target a newer Ghidra.
+- **A jar built against `lib/` runs against the installed Ghidra, and the two do not have the same
+  signatures.** `DataTypeComponent.setFieldName(String)` returns `void` in 12.0.1 and
+  `DataTypeComponent` in 12.2, and the return type is part of the JVM descriptor: a call site compiled
+  against `lib/` asks for `setFieldName(Ljava/lang/String;)V` and the installed 12.2 only has
+  `setFieldName(Ljava/lang/String;)Lghidra/program/model/data/DataTypeComponent;`. It fails at runtime
+  with a `NoSuchMethodError`, and an `Error` is not an `Exception`: `TransactionHelper` catches
+  `Exception`, so nothing is logged, the exception escapes Javalin, and the answer is a `500` with an
+  **empty body**. The jar must be compiled against the Ghidra that will run it — the install's own
+  jars first on the classpath, `lib/` last. The symptom to recognise: a `500` with no body and nothing
+  in the log is a build that was compiled against the wrong series.
+
 - **`ghydra functions set-variable` is the only variable-editing CLI command.** The duplicate
   `update-variable` was removed in 3.0.0.
 - **Ghidra 12.2 (2026-10-22) needs JDK 25 and moved the data type removal API.** Two

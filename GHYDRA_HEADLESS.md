@@ -21,6 +21,39 @@ The run outlives the command that started it: the state lives under `~/.ghidra`,
 
 ## The commands
 
+### `ghydra doctor`
+
+Before anything: is this machine ready? The installation, the JDK it needs, the extension and the
+version it was built for, the port, the project directory, the API, Kuna and the x64dbg plugin.
+Every problem comes with the command that solves it.
+
+```
+ghydra doctor
+```
+
+The JDK is the part that bites. Ghidra 11.x wants a JDK 21 and Ghidra 12.2 wants a JDK 25, and the
+installation's own VM arguments carry flags that only the newer JVMs take - so a run with the wrong
+one dies with a message about a flag instead of about the JDK. The doctor finds the installation
+first and asks about the JDK in terms of *that* installation.
+
+The paths of Ghidra and of the JDK can be written down in `~/.ghydra/config.json`:
+
+```json
+{
+  "ghidra_home": "C:\\tools\\ghidra",
+  "java_home": "C:\\tools\\jdk-25"
+}
+```
+
+### `ghydra inspect <target>`
+
+What is this target, and what does it need? The format comes from the bytes and never from the name
+of the file. It needs neither Ghidra nor the network.
+
+```
+ghydra inspect C:\bin\cmd.exe
+```
+
 ### `ghydra headless start <binary>`
 
 | Option | What it is |
@@ -43,7 +76,8 @@ project, the log and the pid.
 ### `ghydra headless stop`
 
 Ends the run. The program is saved first, so the project holds the analysis and the program can be
-opened in Ghidra later. The answer says whether the analysis is in the project.
+opened in Ghidra later. The answer says whether the analysis is in the project, and a save the
+server refused is not reported as a save.
 
 **The save is the analyzer's.** In a headless run the API cannot save the program: it is inside the
 transaction of the script that serves the API, and the server refuses with "Unable to lock due to
@@ -63,6 +97,30 @@ that is still there — erasing it would leave that run untracked, and the next 
 the guard that remembers it.
 
 ---
+
+## The launcher
+
+The runner does not call Ghidra's launcher script. It builds the same JVM invocation the launcher
+makes - the installation's own VM arguments, read from Ghidra's `LaunchSupport`, the headless heap
+and thread flags, and the analyzer class - and that is what makes three things true:
+
+* **the log of the run is the log that was asked for**, at `~/.ghidra/headless-<port>.log`, and not
+  the one the Ghidra application log happens to hold;
+* **the Windows launcher does not ask "press any key to continue"** when it fails: it cannot tell a
+  double-click from a shell, and a launcher that was started by another program is exactly that
+  case;
+* **the JDK is found by asking Ghidra which one it supports**, instead of trusting `JAVA_HOME`.
+
+The JDK is versioned against the installation: `application.java.min` says which one the Ghidra
+needs, and a JDK that is too old is not used. The layers, in the order of how explicit the decision
+is: what the caller asked for, what `~/.ghydra/config.json` says, `JAVA_HOME`, the JDK Ghidra
+itself would use, and the places a JDK is usually installed.
+
+### The evidence ledger and the sessions
+
+A finding used to live in the analyst's head and die with the session. `ghydra evidence` gives every
+finding an ID that never changes, and `ghydra session` keeps a named working context alive across
+shells. Both are described in [GHYDRA_CLI.md](GHYDRA_CLI.md).
 
 ## Where things live
 

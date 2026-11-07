@@ -516,3 +516,75 @@ def annotate(ctx, annotations, mode, bookmarks, limit):
         },
     }
     click.echo(ctx.obj['formatter'].format_simple_result(payload))
+
+
+@x64dbg.command('setup')
+@click.option('--path', 'install', default=None,
+              help="Where x64dbg is installed (default: the usual places)")
+@click.option('--dry-run', is_flag=True,
+              help="Show what would be written, and write nothing")
+@click.pass_context
+def setup(ctx, install, dry_run):
+    """Find the x64dbg plugin's settings and write them down.
+
+    The plugin writes its own settings - the address it binds to, the port
+    and the bearer token - to an "mcp_config.json" next to x64dbg.exe. The
+    token is the one thing that cannot be guessed, so this finds that file
+    and puts what is in it into ~/.ghydra/config.json.
+
+    \b
+    Examples:
+        ghydra x64dbg setup
+        ghydra x64dbg setup --path C:\\tools\\x64dbg --dry-run
+    """
+    found = x64dbg_helper.find_plugin_config(install or "")
+    settings = found.get("config") or {}
+    if not settings:
+        rich_echo(
+            "Error: no mcp_config.json was found. Point at the x64dbg "
+            "installation with --path, or start x64dbg once so that the "
+            "plugin writes its settings.",
+            err=True)
+        ctx.exit(1)
+
+    config = ctx.obj['config']
+    section = {
+        "host": str(settings.get("IpAddress") or config.x64dbg_host or ""),
+        "port": int(settings.get("Port") or config.x64dbg_port or 0),
+        "token": str(settings.get("AuthToken") or config.x64dbg_token or ""),
+        "path": str(found.get("root") or ""),
+    }
+
+    payload = {
+        "success": True,
+        "result": {
+            "message": "The x64dbg settings are in the configuration file",
+            "found_at": found.get("path", ""),
+            "config_path": str(_config_path()),
+            "host": section["host"],
+            "port": section["port"],
+            "token_found": bool(section["token"]),
+            "written": False,
+        },
+    }
+
+    if not dry_run:
+        config.x64dbg_host = section["host"]
+        config.x64dbg_port = section["port"]
+        config.x64dbg_token = section["token"]
+        config.x64dbg_path = section["path"]
+        from ..config.config_manager import ConfigManager
+        ConfigManager.save(config)
+        payload["result"]["written"] = True
+
+    click.echo(ctx.obj['formatter'].format_simple_result(payload))
+
+
+def _config_path():
+    """Where the configuration file is."""
+    try:
+        from ..config.config_manager import ConfigManager
+        return ConfigManager.CONFIG_FILE
+    except Exception:
+        import os
+        return os.path.join(os.path.expanduser("~"), ".ghidra", "config.json")

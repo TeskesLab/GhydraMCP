@@ -50,6 +50,7 @@ class ConfigManager:
                 'default_host', 'default_port', 'timeout',
                 'use_colors', 'page_output', 'max_pagination',
                 'kuna', 'kuna_enabled', 'kuna_path',
+                'ghidra_home', 'java_home',
                 'x64dbg', 'x64dbg_host', 'x64dbg_port', 'x64dbg_token',
                 'x64dbg_path'
             }

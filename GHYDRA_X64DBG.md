@@ -233,6 +233,16 @@ does not refuse straight away on Windows — the SYN hangs and is only refused a
 later — so the port scan uses a short connect timeout (0.35 s) and probes the ports
 concurrently, while a tool that blocks gets the read timeout it asked for.
 
+The ports where the server almost always is — the configured one and the two defaults — are
+probed three times and are given five seconds to answer, because the machine resets about one
+loopback connection in fourteen and a loaded machine can take a couple of seconds to reply. The
+walk keeps one attempt per port: a closed port stays closed.
+
+The port the plugin was found on is kept. The plugin does not move while the debugger runs, and
+the scan opens ninety connections — so the scan is only paid again when the port stops answering
+or the token is refused. The status of a running debugger comes back in milliseconds instead of a
+second.
+
 A connection that is reset *and* whose reset is lost behaves the same way from the outside: the
 client waits for an answer that is never coming, and the call ends with the read timeout rather
 than with an error. The retry then succeeds on a fresh connection, but the wait was the read

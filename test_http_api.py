@@ -5,6 +5,8 @@ This script tests the HTTP endpoints of the Java plugin.
 """
 import json
 import requests
+
+from ghydra.testing import instance_is_headless
 import time
 import unittest
 import os
@@ -678,8 +680,8 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
 
     def test_get_current_address(self):
         """Test the /address endpoint"""
-        if getattr(self, "headless", False):
-            self.skipTest(skip_reason_headless(self))
+        if self.headless:
+            self.skipTest("the cursor endpoints need a window; this instance is headless")
         response = requests.get(f"{BASE_URL}/address")
         self.assertEqual(response.status_code, 200)
         
@@ -708,8 +710,8 @@ class GhydraMCPHttpApiTests(unittest.TestCase):
 
     def test_get_current_function(self):
         """Test the /function endpoint"""
-        if getattr(self, "headless", False):
-            self.skipTest(skip_reason_headless(self))
+        if self.headless:
+            self.skipTest("the cursor endpoints need a window; this instance is headless")
         response = requests.get(f"{BASE_URL}/function")
         self.assertEqual(response.status_code, 200)
         
@@ -874,8 +876,8 @@ def test_all_read_endpoints():
         "/memory?address=08000000&length=16",         # Memory access
         "/xrefs?to_addr=08000200&limit=3",             # Cross references
         "/analysis",                                  # Analysis status
-        "/address",                                   # Current address
-        "/function",                                  # Current function
+        "/address",                                   # Current address (needs a window)
+        "/function",                                  # Current function (needs a window)
         "/classes?limit=3"                            # Classes
     ]
     

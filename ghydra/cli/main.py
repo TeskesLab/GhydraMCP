@@ -107,6 +107,10 @@ from . import (
     x64dbg,
     headless,
     report,
+    doctor,
+    evidence,
+    session,
+    inspect,
     inspect_address,
 )
 
@@ -133,6 +137,10 @@ cli.add_command(kuna.kuna)
 cli.add_command(x64dbg.x64dbg)
 cli.add_command(headless.headless)
 cli.add_command(report.report)
+cli.add_command(doctor.doctor)
+cli.add_command(evidence.evidence)
+cli.add_command(session.session)
+cli.add_command(inspect.inspect)
 cli.add_command(inspect_address.inspect_address)
 
 

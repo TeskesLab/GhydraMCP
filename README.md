@@ -19,11 +19,11 @@ Three surfaces, one assistant:
 
 | | What it is | What it gives the assistant |
 | --- | --- | --- |
-| **Ghidra** | The plugin, inside the CodeBrowser | 80 tools over the program: functions, data, structures, xrefs, the CFG, the decompiler |
+| **Ghidra** | The plugin, inside the CodeBrowser | 91 tools over the program: functions, data, structures, xrefs, the CFG, the decompiler |
 | **x64dbg** | A plugin that lives inside the debugger | The debugger's own 80 tools over the live process: registers, memory, breakpoints, stepping |
 | **Kuna** | A separate decompiler CLI | A second opinion on the same binary, and the recovered C as MCP resources |
 
-The bridge exposes **99 tools** in total: the 80 above, 6 over x64dbg (the pass-through that reaches
+The bridge exposes **110 tools** in total: the 91 above, 6 over x64dbg (the pass-through that reaches
 the debugger's own 80), and 13 for the Kuna exports.
 
 The two debugger sides share one model of addresses, so a static address from Ghidra can be turned
@@ -106,6 +106,37 @@ side by side in one report and writes the annotations for the debugger, so a hum
 finds the interesting functions already marked. Full reference:
 [GHYDRA_HEADLESS.md](GHYDRA_HEADLESS.md).
 
+### The doctor
+
+Every tool here has a way to fail that is discovered late: the installation is somewhere else than
+the environment says, the JDK is older than the Ghidra asks for, the extension was built for
+another version, the port is taken. `ghydra doctor` looks at all of it at once and says what is
+wrong — with the command that solves it next to the problem:
+
+```
+ghydra doctor
+```
+
+
+### The evidence ledger and the sessions
+
+A finding — a function that matters, a string that is a key — used to live in the analyst's head
+and die with the session. `ghydra evidence` gives every finding an ID that never changes and is
+never given out twice, and exports the whole lot as a bundle: a document to read and one to read
+with a program. `ghydra session` is the other half: a named working context — the binary, the
+port that serves it, the state — that survives the shell that opened it.
+
+```
+ghydra evidence add --kind function --address 0x140001000 \
+    --name decrypt_blob --note "the key comes from the serial" --tags crypto
+ghydra evidence list --tag crypto
+ghydra evidence export --output out
+
+ghydra session open C:\bin\cmd.exe --name cmd
+ghydra session list
+ghydra session close s-3f9a21c4
+```
+
 ### The x64dbg integration
 
 The assistant can now drive a live debugger, with the static analysis and the dynamic one sharing
@@ -130,6 +161,24 @@ kuna://export/{digest}/README.md            what the export is
 That is the retrieval loop with **exact** addressing: list the exports, read the index, read one
 function. A corpus with an exact index does not need embeddings — they would retrieve the wrong
 function more often than the right one. Full reference: [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
+
+### The resources a client can actually read
+
+The resources of the instance carried a relative URI (`/instance/{port}/...`), and the protocol
+types the URI of a read as a URL: the server refused it before the resource was even looked up.
+No client could name them, so no client could read them. They carry the `ghidra://` scheme now:
+
+```
+ghidra://instance/{port}                                     the instance and its program
+ghidra://instance/{port}/function/decompile/address/{address}  the C of one function
+ghidra://instance/{port}/function/disassembly/address/{address} the listing of one function
+ghidra://instance/{port}/function/info/name/{name}             what a function is
+```
+
+The bridge answers in **text**, because that is what an agent reads. A program that wants the
+envelope itself asks for it: `GHYDRA_MCP_OUTPUT=json` hands the raw response as one JSON
+document.
+
 
 ### 3.0.0
 
