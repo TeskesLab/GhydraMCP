@@ -38,6 +38,24 @@ class RestContractTests(unittest.TestCase):
         self.assertIn("PyGhidra", service)
         self.assertIn("language=python", service)
 
+    def test_ad_hoc_source_never_overwrites_user_scripts(self):
+        """Codex P1: a supplied filename must not map to a persistent script path."""
+        service = _read(f"{JAVA}/service/ScriptService.java")
+        self.assertIn("Files.createTempDirectory(dir.toPath(), \"ghydra_adhoc_\")", service)
+        self.assertIn("new File(tempDir.toFile(), stem + extensionFor(lang))", service)
+        self.assertIn("deleteTree(tempDir)", service)
+        self.assertIn("Files.walk(root)", service)
+        self.assertNotIn("new File(dir, stem + extensionFor(lang))", service)
+
+    def test_python_is_bound_to_the_pyghidra_provider(self):
+        """Codex P2: .py alone can resolve to Jython when both runtimes exist."""
+        service = _read(f"{JAVA}/service/ScriptService.java")
+        self.assertIn("providerFor(file, language)", service)
+        self.assertIn("GhidraScriptUtil.getProviders()", service)
+        self.assertIn("getRuntimeEnvironmentName()", service)
+        self.assertIn('runtime.toLowerCase(Locale.ROOT).contains("pyghidra")', service)
+        self.assertIn("No PyGhidra provider is available", service)
+
     def test_resource_forwards_language_and_filename(self):
         resource = _read(f"{JAVA}/resource/ScriptResource.java")
         self.assertIn("public String language;", resource)

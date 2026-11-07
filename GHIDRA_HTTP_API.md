@@ -931,7 +931,7 @@ Run Ghidra scripts via the API, for multi-stage or batch operations (mass rename
     - `{ "source": "...", "language": "java" }`: compile and run ad-hoc Java `GhidraScript` source (must declare `public class <Name> extends GhidraScript`; the temp file is named after the class and removed after).
     - `{ "source": "println('PYGHIDRA_OK ' + currentProgram.getName())", "language": "python", "filename": "probe.py" }`: write a temporary **`.py`** file so Ghidra selects the PyGhidra/Python 3 provider. Python 3 needs Ghidra launched via `pyghidraRun` or the PyGhidra extension (Ghidra 11.x+); without a provider the answer names that remedy.
     - `"args": ["a", "b"]` (optional): passed to the script (`getScriptArgs()`).
-  - **Runtime selection**: `language` is `"java"` (default) or `"python"` / `"python3"` / `"pyghidra"`. An explicit `language` wins; otherwise a `filename` ending in `.py` selects Python 3 and `.java` selects Java. `filename` also preserves the original name for ad-hoc source.
+  - **Runtime selection**: `language` is `"java"` (default) or `"python"` / `"python3"` / `"pyghidra"`. An explicit `language` wins; otherwise a `filename` ending in `.py` selects Python 3 and `.java` selects Java. `filename` is only a display name for ad-hoc source: the file is written into a unique temporary subdirectory of the user script directory (removed afterwards), so it never overwrites an existing script. For Python 3 the server binds explicitly to the `PyGhidra` provider rather than relying on `GhidraScriptUtil.getProvider`, which can resolve a bare `.py` file to Jython when both runtimes are installed.
   - Runs with the current program as `currentProgram`; use `println(...)` for output.
   ```json
   // Example Response (ad-hoc Python 3)

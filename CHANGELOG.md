@@ -20,6 +20,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `@text_output` and no `FORMATTERS` entry, so the script catalogue and the captured
   `output` degraded to a bare `"Done"`. Both are formatted now, and `scripts_run`'s
   `args` is one piece of text instead of a list that some MCP clients flatten.
+- **Ad-hoc scripts no longer touch the user's script directory**: source is written
+  into a unique temporary subdirectory (removed recursively afterwards), so a
+  caller-supplied `filename` can never truncate and delete an existing script and
+  concurrent runs cannot overwrite one another. Python 3 ad-hoc source is also
+  bound explicitly to the provider whose runtime is `PyGhidra`, instead of relying
+  on `GhidraScriptUtil.getProvider` — which can resolve a bare `.py` file to Jython
+  when both runtimes are installed. When no PyGhidra provider exists the answer
+  names the `pyghidraRun` remedy. (Addresses the two Codex review findings.)
 
 ## [3.1.0] - 2026-11-06
 
