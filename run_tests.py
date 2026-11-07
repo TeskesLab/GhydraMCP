@@ -385,6 +385,31 @@ def run_scripts_tests():
         return False
 
 
+def run_runner_tests():
+    """Run the test-runner contract tests (no Ghidra needed)."""
+    print_header("Running Test Runner Contract Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_runner.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running test runner contract tests: {str(e)}")
+        return False
+
+
 def require_live_ghidra():
     """Refuse a run that would be a green summary made of skipped suites."""
     host = os.environ.get("GHYDRAMCP_TEST_HOST", "localhost")
@@ -416,6 +441,7 @@ def run_all_tests():
     capabilities_success = run_capabilities_tests()
     scripts_success = run_scripts_tests()
     compatibility_success = run_compatibility_tests()
+    runner_success = run_runner_tests()
 
     # Print a summary
     print_header("Test Summary")
@@ -434,13 +460,49 @@ def run_all_tests():
     print(f"Capability Negotiation Tests: {'PASSED' if capabilities_success else 'FAILED'}")
     print(f"Script Execution Contract Tests: {'PASSED' if scripts_success else 'FAILED'}")
     print(f"Ghidra Compatibility Tests: {'PASSED' if compatibility_success else 'FAILED'}")
-    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success and surface_parity_success and capabilities_success and scripts_success and compatibility_success) else 'FAILED'}")
+    print(f"Test Runner Contract Tests: {'PASSED' if runner_success else 'FAILED'}")
+    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success and surface_parity_success and capabilities_success and scripts_success and compatibility_success and runner_success) else 'FAILED'}")
 
     return (http_api_success and mcp_bridge_success and data_tests_success
             and comment_tests_success and port_tests_success and kuna_success
             and x64dbg_success and headless_success and evidence_success
             and triage_success and rea_parity_success and surface_parity_success
-            and capabilities_success and scripts_success and compatibility_success)
+            and capabilities_success and scripts_success and compatibility_success
+            and runner_success)
+
+# Suites that need neither a live Ghidra nor any external binary. CI runs
+# exactly these on every push: a green result here is real evidence, not a
+# summary made of suites that skipped themselves.
+NO_GHIDRA_SUITES = (
+    "--kuna", "--x64dbg", "--surface",
+    "--capabilities", "--scripts", "--compatibility", "--runner",
+)
+
+SUITES = {
+    "--http": run_http_api_tests,
+    "--mcp": run_mcp_bridge_tests,
+    "--data": run_data_tests,
+    "--comments": run_comment_tests,
+    "--port": run_port_tests,
+    "--kuna": run_kuna_tests,
+    "--x64dbg": run_x64dbg_tests,
+    "--headless": run_headless_tests,
+    "--evidence": run_evidence_tests,
+    "--triage": run_triage_tests,
+    "--rea": run_rea_parity_tests,
+    "--surface": run_surface_parity_tests,
+    "--capabilities": run_capabilities_tests,
+    "--scripts": run_scripts_tests,
+    "--compatibility": run_compatibility_tests,
+    "--runner": run_runner_tests,
+}
+
+USAGE = (
+    "Usage: python run_tests.py [--no-ghidra | --http | --mcp | --data | "
+    "--comments | --port | --kuna | --x64dbg | --headless | --evidence | "
+    "--triage | --rea | --surface | --capabilities | --scripts | "
+    "--compatibility | --runner | --require-live]  (suite flags may be combined)"
+)
 
 if __name__ == "__main__":
     # Check if we have the required dependencies
@@ -450,68 +512,41 @@ if __name__ == "__main__":
         print("Error: The 'requests' package is required to run the tests.")
         print("Please install it with 'pip install requests'")
         sys.exit(1)
-    
-    # Parse command line arguments
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--http":
-            # Run only the HTTP API tests
-            success = run_http_api_tests()
-        elif sys.argv[1] == "--mcp":
-            # Run only the MCP bridge tests
-            success = run_mcp_bridge_tests()
-        elif sys.argv[1] == "--data":
-            # Run only the data operations tests
-            success = run_data_tests()
-        elif sys.argv[1] == "--comments":
-            # Run only the comment tests
-            success = run_comment_tests()
-        elif sys.argv[1] == "--port":
-            # Run only the Javalin port edge-case tests
-            success = run_port_tests()
-        elif sys.argv[1] == "--kuna":
-            # Run only the Kuna integration tests
-            success = run_kuna_tests()
-        elif sys.argv[1] == "--x64dbg":
-            # Run only the x64dbg integration tests
-            success = run_x64dbg_tests()
-        elif sys.argv[1] == "--headless":
-            # Run only the headless runner, report and annotation tests
-            success = run_headless_tests()
-        elif sys.argv[1] == "--evidence":
-            # Run only the evidence ledger and session tests
-            success = run_evidence_tests()
-        elif sys.argv[1] == "--triage":
-            # Run only the target triage tests
-            success = run_triage_tests()
-        elif sys.argv[1] == "--rea":
-            # Run only the REA parity tests
-            success = run_rea_parity_tests()
-        elif sys.argv[1] == "--surface":
-            # Run only the global tool/formatter contract tests
-            success = run_surface_parity_tests()
-        elif sys.argv[1] == "--capabilities":
-            # Run only the capability negotiation contract tests
-            success = run_capabilities_tests()
-        elif sys.argv[1] == "--scripts":
-            # Run only the ad-hoc script execution contract tests
-            success = run_scripts_tests()
-        elif sys.argv[1] == "--compatibility":
-            # Run only the 11.x/12.2 compatibility contract tests
-            success = run_compatibility_tests()
-        elif sys.argv[1] == "--require-live":
-            # Run all suites, but refuse a run with no live Ghidra behind them
-            if not require_live_ghidra():
-                print("REQUIRE_LIVE: no Ghidra instance is serving the API; "
-                      "refusing to run suites that would only skip.")
-                sys.exit(1)
-            success = run_all_tests()
+
+    # Any number of suite flags may be combined. --require-live is a guard,
+    # not a suite: it refuses to run when the suites would only skip.
+    args = sys.argv[1:]
+    require_live = "--require-live" in args
+    flags = [arg for arg in args if arg != "--require-live"]
+
+    if require_live and not require_live_ghidra():
+        print("REQUIRE_LIVE: no Ghidra instance is serving the API; "
+              "refusing to run suites that would only skip.")
+        sys.exit(1)
+
+    expanded = []
+    for flag in flags:
+        if flag == "--no-ghidra":
+            expanded.extend(NO_GHIDRA_SUITES)
         else:
-            print(f"Unknown argument: {sys.argv[1]}")
-            print("Usage: python run_tests.py [--http|--mcp|--data|--comments|--port|--kuna|--x64dbg|--headless|--evidence|--triage|--rea|--surface|--capabilities|--scripts|--compatibility|--require-live]")
-            sys.exit(1)
+            expanded.append(flag)
+    flags = list(dict.fromkeys(expanded))  # order preserved, duplicates dropped
+
+    unknown = [flag for flag in flags if flag not in SUITES]
+    if unknown:
+        print(f"Unknown argument: {unknown[0]}")
+        print(USAGE)
+        sys.exit(1)
+
+    if flags:
+        results = [(flag, SUITES[flag]()) for flag in flags]
+        print_header("Selected Suites Summary")
+        for flag, ok in results:
+            print(f"{flag}: {'PASSED' if ok else 'FAILED'}")
+        success = all(ok for _, ok in results)
     else:
-        # Run all tests
+        # No flags: run everything (the historical behaviour).
         success = run_all_tests()
-    
+
     # Exit with the appropriate status code
     sys.exit(0 if success else 1)

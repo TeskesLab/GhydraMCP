@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Honest CI (I6)**: `run_tests.py` now accepts any number of suite flags in one
+  invocation and reports each result separately, plus `--no-ghidra`, which expands
+  to the seven suites that always execute (`--kuna`, `--x64dbg`, `--surface`,
+  `--capabilities`, `--scripts`, `--compatibility`, `--runner`). Both the GitHub
+  Actions and Gitea Actions `build.yml` install the Python package and run exactly
+  that set on every push/PR, so a green run is real evidence instead of a summary
+  made of skipped suites. `test_runner.py` covers the new multi-flag behaviour and
+  the `--no-ghidra` contract; `TESTING.md` documents it.
+
 ## [3.1.0] - 2026-11-06
 
 ### Added
