@@ -30,6 +30,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from . import __version__
+
 # The plugin's defaults: 9094 for a 64-bit debuggee, 9095 for a 32-bit one.
 # The released plugin binds exactly those and stops serving when the port is
 # taken; the fixed build walks up instead.
@@ -449,7 +451,7 @@ class Client:
         result = self._post("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
-            "clientInfo": {"name": "ghydramcp", "version": "3.0.0"},
+            "clientInfo": {"name": "ghydramcp", "version": __version__},
         }, timeout=timeout, connect_timeout=connect_timeout, idempotent=True,
             connect_attempts=connect_attempts)
         return result if isinstance(result, dict) else {}

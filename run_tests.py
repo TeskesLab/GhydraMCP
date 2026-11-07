@@ -285,6 +285,42 @@ def run_rea_parity_tests():
         return False
 
 
+def run_surface_parity_tests():
+    """Run the global tool/formatter contract tests (no Ghidra needed)."""
+    print_header("Running Surface Parity Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_surface_parity.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running surface parity tests: {str(e)}")
+        return False
+
+
+def require_live_ghidra():
+    """Refuse a run that would be a green summary made of skipped suites."""
+    host = os.environ.get("GHYDRAMCP_TEST_HOST", "localhost")
+    port = int(os.environ.get("GHYDRAMCP_TEST_PORT", "8192"))
+    try:
+        import requests
+        return requests.get(f"http://{host}:{port}/plugin-version", timeout=2).ok
+    except Exception:
+        return False
+
+
 def run_all_tests():
     """Run all tests"""
     print_header("GhydraMCP Test Suite")
@@ -301,6 +337,7 @@ def run_all_tests():
     evidence_success = run_evidence_tests()
     triage_success = run_triage_tests()
     rea_parity_success = run_rea_parity_tests()
+    surface_parity_success = run_surface_parity_tests()
 
     # Print a summary
     print_header("Test Summary")
@@ -315,12 +352,13 @@ def run_all_tests():
     print(f"Evidence and Session Tests: {'PASSED' if evidence_success else 'FAILED'}")
     print(f"Target Triage Tests: {'PASSED' if triage_success else 'FAILED'}")
     print(f"REA Parity Tests: {'PASSED' if rea_parity_success else 'FAILED'}")
-    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success) else 'FAILED'}")
+    print(f"Surface Parity Tests: {'PASSED' if surface_parity_success else 'FAILED'}")
+    print(f"Overall: {'PASSED' if (http_api_success and mcp_bridge_success and data_tests_success and comment_tests_success and port_tests_success and kuna_success and x64dbg_success and headless_success and evidence_success and triage_success and rea_parity_success and surface_parity_success) else 'FAILED'}")
 
     return (http_api_success and mcp_bridge_success and data_tests_success
             and comment_tests_success and port_tests_success and kuna_success
             and x64dbg_success and headless_success and evidence_success
-            and triage_success and rea_parity_success)
+            and triage_success and rea_parity_success and surface_parity_success)
 
 if __name__ == "__main__":
     # Check if we have the required dependencies
@@ -366,9 +404,19 @@ if __name__ == "__main__":
         elif sys.argv[1] == "--rea":
             # Run only the REA parity tests
             success = run_rea_parity_tests()
+        elif sys.argv[1] == "--surface":
+            # Run only the global tool/formatter contract tests
+            success = run_surface_parity_tests()
+        elif sys.argv[1] == "--require-live":
+            # Run all suites, but refuse a run with no live Ghidra behind them
+            if not require_live_ghidra():
+                print("REQUIRE_LIVE: no Ghidra instance is serving the API; "
+                      "refusing to run suites that would only skip.")
+                sys.exit(1)
+            success = run_all_tests()
         else:
             print(f"Unknown argument: {sys.argv[1]}")
-            print("Usage: python run_tests.py [--http|--mcp|--data|--comments|--port|--kuna|--x64dbg|--headless|--evidence|--triage|--rea]")
+            print("Usage: python run_tests.py [--http|--mcp|--data|--comments|--port|--kuna|--x64dbg|--headless|--evidence|--triage|--rea|--surface|--require-live]")
             sys.exit(1)
     else:
         # Run all tests

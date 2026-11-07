@@ -384,9 +384,11 @@ is a usage error. Paging auto-disables under `--json`. Config precedence is
 **CLI flag > `GHYDRA_HOST`/`GHYDRA_PORT` > `~/.ghydra/config.json` > defaults** (`localhost:8192`,
 timeout 900).
 
-The bridge's env vars are a *different, asymmetric* set: `GHYDRA_HYDRA_HOST` > `GHYDRA_HOST`,
-plus `GHYDRA_TIMEOUT`, `GHYDRA_DECOMP_TIMEOUT`, `GHYDRA_ALLOWED_ORIGINS`. **The bridge never reads
-`GHYDRA_PORT`.**
+The bridge's env vars are a *different, asymmetric* set: `GHIDRA_HYDRA_HOST` > `GHIDRA_HOST`,
+plus `GHIDRA_TIMEOUT`, `GHIDRA_DECOMP_TIMEOUT`, `GHIDRA_ALLOWED_ORIGINS`. **The bridge never reads
+`GHYDRA_PORT`.** The MCP-side switches keep the `GHYDRA_` prefix (`GHYDRA_MCP_OUTPUT`,
+`GHYDRA_KUNA`, `GHYDRA_KUNA_TIMEOUT`, `GHYDRA_STATE_DIR`); the CLI's `GHYDRA_HOST`/`GHYDRA_PORT`
+above are a separate set.
 
 `GHYDRA_MCP_OUTPUT=json` is the exception to the rule that the bridge answers in **text**: it hands the
 raw envelope as one JSON document instead of the formatted table. The default stays text — that is the

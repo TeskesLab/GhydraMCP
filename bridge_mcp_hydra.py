@@ -47,8 +47,14 @@ _scan_lock = Lock()
 _last_quick_scan = 0.0
 DEFAULT_GHIDRA_PORT = 8192
 DEFAULT_GHIDRA_HOST = "localhost"
+# The plugin walks up to MAX_PORT_ATTEMPTS ports from DEFAULT_PORT (8192-8447).
+# The full sweep has to reach every port the plugin can bind: an instance above
+# 8211 used to need manual registration. The probes run concurrently (16
+# workers), so the wider range costs batches, not one round trip per port.
+MAX_PORT_ATTEMPTS = 256
 QUICK_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT, DEFAULT_GHIDRA_PORT+10)
-FULL_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT, DEFAULT_GHIDRA_PORT+20)
+FULL_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT,
+                            DEFAULT_GHIDRA_PORT + MAX_PORT_ATTEMPTS)
 
 # A live Ghidra plugin on the local host answers /plugin-version in
 # milliseconds. The timeout only bounds what a closed port costs, and on a host
@@ -2793,6 +2799,39 @@ FORMATTERS = {
     "session_open": format_generic_dict,
     "session_list": format_sessions,
     "session_close": format_generic_dict,
+    # These 28 used to have no FORMATTERS entry and silently degraded to
+    # format_simple_result(response, "Done"), which threw away the result the
+    # server returned (notably the script catalogue and the captured output of
+    # scripts_run). Every tool now has a formatter; test_surface_parity.py
+    # asserts the invariant over the whole registered catalogue.
+    "analysis_run": format_generic_dict,
+    "comments_set": format_generic_dict,
+    "data_create": format_generic_dict,
+    "data_delete": format_generic_dict,
+    "data_rename": format_generic_dict,
+    "data_set_type": format_generic_dict,
+    "datatypes_create_enum": format_generic_dict,
+    "datatypes_create_struct": format_generic_dict,
+    "datatypes_create_union": format_generic_dict,
+    "functions_create": format_generic_dict,
+    "functions_delete": format_generic_dict,
+    "functions_rename": format_generic_dict,
+    "functions_set_comment": format_generic_dict,
+    "functions_set_signature": format_generic_dict,
+    "functions_update_variable": format_generic_dict,
+    "instances_register": format_generic_dict,
+    "instances_unregister": format_generic_dict,
+    "instances_use": format_generic_dict,
+    "memory_write": format_generic_dict,
+    "programs_delete": format_generic_dict,
+    "programs_save": format_generic_dict,
+    "project_open_file": format_generic_dict,
+    "scripts_list": format_generic_list,
+    "scripts_run": format_generic_dict,
+    "structs_add_field": format_generic_dict,
+    "structs_create": format_generic_dict,
+    "structs_delete": format_generic_dict,
+    "structs_update_field": format_generic_dict,
 }
 
 

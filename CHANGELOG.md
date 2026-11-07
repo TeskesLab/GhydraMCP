@@ -6,7 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **The 28 tools that answered `"Done"`**: every MCP tool now has a `FORMATTERS` entry, so
+  `scripts_list` shows the script catalogue and `scripts_run` the captured `output` again.
+  `test_surface_parity.py` (`python run_tests.py --surface`) asserts the invariant over the
+  whole registered catalogue, not just one namespace.
+- **The sixth version copy**: `ghydra/x64dbg.py` uses `ghydra.__version__` instead of a
+  hardcoded `3.0.0`, bringing it under `scripts/version.py --check`.
+- **Instance discovery**: the full sweep now reaches every port the plugin can bind
+  (`MAX_PORT_ATTEMPTS = 256`, 8192-8447) instead of stopping at 8211.
+- **Documentation drift**: `CONTRIBUTING.md` points at `scripts/version.py` instead of
+  hand-editing `v2.0.0`/`API_VERSION=2`; `TESTING.md` lists all flags and no longer asserts a
+  `port` field the envelope never emits; `AGENTS.md` names the bridge env vars correctly
+  (`GHIDRA_*`).
+- **Dead CLI command**: the duplicate `inspect-address` in `ghydra/cli/inspect.py` is gone.
+
 ### Added
+- **`--require-live`**: `python run_tests.py --require-live` probes `/plugin-version` and
+  refuses to run when no Ghidra is serving, so a green summary cannot be made of skips.
 - **The doctor:** `ghydra doctor` checks the Ghidra installation, the JDK it needs, the extension and the version it was built for, the port, the project directory, the API, Kuna and the x64dbg plugin — and every problem comes with the command that solves it. The JDK is the part that bites: Ghidra 11.x wants a JDK 21 and Ghidra 12.2 wants a JDK 25, and the installation's own VM arguments carry flags that only the newer JVMs take, so a run with the wrong one dies with a message about a flag instead of about the JDK.
 - **A launcher that builds the JVM invocation itself:** the headless runner no longer calls Ghidra's launcher script — it builds the same JVM invocation the launcher makes, reading the VM arguments from Ghidra's own `LaunchSupport`. Three things fall out of it. The log of the run is the log that was asked for, and not the one the Ghidra application log happens to hold. The Windows launcher no longer asks "press any key to continue" when it fails: it cannot tell a double-click from a shell, and a launcher that was started by another program is exactly that case. And the JDK is found by asking Ghidra which one it supports, instead of trusting `JAVA_HOME`.
 - **The evidence ledger:** `ghydra evidence add` records a finding and gives it an ID (`EV-0001`) that never changes and is never given out twice, even after the finding is removed. `ghydra evidence list` filters by kind, tag, address or text, and `ghydra evidence export` writes the ledger as a bundle — a Markdown document to read and a JSON one to read with a program. A finding can be referred to from anywhere, for as long as the ledger exists.

@@ -27,14 +27,23 @@ python run_tests.py --data       # data operations tests
 python run_tests.py --comments   # comment tests
 python run_tests.py --port       # Javalin port edge-case tests
 python run_tests.py --kuna       # Kuna integration tests
+python run_tests.py --x64dbg     # x64dbg integration tests
+python run_tests.py --headless   # headless runner, report and annotations
+python run_tests.py --evidence   # evidence ledger and sessions
+python run_tests.py --triage     # target triage
+python run_tests.py --rea        # REA parity
+python run_tests.py --surface    # global tool/formatter contract
 ```
 
 > **Every suite skips itself when Ghidra is not running.** Each `setUp` calls
 > `skipTest("Ghidra not running")`, so a green summary does not prove anything unless the
 > tests actually executed — check the output for skips before trusting a pass.
 >
-> The Kuna suite is the exception: it needs neither Ghidra nor the Kuna binary, so it
-> always runs and always gives a signal.
+> `--kuna`, `--x64dbg` and `--surface` are the exceptions: they need neither Ghidra nor
+> their respective binaries, so they always run and always give a signal. `--rea` is
+> half contract (no Ghidra) and half live. `python run_tests.py --require-live`
+> probes `/plugin-version` first and refuses to run without a live instance, so a
+> green summary cannot be made of skipped suites.
 
 ## HTTP API Tests
 
@@ -76,9 +85,9 @@ The test script will:
 1. Connect to the bridge using the MCP client
 2. Initialize the session
 3. List the available tools
-4. Call the list_instances tool
-5. Call the discover_instances tool
-6. Call the list_functions tool
+4. Call the instances_list tool
+5. Call the instances_discover tool
+6. Call the functions_list tool
 
 ### What's Being Tested
 
@@ -153,7 +162,8 @@ def test_new_endpoint(self):
     self.assertIn("success", data)
     self.assertTrue(data["success"])
     self.assertIn("timestamp", data)
-    self.assertIn("port", data)
+    self.assertIn("instance", data)
+    self.assertIn("result", data)
 ```
 
 ### MCP Bridge Tests
@@ -161,7 +171,7 @@ def test_new_endpoint(self):
 To add a new test for an MCP tool:
 
 1. Add a new test method to the `MCPBridgeTests` class
-2. Use the `send_mcp_request` method to send an MCP request to the bridge
+2. Use the MCP client helper in `test_mcp_bridge.py` to send a request to the bridge
 3. Verify the response using assertions
 
 Example:
