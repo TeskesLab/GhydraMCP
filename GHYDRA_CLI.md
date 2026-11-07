@@ -118,6 +118,25 @@ ghydra instances current
 ghydra instances unregister --port 8195
 ```
 
+### Scripts Commands
+
+Run Java GhidraScript or Python 3 (PyGhidra) scripts. Disabled server-side by
+default: start Ghidra with `-Dghydra.dev.allowScripts=true` (or
+`GHYDRA_ALLOW_SCRIPTS=1`). Running a script is arbitrary code execution.
+
+```bash
+ghydra scripts list
+ghydra scripts run --name FixupNoReturnFunctionsScript.java
+ghydra scripts run --file ./MassRename.java --arg prefix_
+ghydra scripts run --file ./probe.py                     # .py selects Python 3
+ghydra scripts run --filename probe.py --language python --code "println('hi')"
+```
+
+`--language` accepts `java` (default) or `python`. A `.py` `--file`/`--filename`
+also selects Python 3 and is forwarded so the server preserves the extension —
+sending only the source text used to lose it and produce a `.java` file. Python
+3 requires PyGhidra (`pyghidraRun` / the PyGhidra extension, Ghidra 11.x+).
+
 ### Functions Commands
 
 Analyze and manipulate functions:

@@ -2793,6 +2793,10 @@ FORMATTERS = {
     "session_open": format_generic_dict,
     "session_list": format_sessions,
     "session_close": format_generic_dict,
+    # The two script tools used to have no formatter (and no @text_output), so
+    # the catalogue and the captured output degraded to a bare "Done".
+    "scripts_list": format_generic_list,
+    "scripts_run": format_generic_dict,
 }
 
 
@@ -7854,7 +7858,35 @@ def programs_save(all: bool = False, port: int | None = None) -> dict:
 
 
 # Script tools
+def _script_args_text(value: Any) -> Any:
+    """A nested list arrives flattened from some MCP clients; take it back as text."""
+    if isinstance(value, (list, tuple)):
+        return json.dumps(list(value))
+    return value
+
+
+# The arguments of an ad-hoc script, as JSON text. The schema says string on
+# purpose, the same way x64dbg_call and functions_batch_decompile do.
+ScriptArgsText = Annotated[str, BeforeValidator(_script_args_text)]
+
+
+def _parse_script_args(text: str | None) -> list[str]:
+    """Script args from JSON text, a comma-separated list, or one bare value."""
+    if text is None or text == "":
+        return []
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        parsed = text
+    if isinstance(parsed, list):
+        return [str(item) for item in parsed]
+    if isinstance(parsed, str) and "," in parsed:
+        return [part.strip() for part in parsed.split(",") if part.strip()]
+    return [str(parsed)]
+
+
 @mcp.tool()
+@text_output
 def scripts_list(port: int | None = None) -> dict:
     """List Ghidra scripts available to run
 
@@ -7872,20 +7904,33 @@ def scripts_list(port: int | None = None) -> dict:
 
 
 @mcp.tool()
-def scripts_run(name: str | None = None, source: str | None = None, args: list | None = None, port: int | None = None) -> dict:
-    """Run a Ghidra script: an existing one by name, or ad-hoc GhidraScript source
+@text_output
+def scripts_run(name: str | None = None, source: str | None = None,
+                args: ScriptArgsText | None = None,
+                language: str | None = None, filename: str | None = None,
+                port: int | None = None) -> dict:
+    """Run a Ghidra script: an existing one by name, or ad-hoc Java/Python source.
 
     Use this for multi-stage or batch operations that would otherwise need many tool calls
     (e.g. mass rename, signature transfer). Provide EITHER name OR source.
+
+    For ad-hoc source, choose the runtime explicitly: language="python" (or a .py
+    filename) writes a .py file so Ghidra selects PyGhidra/Python 3; language="java"
+    (the default) writes a .java GhidraScript. Python 3 requires Ghidra launched via
+    pyghidraRun / the PyGhidra extension.
 
     WARNING: this is arbitrary code execution. It requires the server started with
     -Dghydra.dev.allowScripts=true (or GHYDRA_ALLOW_SCRIPTS=1); otherwise returns 403.
 
     Args:
-        name: Name of an existing script (e.g. "MyScript.java")
-        source: Ad-hoc source: a full 'public class <Name> extends GhidraScript { public void
-            run() {...} }'. Use println(...) for output; currentProgram is the open program.
-        args: Optional list of string arguments (available via getScriptArgs()).
+        name: Name of an existing script (e.g. "MyScript.java" or "Probe.py")
+        source: Ad-hoc source. Java needs a full 'public class <Name> extends
+            GhidraScript { public void run() {...} }'; Python 3 uses currentProgram
+            directly and prints with println(...)/print(...).
+        args: Script arguments as ONE piece of text: a JSON array like '["a","b"]'
+            or a comma-separated list. A nested list is flattened by some clients.
+        language: Runtime for ad-hoc source: "java" (default) or "python"/"python3".
+        filename: Original source filename; a .py extension also selects Python 3.
         port: Specific Ghidra instance port (optional)
 
     Returns:
@@ -7904,8 +7949,13 @@ def scripts_run(name: str | None = None, source: str | None = None, args: list |
         payload["name"] = name
     if source:
         payload["source"] = source
-    if args:
-        payload["args"] = args
+    parsed_args = _parse_script_args(args)
+    if parsed_args:
+        payload["args"] = parsed_args
+    if language:
+        payload["language"] = language
+    if filename:
+        payload["filename"] = filename
     return simplify_response(safe_post(port, "scripts/run", payload))
 
 

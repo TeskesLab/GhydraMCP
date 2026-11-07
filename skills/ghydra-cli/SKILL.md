@@ -175,12 +175,25 @@ ghydra scalars search 0 --to-function memset    # Find zeros passed to memset
 ghydra scalars search 0x80 --in-function main  # Find 0x80 in main's function
 ```
 
-### Script Execution (PyGhidra)
+### Script Execution (Java GhidraScript or Python 3 via PyGhidra)
+
+The old single-`script` command group and the `/script/execute` route were
+removed in v3.0.0 — they are not valid commands. Use the `scripts` group below;
+it stays disabled server-side unless Ghidra is started with
+`-Dghydra.dev.allowScripts=true` (or `GHYDRA_ALLOW_SCRIPTS=1`).
 
 ```bash
-ghydra script execute --code "print(currentProgram.getName())"  # Run Python 3 in Ghidra
-ghydra script capabilities                   # Check available runtimes
+ghydra scripts list                                     # Available scripts
+ghydra scripts run --name FixupNoReturnFunctionsScript.java
+ghydra scripts run --file ./MassRename.java --arg prefix_
+ghydra scripts run --file ./probe.py                     # .py selects Python 3
+ghydra scripts run --code "print(currentProgram.getName())" --language python
 ```
+
+`--language python` (or a `.py` `--file` / `--filename`) writes a temporary
+`.py` file so Ghidra selects the PyGhidra provider; `--language java` is the
+default and needs a `class <Name> extends GhidraScript`. Python 3 requires
+Ghidra launched via `pyghidraRun` or the PyGhidra extension (Ghidra 11.x+).
 
 ### Raw Image Data
 

@@ -27,14 +27,15 @@ python run_tests.py --data       # data operations tests
 python run_tests.py --comments   # comment tests
 python run_tests.py --port       # Javalin port edge-case tests
 python run_tests.py --kuna       # Kuna integration tests
+python run_tests.py --scripts    # ad-hoc Java/Python script contract
 ```
 
 > **Every suite skips itself when Ghidra is not running.** Each `setUp` calls
 > `skipTest("Ghidra not running")`, so a green summary does not prove anything unless the
 > tests actually executed — check the output for skips before trusting a pass.
 >
-> The Kuna suite is the exception: it needs neither Ghidra nor the Kuna binary, so it
-> always runs and always gives a signal.
+> The Kuna and script-contract suites are the exceptions: they need neither Ghidra nor
+> any external binary, so they always run and always give a signal.
 
 ## HTTP API Tests
 
