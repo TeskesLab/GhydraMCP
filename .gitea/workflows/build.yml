@@ -27,13 +27,33 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
 
-    - name: Install Maven
+    - name: Install Maven and Python
       run: |
-        apt-get update && apt-get install -y maven python3
+        apt-get update && apt-get install -y maven python3 python3-venv python3-pip
         mvn --version
+        python3 --version
+
+    - name: Set up the Python environment
+      run: |
+        python3 -m venv .venv
+        . .venv/bin/activate
+        python -m pip install --upgrade pip
+        python -m pip install -e .
 
     - name: "Guard: version constants must agree"
       run: python3 scripts/version.py --check
+
+    - name: "Guard: compile Python sources"
+      run: |
+        . .venv/bin/activate
+        python -m compileall -q bridge_mcp_hydra.py ghydra
+
+    - name: Contract suites (no Ghidra required)
+      # The six no-Ghidra suites always execute. A summary made of skipped
+      # suites proves nothing, so CI demands this set on every push and PR.
+      run: |
+        . .venv/bin/activate
+        python run_tests.py --no-ghidra
 
     - name: Build with Maven
       # This runner has no Ghidra install, so the build compiles against the jars

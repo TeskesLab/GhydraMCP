@@ -47,8 +47,14 @@ _scan_lock = Lock()
 _last_quick_scan = 0.0
 DEFAULT_GHIDRA_PORT = 8192
 DEFAULT_GHIDRA_HOST = "localhost"
+# The plugin walks up to MAX_PORT_ATTEMPTS ports from DEFAULT_PORT (8192-8447).
+# The full sweep has to reach every port the plugin can bind: an instance above
+# 8211 used to need manual registration. The probes run concurrently (16
+# workers), so the wider range costs batches, not one round trip per port.
+MAX_PORT_ATTEMPTS = 256
 QUICK_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT, DEFAULT_GHIDRA_PORT+10)
-FULL_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT, DEFAULT_GHIDRA_PORT+20)
+FULL_DISCOVERY_RANGE = range(DEFAULT_GHIDRA_PORT,
+                            DEFAULT_GHIDRA_PORT + MAX_PORT_ATTEMPTS)
 
 # A live Ghidra plugin on the local host answers /plugin-version in
 # milliseconds. The timeout only bounds what a closed port costs, and on a host
@@ -158,6 +164,116 @@ KUNA_ERROR_CODES = (
 # another.
 _kuna_jobs: Dict[str, dict] = {}
 _kuna_jobs_lock = Lock()
+
+
+# Long-running bridge tasks (I7), keyed by task id. The same shape the Kuna
+# job registry has, generalized to any blocking call the agent should not
+# have to sit through: functions_batch_decompile and headless_start today.
+#
+# The registry survives in this bridge process only — a task handle from a
+# previous bridge is not addressable, exactly like the Kuna jobs. Cancelling
+# marks the task and frees the caller: the batch request already sent is not
+# interrupted server-side, and a headless run keeps running on purpose (it
+# outlives the call that started it). What cancel stops is the waiting.
+_bg_tasks: Dict[str, dict] = {}
+_bg_tasks_lock = Lock()
+_bg_task_counter = 0
+
+
+def _task_new(kind: str, label: str) -> dict:
+    """Register a working task and return its record."""
+    global _bg_task_counter
+    with _bg_tasks_lock:
+        _bg_task_counter += 1
+        task_id = f"T-{_bg_task_counter:04d}"
+        record = {
+            "id": task_id,
+            "kind": kind,
+            "label": label,
+            "status": "working",
+            "cancel_requested": False,
+            "created": time.time(),
+            "started": time.time(),
+            "finished": None,
+            "result": None,
+            "error": None,
+        }
+        _bg_tasks[task_id] = record
+        return record
+
+
+def _task_view(record: dict) -> dict:
+    """The task as the agent sees it: the bookkeeping, never the lock."""
+    elapsed = (record["finished"] or time.time()) - record["started"]
+    view = {
+        "id": record["id"],
+        "kind": record["kind"],
+        "label": record["label"],
+        "status": record["status"],
+        "elapsed_seconds": round(elapsed, 1),
+    }
+    if record["status"] in ("completed", "failed"):
+        view["result"] = record["result"]
+        view["error"] = record["error"]
+    if record["cancel_requested"] and record["status"] == "working":
+        view["note"] = "cancel requested; the task will discard its result"
+    return view
+
+
+def _task_finish(record: dict, status: str, result=None, error=None) -> None:
+    with _bg_tasks_lock:
+        record["status"] = status
+        record["finished"] = time.time()
+        record["result"] = result
+        record["error"] = error
+
+
+def _task_run(record: dict, body, result_of) -> None:
+    """Run a blocking body in this thread and file the outcome.
+
+    The body is a zero-argument callable; result_of turns whatever it returns
+    into the task result. A cancel requested while the body runs discards the
+    outcome — the caller asked to stop waiting, so the answer would land on
+    nobody.
+    """
+    try:
+        outcome = body()
+        with _bg_tasks_lock:
+            cancelled = record["cancel_requested"]
+        if cancelled:
+            _task_finish(record, "cancelled")
+            return
+        result = result_of(outcome)
+        if isinstance(result, dict) and result.get("success") is False:
+            _task_finish(record, "failed", result=result,
+                         error=(result.get("error") or {}).get("code"))
+        else:
+            _task_finish(record, "completed", result=result)
+    except Exception as exc:  # the worker thread must never raise
+        with _bg_tasks_lock:
+            cancelled = record["cancel_requested"]
+        if cancelled:
+            _task_finish(record, "cancelled")
+        else:
+            _task_finish(record, "failed",
+                         error=f"{type(exc).__name__}: {exc}")
+
+
+def _task_spawn(kind: str, label: str, body, result_of) -> dict:
+    """Register a task, start its worker thread, and return the handle view."""
+    record = _task_new(kind, label)
+    thread = threading.Thread(
+        target=_task_run, args=(record, body, result_of), daemon=True)
+    thread.start()
+    return {
+        "success": True,
+        "result": {
+            "task": _task_view(record),
+            "note": "running in the background; poll tasks_get(task_id) "
+                    "until status is completed/failed/cancelled. Cancelling "
+                    "stops the waiting, not the server-side work.",
+        },
+    }
 
 
 def _kuna_config() -> dict:
@@ -957,11 +1073,13 @@ def safe_delete(port: int, endpoint: str) -> dict:
 # Format API responses as plain text for efficient LLM consumption
 
 def format_error(response: dict) -> str:
-    """Format an error response as plain text
+    """Format an error response as plain text.
 
     A machine-readable code, when the error carries one, is kept in the text:
     the Kuna failures have a code an agent can branch on, and dropping it
-    here would leave only the prose.
+    here would leave only the prose. The envelope's request id is kept too,
+    so an agent that wants the server's log line for this exact failure has
+    the handle to ask with.
     """
     if isinstance(response, dict) and "error" in response:
         err = response["error"]
@@ -969,9 +1087,15 @@ def format_error(response: dict) -> str:
             message = err.get("message", "Unknown error")
             code = err.get("code")
             if code:
-                return f"Error [{code}]: {message}"
-            return f"Error: {message}"
-        return f"Error: {err}"
+                text = f"Error [{code}]: {message}"
+            else:
+                text = f"Error: {message}"
+        else:
+            text = f"Error: {err}"
+        request_id = response.get("id")
+        if request_id:
+            text += f" (request id: {request_id})"
+        return text
     return "Error: Unknown error"
 
 
@@ -2689,6 +2813,89 @@ def format_sessions(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_tool_groups(response: dict, **kwargs) -> str:
+    """The tool groups: size, loaded state, namespaces."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    if "groups" not in result:
+        return str(result)
+    groups = result["groups"]
+    if groups and isinstance(groups[0], str):
+        return "Groups loaded: " + ", ".join(groups)
+    lines = [f"Tool groups ({result.get('visible_tools', '?')} of "
+             f"{result.get('total_tools', '?')} tools visible)"]
+    for group in groups:
+        state = "loaded" if group.get("loaded") else "      "
+        lines.append(f"  [{state}] {group.get('group', '?'):<10} "
+                     f"{group.get('tools', 0):>3} tools  "
+                     f"{', '.join(group.get('namespaces') or [])}")
+    return "\n".join(lines)
+
+
+def format_tool_matches(response: dict, **kwargs) -> str:
+    """Search results: the tool, its group and whether it is loaded."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    matches = result.get("matches") or []
+    if not matches:
+        return f"No tool matches '{result.get('query', '')}'."
+    lines = [f"Tools matching '{result.get('query', '')}' "
+             f"({len(matches)}):"]
+    for match in matches:
+        state = "loaded" if match.get("loaded") else "hidden"
+        lines.append(f"  [{state}] {match.get('name')}  "
+                     f"({match.get('group')})  {match.get('summary', '')}")
+    return "\n".join(lines)
+
+
+def format_task_view(response: dict, **kwargs) -> str:
+    """One background task: its status, elapsed time and outcome."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [
+        f"Task {result.get('id', '?')}  [{result.get('status', '?')}]",
+        f"  kind: {result.get('kind', '?')}  {result.get('label', '')}",
+        f"  elapsed: {result.get('elapsed_seconds', '?')}s",
+    ]
+    if result.get("note"):
+        lines.append(f"  note: {result['note']}")
+    if result.get("error"):
+        lines.append(f"  error: {result['error']}")
+    outcome = result.get("result")
+    if isinstance(outcome, dict):
+        summary = outcome.get("result")
+        if isinstance(summary, list):
+            lines.append(f"  outcome: {len(summary)} item(s)")
+        else:
+            lines.append(f"  outcome: {str(summary)[:200]}")
+    return "\n".join(lines)
+
+
+def format_tasks_list(response: dict, **kwargs) -> str:
+    """The background tasks, one line each."""
+    result = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        return format_error(response)
+    tasks = result.get("tasks") or []
+    if not tasks:
+        return "No background tasks."
+    lines = []
+    for task in tasks:
+        lines.append(f"{task.get('id', '?')}  [{task.get('status', '?'):<9}] "
+                     f"{task.get('kind', '?'):<16} {task.get('elapsed_seconds', '?')}s  "
+                     f"{task.get('label', '')}")
+    return "\n".join(lines)
+
+
 def format_triage(response: dict, **kwargs) -> str:
     """What a target is, and what it needs."""
     result = response.get("result") if isinstance(response, dict) else None
@@ -2705,6 +2912,140 @@ def format_triage(response: dict, **kwargs) -> str:
     recommendations = result.get("recommendations") or []
     if recommendations:
         lines.append("")
+        for item in recommendations:
+            lines.append(f"  - {item}")
+    return "\n".join(lines)
+
+
+def format_capabilities(response: dict, **kwargs) -> str:
+    """Show what an instance can do: versions, flags and limits, not a bare dict."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+
+    lines = [
+        f"GhydraMCP {result.get('plugin_version', '?')} "
+        f"(API {result.get('api_version', '?')})",
+        f"  Ghidra: {result.get('ghidra_version', 'unknown')}  "
+        f"Java: {result.get('java_version', 'unknown')}",
+        f"  port: {result.get('port', '?')}  "
+        f"headless: {result.get('headless', False)}",
+    ]
+    features = result.get("features") or {}
+    if features:
+        on = sorted(name for name, enabled in features.items() if enabled)
+        off = sorted(name for name, enabled in features.items() if not enabled)
+        lines.append("  features on: " + (", ".join(on) or "none"))
+        if off:
+            lines.append("  features off: " + ", ".join(off))
+    limits = result.get("limits") or {}
+    if limits:
+        lines.append("  limits: " + ", ".join(
+            f"{name}={value}" for name, value in sorted(limits.items())))
+    compatibility = result.get("compatibility") or {}
+    if compatibility:
+        state = "ok" if compatibility.get("compatible") else "MISMATCH"
+        lines.append(
+            f"  compatibility: {state} (compiled against "
+            f"{compatibility.get('compiled_against', '?')}, "
+            f"setFieldName returns {compatibility.get('set_field_name_return', '?')})")
+        if not compatibility.get("compatible"):
+            lines.append("  remedy: " + str(compatibility.get("remedy", "")))
+    return "\n".join(lines)
+
+
+def format_context_pack(response: dict, **kwargs) -> str:
+    """The budgeted dossier: sections, citations, omissions."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [
+        f"Context pack [{result.get('template', '?')}] — "
+        f"{result.get('question', '')}",
+        f"  program: {result.get('program') or '?'}  "
+        f"budget: {result.get('budget_tokens', '?')} tokens, "
+        f"used {result.get('used_tokens', '?')}",
+    ]
+    for section in result.get("sections") or []:
+        lines.append("")
+        lines.append(f"## {section.get('title')}")
+        lines.append(str(section.get("body", "")))
+        if section.get("citations"):
+            lines.append("  (addresses: " + ", ".join(section["citations"]) + ")")
+    citations = result.get("citations") or []
+    if citations:
+        lines.append("")
+        lines.append("Citations: " + ", ".join(citations))
+    omitted = result.get("omitted") or []
+    if omitted:
+        lines.append("Omitted:")
+        for item in omitted:
+            lines.append(f"  - {item.get('section')}: {item.get('reason')}")
+    return "\n".join(lines)
+
+
+def format_capabilities_summary(response: dict, **kwargs) -> str:
+    """Show a ranked capability triage, with the evidence behind each lead."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    summary = result.get("summary") or {}
+    findings = result.get("findings") or []
+    lines = [
+        f"Capability triage for {result.get('program') or 'the program'}: "
+        f"{len(findings)} technique(s) matched",
+        f"  scanned {summary.get('imports_scanned', 0)} imports, "
+        f"{summary.get('strings_scanned', 0)} strings against "
+        f"{summary.get('rules', 0)} rules",
+        "  " + str(result.get("method", "")),
+    ]
+    if result.get("failures"):
+        lines.append("  unavailable: " + ", ".join(result["failures"]))
+    for finding in findings:
+        lines.append(
+            f"  [{finding.get('confidence', '?'):>6}] {finding.get('id')} "
+            f"{finding.get('name')}  score={finding.get('score')}")
+        lines.append(f"           {finding.get('tactic', '')}")
+        for evidence in (finding.get("evidence") or [])[:3]:
+            lines.append(
+                f"           - {evidence.get('kind')} {evidence.get('name')} "
+                f"@ {evidence.get('address') or '?'}")
+    if not findings:
+        lines.append("  No known technique patterns matched.")
+    return "\n".join(lines)
+
+
+def format_telemetry_summary(response: dict, **kwargs) -> str:
+    """The local usage summary: totals, the busiest tools, the advice."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    if not result.get("calls"):
+        return f"No telemetry in the last {result.get('days', '?')} day(s)."
+    lines = [
+        f"Local telemetry — {result.get('calls')} calls in the last "
+        f"{result.get('days')} day(s)  ({result.get('path', '')})",
+        f"  {'tool':<32} {'calls':>5} {'fail':>4} {'avg ms':>7} {'tokens':>8}",
+    ]
+    for row in result.get("tools") or []:
+        lines.append(f"  {row['tool']:<32} {row['calls']:>5} "
+                     f"{row['failed']:>4} {row.get('ms_avg', 0):>7} "
+                     f"{row['tokens']:>8}")
+    codes = result.get("error_codes") or {}
+    if codes:
+        lines.append("Error codes: " + ", ".join(
+            f"{code}={count}" for code, count in sorted(codes.items())))
+    recommendations = result.get("recommendations") or []
+    if recommendations:
+        lines.append("Recommendations:")
         for item in recommendations:
             lines.append(f"  - {item}")
     return "\n".join(lines)
@@ -2731,6 +3072,17 @@ FORMATTERS = {
     "instances_list": format_instances,
     "instances_discover": format_instances,
     "instances_current": format_instance_info,
+    "instances_capabilities": format_capabilities,
+    "analysis_capabilities_summary": format_capabilities_summary,
+    "analysis_context_pack": format_context_pack,
+    "tasks_list": format_tasks_list,
+    "tasks_get": format_task_view,
+    "tasks_cancel": format_task_view,
+    "tools_groups": format_tool_groups,
+    "tools_search": format_tool_matches,
+    "tools_load_group": format_tool_groups,
+    "tools_unload_group": format_tool_groups,
+    "telemetry_summary": format_telemetry_summary,
     "structs_list": format_structs_list,
     "structs_get": format_struct_info,
     "analysis_get_callgraph": format_callgraph,
@@ -2793,10 +3145,39 @@ FORMATTERS = {
     "session_open": format_generic_dict,
     "session_list": format_sessions,
     "session_close": format_generic_dict,
-    # The two script tools used to have no formatter (and no @text_output), so
-    # the catalogue and the captured output degraded to a bare "Done".
+    # These 28 used to have no FORMATTERS entry and silently degraded to
+    # format_simple_result(response, "Done"), which threw away the result the
+    # server returned (notably the script catalogue and the captured output of
+    # scripts_run). Every tool now has a formatter; test_surface_parity.py
+    # asserts the invariant over the whole registered catalogue.
+    "analysis_run": format_generic_dict,
+    "comments_set": format_generic_dict,
+    "data_create": format_generic_dict,
+    "data_delete": format_generic_dict,
+    "data_rename": format_generic_dict,
+    "data_set_type": format_generic_dict,
+    "datatypes_create_enum": format_generic_dict,
+    "datatypes_create_struct": format_generic_dict,
+    "datatypes_create_union": format_generic_dict,
+    "functions_create": format_generic_dict,
+    "functions_delete": format_generic_dict,
+    "functions_rename": format_generic_dict,
+    "functions_set_comment": format_generic_dict,
+    "functions_set_signature": format_generic_dict,
+    "functions_update_variable": format_generic_dict,
+    "instances_register": format_generic_dict,
+    "instances_unregister": format_generic_dict,
+    "instances_use": format_generic_dict,
+    "memory_write": format_generic_dict,
+    "programs_delete": format_generic_dict,
+    "programs_save": format_generic_dict,
+    "project_open_file": format_generic_dict,
     "scripts_list": format_generic_list,
     "scripts_run": format_generic_dict,
+    "structs_add_field": format_generic_dict,
+    "structs_create": format_generic_dict,
+    "structs_delete": format_generic_dict,
+    "structs_update_field": format_generic_dict,
 }
 
 
@@ -2804,34 +3185,107 @@ def text_output(func):
     """Decorator that converts dict responses to plain text using registered formatters"""
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
+        started = time.perf_counter()
         response = func(*args, **kwargs)
-
-        # If already a string, pass through
-        if isinstance(response, str):
-            return response
-
-        # GHYDRA_MCP_OUTPUT=json: the raw envelope, for a machine that
-        # parses it. The error envelope goes out the same way.
-        if RAW_OUTPUT:
-            try:
-                return json.dumps(response, default=str)
-            except (TypeError, ValueError):
-                return str(response)
-
-        # Check for error first
-        if isinstance(response, dict) and not response.get("success", True):
-            return format_error(response)
-
-        # Look up formatter by function name
-        formatter = FORMATTERS.get(func.__name__)
-        if formatter:
-            return formatter(response, **kwargs)
-
-        # Fallback: format_simple_result for mutation operations
-        return format_simple_result(response, "Done")
+        text = _render_tool_output(response, func.__name__, kwargs)
+        _telemetry_safely(func.__name__, started, response, text)
+        return text
 
     wrapper.__annotations__['return'] = str
     return wrapper
+
+
+def _render_tool_output(response, name: str, kwargs: dict):
+    """The body text_output used to have, with the Next: line (I8)."""
+    # If already a string, pass through
+    if isinstance(response, str):
+        return response
+
+    # GHYDRA_MCP_OUTPUT=json: the raw envelope, for a machine that
+    # parses it. The error envelope goes out the same way.
+    if RAW_OUTPUT:
+        try:
+            return json.dumps(response, default=str)
+        except (TypeError, ValueError):
+            return str(response)
+
+    # Check for error first
+    if isinstance(response, dict) and not response.get("success", True):
+        return format_error(response)
+
+    # Look up formatter by function name
+    formatter = FORMATTERS.get(name)
+    if formatter:
+        text = formatter(response, **kwargs)
+    else:
+        # Fallback: format_simple_result for mutation operations
+        text = format_simple_result(response, "Done")
+
+    # Actionable HATEOAS (I8): the envelope's links, translated into the
+    # bridge calls that follow them. The hrefs carry real values, so the
+    # suggestion is a call the agent can make as it reads. A link that
+    # does not map to a registered tool is left out — a wrong suggestion
+    # is worse than none.
+    suggestions = _suggested_calls(response)
+    if suggestions:
+        text += "\nNext: " + " | ".join(suggestions)
+    return text
+
+
+_ADDRESSISH = re.compile(r"^(0x[0-9a-fA-F]+|[0-9a-fA-F]{4,})$")
+
+
+def _suggested_calls(response: dict, limit: int = 4) -> list[str]:
+    """Translate the envelope's _links into registered bridge calls.
+
+    Two shapes reach here: the raw envelope (``_links`` = rel -> {href,
+    method}) and the one ``simplify_response`` returns for the ordinary HTTP
+    tools (``_links`` is dropped and the hrefs are kept flat under
+    ``api_links``). Both are read, so the suggestion is emitted either way.
+    """
+    if not isinstance(response, dict):
+        return []
+    links = response.get("_links")
+    if not isinstance(links, dict):
+        flat = response.get("api_links")
+        if isinstance(flat, dict):
+            links = {rel: {"href": href} for rel, href in flat.items()}
+    if not isinstance(links, dict):
+        return []
+    registered = set(getattr(mcp._tool_manager, "_tools", {}))
+    suggestions = []
+    for rel, link in links.items():
+        if rel == "self" or not isinstance(link, dict):
+            continue  # self is the call that just happened
+        href = link.get("href")
+        if not isinstance(href, str) or not href.startswith("/"):
+            continue
+        path, _, query = href.partition("?")
+        segments = [seg for seg in path.strip("/").split("/") if seg]
+        if len(segments) >= 2:
+            candidates = (f"{segments[0]}_{segments[-1]}",
+                          f"{segments[0]}_get_{segments[-1]}")
+            tool = next((name for name in candidates if name in registered), None)
+            values = segments[1:-1]
+        elif len(segments) == 1:
+            tool = f"{segments[0]}_list" if f"{segments[0]}_list" in registered else None
+            values = []
+        else:
+            continue
+        if tool is None:
+            continue
+        args = []
+        if values:
+            arg_name = "address" if _ADDRESSISH.match(values[-1]) else "name"
+            args.append(f'{arg_name}="{values[-1]}"')
+        for pair in query.split("&"):
+            key, sep, value = pair.partition("=")
+            if sep and key in ("offset", "limit"):
+                args.append(f"{key}={value}")
+        suggestions.append(f"{tool}({', '.join(args)})" if args else f"{tool}()")
+        if len(suggestions) >= limit:
+            break
+    return suggestions
 
 
 def simplify_response(response: dict) -> dict:
@@ -2939,6 +3393,45 @@ def simplify_response(response: dict) -> dict:
     
     return result
 
+def negotiate_capabilities(result: dict, url: str = "") -> tuple[dict | None, str | None]:
+    """Normalise a /capabilities (or /plugin-version) result and check compatibility.
+
+    The old check compared API_VERSION by exact equality and let a mismatch
+    surface much later as "No active Ghidra instance". This returns the
+    normalised capability info plus an error that names both versions, the
+    runtime and what to do about it. A plugin that only has /plugin-version
+    still works: the missing keys get honest defaults.
+
+    Args:
+        result: The ``result`` object of the plugin's HATEOAS envelope.
+        url: Instance URL, used in the mismatch message.
+
+    Returns:
+        tuple: ``(info, None)`` when compatible, ``(None, error_message)`` when not.
+    """
+    info = {
+        "plugin_version": result.get("plugin_version", ""),
+        "api_version": result.get("api_version", 0),
+        "ghidra_version": result.get("ghidra_version", "unknown"),
+        "java_version": result.get("java_version", "unknown"),
+        "headless": bool(result.get("headless", False)),
+        "features": result.get("features") or {},
+        "limits": result.get("limits") or {},
+        "compatibility": result.get("compatibility") or {},
+    }
+    if info["api_version"] != REQUIRED_API_VERSION:
+        return None, (
+            f"API version mismatch at {url or 'the instance'}: plugin reports API "
+            f"{info['api_version']}, but bridge {BRIDGE_VERSION} requires "
+            f"{REQUIRED_API_VERSION} (plugin {info['plugin_version'] or 'unknown'}, "
+            f"Ghidra {info['ghidra_version']}, Java {info['java_version']}). "
+            "Install a GhydraMCP extension built for this bridge, or rebuild the "
+            "bridge against this API version. Optional features are discovered "
+            "through GET /capabilities; an older plugin simply lacks them."
+        )
+    return info, None
+
+
 def register_instance(port: int, url: str | None = None) -> str:
     """Register a new Ghidra instance
     
@@ -2953,9 +3446,12 @@ def register_instance(port: int, url: str | None = None) -> str:
         url = f"http://{ghidra_host}:{port}"
 
     try:
-        # Check for HATEOAS API by checking plugin-version endpoint
-        test_url = f"{url}/plugin-version"
-        response = _http_session().get(test_url, timeout=2)
+        # Prefer /capabilities for negotiation. An older plugin answers 404
+        # there, so fall back to /plugin-version: the endpoint is additive and
+        # API_VERSION does not move.
+        response = _http_session().get(f"{url}/capabilities", timeout=2)
+        if response.status_code == 404:
+            response = _http_session().get(f"{url}/plugin-version", timeout=2)
         
         if not response.ok:
             return f"Error: Instance at {url} is not responding properly to HATEOAS API"
@@ -2975,12 +3471,18 @@ def register_instance(port: int, url: str | None = None) -> str:
                         project_info["plugin_version"] = plugin_version
                         project_info["api_version"] = api_version
                         
-                        # Verify API version compatibility
-                        if api_version != REQUIRED_API_VERSION:
-                            error_msg = f"API version mismatch: Plugin reports version {api_version}, but bridge requires version {REQUIRED_API_VERSION}"
+                        # Verify API version compatibility, with the versions and
+                        # runtime in the message instead of a generic failure later.
+                        negotiated, error_msg = negotiate_capabilities(result, url)
+                        if error_msg:
                             print(error_msg, file=sys.stderr)
                             return error_msg
-                        
+                        project_info["capabilities"] = negotiated
+                        compat = negotiated.get("compatibility") or {}
+                        if compat and not compat.get("compatible", True):
+                            print("WARNING: incompatible Ghidra build: "
+                                  + str(compat.get("remedy", "")), file=sys.stderr)
+
                         print(f"Connected to Ghidra plugin version {plugin_version} with API version {api_version}")
             except Exception as e:
                 print(f"Error parsing plugin version: {e}", file=sys.stderr)
@@ -3915,6 +4417,33 @@ def instances_current() -> dict:
     """
     return ghidra_instance(port=current_instance_port)
 
+
+@mcp.tool()
+@text_output
+def instances_capabilities(port: int | None = None) -> dict:
+    """Describe what a Ghidra instance can do, for capability negotiation.
+
+    Returns the plugin, API, Ghidra and Java versions, whether the instance is
+    headless, which feature flags are actually enabled, and the limits a client
+    must respect. Older plugins that only have /plugin-version are answered
+    with the subset that endpoint provides.
+
+    Args:
+        port: Specific Ghidra instance port (optional). Defaults to the current instance.
+
+    Returns:
+        dict: Capability payload with plugin_version, api_version, ghidra_version,
+              java_version, headless, features and limits.
+    """
+    port = _get_instance_port(port)
+    response = safe_get(port, "capabilities")
+    if not response.get("success", False):
+        # Additive endpoint: an older plugin has no /capabilities route.
+        legacy = simplify_response(safe_get(port, "plugin-version"))
+        if legacy.get("success", False):
+            return legacy
+    return simplify_response(response)
+
 # Function tools
 @mcp.tool()
 @text_output
@@ -4178,6 +4707,7 @@ def _parse_targets(text: str) -> list[str]:
 @text_output
 def functions_batch_decompile(targets: TargetsText,
                               timeout: int = DEFAULT_DECOMPILATION_TIMEOUT,
+                              async_mode: bool = False,
                               port: int | None = None) -> dict:
     """Decompile a list of functions in one call
 
@@ -4186,11 +4716,15 @@ def functions_batch_decompile(targets: TargetsText,
                  A bare name or a comma-separated list is accepted too. Each target
                  is a function name or an address.
         timeout: Decompilation timeout per function, in seconds (default: 60)
+        async_mode: Return a task handle immediately instead of blocking for the
+                    whole batch (which the server runs one target at a time and
+                    can take timeout x targets). Poll tasks_get(task_id).
         port: Specific Ghidra instance port (optional)
 
     Returns:
         dict: One entry per target, with the decompiled code or the reason it
               failed. A target that resolves to nothing does not stop the batch.
+              With async_mode=True: a task handle for tasks_get/tasks_cancel.
     """
     port = _get_instance_port(port)
 
@@ -4216,8 +4750,15 @@ def functions_batch_decompile(targets: TargetsText,
             "timestamp": int(time.time() * 1000)
         }
 
-    response = safe_post(port, "functions/decompile-batch",
-                         {"targets": wanted, "timeout": timeout})
+    payload = {"targets": wanted, "timeout": timeout}
+    if async_mode:
+        return _task_spawn(
+            "batch_decompile",
+            f"{len(wanted)} target(s) on port {port}",
+            body=lambda: safe_post(port, "functions/decompile-batch", payload),
+            result_of=simplify_response)
+
+    response = safe_post(port, "functions/decompile-batch", payload)
     return simplify_response(response)
 
 
@@ -7171,6 +7712,20 @@ def _x64dbg_parse_modules(text: str) -> List[dict]:
     return modules
 
 
+def _x64dbg_path_name(path: str) -> str:
+    """The file name of a path, on any platform.
+
+    os.path.basename only knows the separators of the machine it runs on, so
+    on POSIX it takes the whole "C:\\dir\\cmd.exe" as the name and the by-name
+    module match silently fails. The two sides of this integration always
+    speak Windows paths, so both separators are separators here.
+    """
+    text = str(path or "").strip().strip('"')
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    return text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
 def _x64dbg_find_module(modules: List[dict], binary_path: str) -> Optional[dict]:
     """The module that is the given binary.
 
@@ -7184,10 +7739,10 @@ def _x64dbg_find_module(modules: List[dict], binary_path: str) -> Optional[dict]
     for module in modules:
         if _x64dbg_normalize_path(module.get("path", "")) == wanted:
             return module
-    wanted_name = os.path.basename(wanted).lower()
+    wanted_name = _x64dbg_path_name(wanted).lower()
     for module in modules:
         candidate = _x64dbg_normalize_path(module.get("path", ""))
-        if candidate and os.path.basename(candidate).lower() == wanted_name:
+        if candidate and _x64dbg_path_name(candidate).lower() == wanted_name:
             return module
     return None
 
@@ -7838,6 +8393,7 @@ def programs_delete(program_id: str = "current", port: int | None = None) -> dic
 
 
 @mcp.tool()
+@text_output
 def programs_save(all: bool = False, port: int | None = None) -> dict:
     """Save the current program to the project (Ghidra's "Save")
 
@@ -7960,6 +8516,479 @@ def scripts_run(name: str | None = None, source: str | None = None,
 
 
 # ================= Analysis =================
+
+# Capability triage (R4). This is a copy of ghydra/capabilities.py: the bridge
+# ships as one standalone file and must not import the ghydra package.
+# test_capabilities_summary.py asserts the two copies stay byte-for-byte in
+# agreement, the same way the Kuna error taxonomies are kept in step.
+CAPABILITY_RULES = (
+    {
+        "id": "T1055",
+        "name": "Process Injection",
+        "tactic": "Defense Evasion / Privilege Escalation",
+        "imports": ("VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread",
+                    "NtCreateThreadEx", "QueueUserAPC", "SetThreadContext",
+                    "NtMapViewOfSection"),
+        "strings": (),
+    },
+    {
+        "id": "T1057",
+        "name": "Process Discovery",
+        "tactic": "Discovery",
+        "imports": ("CreateToolhelp32Snapshot", "Process32First", "Process32Next",
+                    "EnumProcesses", "NtQuerySystemInformation"),
+        "strings": (),
+    },
+    {
+        "id": "T1082",
+        "name": "System Information Discovery",
+        "tactic": "Discovery",
+        "imports": ("GetSystemInfo", "GetVersionEx", "GetComputerName",
+                    "GetUserName", "GetDiskFreeSpace", "RegQueryValueEx"),
+        "strings": (),
+    },
+    {
+        "id": "T1105",
+        "name": "Ingress Tool Transfer",
+        "tactic": "Command and Control",
+        "imports": ("URLDownloadToFile", "WinHttpOpen", "InternetOpenUrl",
+                    "HttpSendRequest", "curl_easy_perform", "recv", "WSARecv"),
+        "strings": ("http://", "https://", "Mozilla/", "User-Agent", "download"),
+    },
+    {
+        "id": "T1071",
+        "name": "Application Layer Protocol",
+        "tactic": "Command and Control",
+        "imports": ("WSAConnect", "InternetConnect", "HttpOpenRequest",
+                    "WSAStartup", "connect", "send"),
+        "strings": (),
+    },
+    {
+        "id": "T1486",
+        "name": "Data Encrypted for Impact",
+        "tactic": "Impact",
+        "imports": ("CryptEncrypt", "CryptGenKey", "BCryptEncrypt", "CryptDeriveKey"),
+        "strings": ("YOUR FILES", "ransom", "decrypt", ".locked", "bitcoin",
+                    "restore your", "encrypted"),
+    },
+    {
+        "id": "T1497",
+        "name": "Virtualization / Sandbox Evasion",
+        "tactic": "Defense Evasion / Discovery",
+        "imports": ("IsDebuggerPresent", "CheckRemoteDebuggerPresent",
+                    "GetTickCount", "Sleep", "NtQueryInformationProcess"),
+        "strings": ("VMware", "VirtualBox", "QEMU", "Sandbox", "VBox", "ollydbg"),
+    },
+    {
+        "id": "T1113",
+        "name": "Screen Capture",
+        "tactic": "Collection",
+        "imports": ("BitBlt", "GetDC", "CreateCompatibleBitmap", "PrintWindow",
+                    "GetWindowDC"),
+        "strings": (),
+    },
+    {
+        "id": "T1547",
+        "name": "Boot or Logon Autostart Execution",
+        "tactic": "Persistence",
+        "imports": ("CreateService", "OpenSCManager", "RegSetValueEx", "ShellExecute"),
+        "strings": ("\\CurrentVersion\\Run", "\\RunOnce", "schtasks", "startup"),
+    },
+    {
+        "id": "T1027",
+        "name": "Obfuscated Files or Information",
+        "tactic": "Defense Evasion",
+        "imports": ("VirtualProtect", "GetProcAddress", "LoadLibraryA",
+                    "LoadLibraryW", "LdrLoadDll"),
+        "strings": ("base64", "obfuscat"),
+    },
+)
+
+_CAP_IMPORT_KEYS = ("name", "label", "symbol", "value")
+_CAP_STRING_KEYS = ("value", "name", "string", "text")
+_CAP_ADDRESS_KEYS = ("address", "addr", "offset")
+
+
+def _cap_items(response: object) -> list[dict]:
+    if not isinstance(response, dict) or not response.get("success", False):
+        return []
+    payload = response.get("result")
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def _cap_text(item: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _cap_address(item: dict) -> str:
+    for key in _CAP_ADDRESS_KEYS:
+        value = item.get(key)
+        if isinstance(value, (str, int)) and value != "":
+            return str(value)
+    return ""
+
+
+def _cap_evidence(items: list[dict], keys: tuple[str, ...],
+                  patterns: tuple[str, ...], kind: str) -> list[dict]:
+    found: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        text = _cap_text(item, keys)
+        if not text:
+            continue
+        lowered = text.lower()
+        for pattern in patterns:
+            if pattern.lower() in lowered:
+                marker = (kind, text)
+                if marker not in seen:
+                    seen.add(marker)
+                    found.append({
+                        "kind": kind,
+                        "name": text[:120],
+                        "address": _cap_address(item),
+                        "matched": pattern,
+                    })
+                break
+    return found
+
+
+def build_capability_report(program: object, imports: object, strings: object,
+                            include_strings: bool = True) -> dict:
+    """Compose the three envelopes into a ranked capability triage report."""
+    import_items = _cap_items(imports)
+    string_items = _cap_items(strings) if include_strings else []
+
+    failures = []
+    for label, response in (("imports", imports), ("strings", strings)):
+        if label == "strings" and not include_strings:
+            continue
+        if isinstance(response, dict) and response.get("success") is False:
+            failures.append(label)
+
+    findings = []
+    for rule in CAPABILITY_RULES:
+        import_hits = _cap_evidence(import_items, _CAP_IMPORT_KEYS,
+                                    rule["imports"], "import")
+        string_hits = _cap_evidence(string_items, _CAP_STRING_KEYS,
+                                    rule["strings"], "string")
+        score = 2 * len(import_hits) + len(string_hits)
+        if score < 2:
+            continue
+        confidence = "high" if score >= 6 else ("medium" if score >= 3 else "low")
+        findings.append({
+            "id": rule["id"],
+            "name": rule["name"],
+            "tactic": rule["tactic"],
+            "confidence": confidence,
+            "score": score,
+            "import_matches": len(import_hits),
+            "string_matches": len(string_hits),
+            "evidence": (import_hits + string_hits)[:6],
+        })
+    findings.sort(key=lambda finding: (-finding["score"], finding["id"]))
+
+    name = ""
+    if isinstance(program, dict) and isinstance(program.get("result"), dict):
+        name = program["result"].get("name") or ""
+
+    return {
+        "success": True,
+        "result": {
+            "program": name,
+            "summary": {
+                "imports_scanned": len(import_items),
+                "strings_scanned": len(string_items),
+                "rules": len(CAPABILITY_RULES),
+                "techniques_matched": len(findings),
+            },
+            "failures": failures,
+            "findings": findings,
+            "method": "Heuristic import/string matching; a lead for an analyst, "
+                      "not a verdict.",
+        },
+    }
+
+
+_CAPABILITY_PAGE_LIMIT = 1000      # the server clamps every page to this
+_CAPABILITY_MAX_PAGES = 20         # a bound the answer must still respect
+
+
+def _collect_capability_items(port: int, endpoint: str,
+                              total_expected: int | None = None) -> dict:
+    """Every item of a listing, paged through the advertised total.
+
+    The server clamps every page to 1000 items, so a single request only sees
+    the first page: a binary with 5000 imports could have all of its matching
+    evidence on page three and still get an empty capability report. This
+    follows meta.total, with a page cap so a listing that never ends cannot
+    hang the tool.
+    """
+    items: list = []
+    offset = 0
+    first = None
+    for _page in range(_CAPABILITY_MAX_PAGES):
+        response = safe_get(port, endpoint,
+                            {"offset": offset, "limit": _CAPABILITY_PAGE_LIMIT})
+        if first is None:
+            first = response
+        page = _cap_items(response)
+        items.extend(page)
+        meta = response.get("meta") if isinstance(response, dict) else None
+        total = meta.get("total") if isinstance(meta, dict) else None
+        if not page or len(page) < _CAPABILITY_PAGE_LIMIT:
+            break
+        if isinstance(total, int) and len(items) >= total:
+            break
+        offset += len(page)
+    if first is not None and isinstance(first, dict) \
+            and first.get("success") is False:
+        return first  # the report says which part failed, never hides it
+    return {"success": True, "result": items}
+
+
+@mcp.tool()
+@text_output
+def analysis_capabilities_summary(include_strings: bool = True,
+                                  port: int | None = None) -> dict:
+    """Rank ATT&CK/MBC-style capability leads for the loaded binary, in one call.
+
+    Composes the program, imported symbols and defined strings into a ranked
+    list of techniques, each with the evidence (name and address) behind it.
+    This is a triage lead for an analyst, never a verdict: a technique is only
+    reported when an import or a string in the binary actually matches one of
+    the rules, and nothing is inferred from a missing match.
+
+    Args:
+        include_strings: Include defined strings as evidence (default: True)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: program name, scan counts, ranked findings with evidence and
+              confidence, and the list of endpoints that failed (if any).
+    """
+    port = _get_instance_port(port)
+    program = safe_get(port, "program")
+    imports = _collect_capability_items(port, "symbols/imports")
+    strings = (_collect_capability_items(port, "strings")
+               if include_strings else None)
+    return build_capability_report(program, imports, strings, include_strings)
+
+
+# Context pack (R3): a copy of ghydra/contextpack.py, the way the capability
+# rules are duplicated — the bridge is one standalone file and must not import
+# the ghydra package. test_context_pack.py asserts the copies agree.
+_CONTEXT_CHAR_PER_TOKEN = 4
+
+_CONTEXT_TEMPLATES = {
+    "what_it_does": re.compile(
+        r"o que (esse|esse|esta|essa|este|a função|the function|it) "
+        r"|what .*(does|do)|o que faz|descompil|decompil", re.IGNORECASE),
+    "data_origin": re.compile(
+        r"de onde|quem (escreve|lê|le|leu|escreveu)|where .*(from|written|read)"
+        r"|who (writes|reads)|xref|referên|referen", re.IGNORECASE),
+    "what_changed": re.compile(
+        r"o que mudou|what changed|mudou|diff|desde a última|since last",
+        re.IGNORECASE),
+}
+
+
+def _ctx_classify_question(question: str) -> str:
+    for template, pattern in _CONTEXT_TEMPLATES.items():
+        if pattern.search(question or ""):
+            return template
+    return "overview"
+
+
+def _ctx_tokens(text: str) -> int:
+    return max(1, len(text) // _CONTEXT_CHAR_PER_TOKEN)
+
+
+def build_context_pack(question: str, template: str, program: str,
+                       sections: list, budget_tokens: int = 4000) -> dict:
+    """Assemble fetched sections into one budgeted dossier (R3)."""
+    budget_tokens = max(200, int(budget_tokens))
+    included = []
+    omitted = []
+    citations = []
+    seen_citations = set()
+    used = 0
+
+    header = _ctx_tokens(f"Context pack: {question}")
+    for index, section in enumerate(sections):
+        title = str(section.get("title", "section"))
+        body = str(section.get("body", ""))
+        section_citations = [str(c) for c in section.get("citations") or []]
+
+        if index == 0:
+            # The section the question is about: truncate, never drop.
+            room = budget_tokens - header - used - _ctx_tokens(title)
+            if _ctx_tokens(body) > room > 0:
+                keep_chars = room * _CONTEXT_CHAR_PER_TOKEN
+                body = body[:keep_chars].rsplit("\n", 1)[0]
+                omitted.append({"section": title,
+                                "reason": f"truncated to fit {budget_tokens} "
+                                          f"tokens"})
+        elif used + _ctx_tokens(title) + _ctx_tokens(body) + header > budget_tokens:
+            omitted.append({"section": title,
+                            "reason": "dropped: over the token budget"})
+            continue
+
+        used += _ctx_tokens(title) + _ctx_tokens(body)
+        included.append({"title": title, "body": body,
+                         "citations": section_citations})
+        for citation in section_citations:
+            if citation not in seen_citations:
+                seen_citations.add(citation)
+                citations.append(citation)
+
+    return {
+        "success": True,
+        "result": {
+            "question": question,
+            "template": template,
+            "program": program,
+            "sections": included,
+            "citations": citations,
+            "omitted": omitted,
+            "budget_tokens": budget_tokens,
+            "used_tokens": header + used,
+            "method": "Composed from already-fetched endpoints; ranked by "
+                      "relevance to the question, truncated by budget. Every "
+                      "address is citable.",
+        },
+    }
+
+
+def _ctx_section(title: str, response, key: str = "result",
+                 citations: tuple = ()) -> dict:
+    """One pack section from an endpoint envelope, or a failure note."""
+    if isinstance(response, dict) and response.get("success", False):
+        payload = response.get(key)
+        body = payload if isinstance(payload, str) else json.dumps(
+            payload, ensure_ascii=False, default=str)
+        return {"title": title, "body": body, "citations": list(citations)}
+    code = ""
+    if isinstance(response, dict):
+        error = response.get("error") or {}
+        code = str(error.get("code", "unavailable")) if isinstance(error, dict) else str(error)
+    return {"title": title, "body": f"(unavailable: {code or 'no answer'})",
+            "citations": []}
+
+
+def _ctx_text(response, *keys) -> str:
+    """Best-effort plain text out of an envelope's result."""
+    if not isinstance(response, dict) or not response.get("success", False):
+        return ""
+    payload = response.get("result")
+    if isinstance(payload, dict):
+        for key in keys:
+            if isinstance(payload.get(key), str) and payload[key]:
+                return payload[key]
+    return ""
+
+
+@mcp.tool()
+@text_output
+def analysis_context_pack(question: str, address: str | None = None,
+                          budget_tokens: int = 4000,
+                          port: int | None = None) -> dict:
+    """Answer one question about the binary in a single budgeted dossier
+
+    An agent otherwise pays 10-20 calls to answer "what does this function do
+    and who calls it". This tool composes the relevant endpoints into ONE
+    ranked answer — decompiled code, references, context — with citable
+    addresses, truncated to your token budget, and with an explicit list of
+    what was omitted and why. Three question models are recognised (either
+    language): "what does it do" (needs an address), "where does this data
+    come from" (needs an address) and "what changed" (program fingerprint; a
+    real diff needs two snapshots). Anything else gets the overview template.
+
+    Args:
+        question: The question, free-form, PT or EN (e.g. "o que faz esta
+                  função?", "where is this data written?")
+        address: The hex address the question is about (required by the
+                 what-it-does and data-origin templates)
+        budget_tokens: Approximate token budget for the answer (default: 4000)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The dossier — sections ranked by relevance, citations (every
+              address mentioned), omissions with reasons, and the tokens used
+    """
+    template = _ctx_classify_question(question)
+
+    if template in ("what_it_does", "data_origin") and not address:
+        return {
+            "success": False,
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": f"the '{template}' question needs the address of "
+                           f"the function or data item it is about",
+            },
+        }
+
+    port = _get_instance_port(port)
+
+    program = safe_get(port, "program")
+    program_name = ""
+    if isinstance(program, dict) and isinstance(program.get("result"), dict):
+        program_name = program["result"].get("name") or ""
+
+    sections = []
+    if template == "what_it_does":
+        resolved = quote(address)
+        info = safe_get(port, f"functions/{resolved}")
+        sections.append(_ctx_section(
+            "function", info, citations=(address,)))
+        decompile = safe_get(port, f"functions/{resolved}/decompile")
+        code = _ctx_text(decompile, "ccode", "decompilation", "decompiled",
+                         "code", "implementation")
+        sections.append(_ctx_section(
+            "decompilation", decompile if not code else
+            {"success": True, "result": code},
+            citations=(address,)))
+        sections.append(_ctx_section(
+            "callers", safe_get(port, f"analysis/callers/{resolved}",
+                                {"limit": 10})))
+        sections.append(_ctx_section(
+            "callees", safe_get(port, f"analysis/callees/{resolved}",
+                                {"limit": 10})))
+    elif template == "data_origin":
+        resolved = quote(address)
+        sections.append(_ctx_section(
+            "address context",
+            safe_get(port, f"inspect/address/{resolved}"),
+            citations=(address,)))
+        sections.append(_ctx_section(
+            "references to it",
+            safe_get(port, "xrefs", {"to_addr": address, "limit": 50})))
+    elif template == "what_changed":
+        sections.append(_ctx_section("program", program))
+        sections.append(_ctx_section(
+            "segments", safe_get(port, "segments", {"limit": 50})))
+        sections.append({
+            "title": "how to diff",
+            "body": "A change diff needs two fingerprints: keep this pack, "
+                    "re-ask after your edits, and compare the statistics and "
+                    "segments above.",
+            "citations": [],
+        })
+    else:  # overview
+        sections.append(_ctx_section("program", program))
+        sections.append(_ctx_section(
+            "segments", safe_get(port, "segments", {"limit": 50})))
+        sections.append(_ctx_section(
+            "imports", safe_get(port, "symbols/imports", {"limit": 100})))
+
+    return build_context_pack(question, template, program_name,
+                              sections, budget_tokens)
+
 
 @mcp.tool()
 @text_output
@@ -9101,7 +10130,7 @@ def _headless_slug(binary: str) -> str:
 @text_output
 def headless_start(binary: str, port: int = HEADLESS_DEFAULT_PORT,
                    timeout: int = 900, ghidra_home: str = "",
-                   java_home: str = "") -> dict:
+                   java_home: str = "", async_mode: bool = False) -> dict:
     """Analyse a binary and serve the API from it, with no window.
 
     The run imports the binary, analyses it, and then answers the ordinary
@@ -9110,7 +10139,11 @@ def headless_start(binary: str, port: int = HEADLESS_DEFAULT_PORT,
     "headless_stop" is called.
 
     The analysis of a big binary takes minutes, so the call waits for the
-    API to come up (the "timeout" is how long it waits).
+    API to come up (the "timeout" is how long it waits). With async_mode=True
+    it does not wait at all: a task handle comes back immediately, the wait
+    runs in the background, and tasks_get(task_id) says when the API is up.
+    The run itself is not affected by cancelling the task - it is meant to
+    outlive this call; use headless_stop for that.
 
     Args:
         binary: The file to analyse
@@ -9118,11 +10151,20 @@ def headless_start(binary: str, port: int = HEADLESS_DEFAULT_PORT,
         timeout: Seconds to wait for the API (default: 900)
         ghidra_home: Path of the Ghidra installation (default: GHIDRA_HOME)
         java_home: Path of the JDK (default: the one Ghidra supports)
+        async_mode: Return a task handle immediately; the wait for the API
+                    runs in the background (poll tasks_get).
 
     Returns:
         dict: The port, the url, the pid, the project and the log
     """
-    return _headless_start_raw(binary, port, timeout, ghidra_home, java_home)
+    raw = lambda: _headless_start_raw(binary, port, timeout, ghidra_home, java_home)
+    if async_mode:
+        return _task_spawn(
+            "headless_start",
+            f"{os.path.basename(binary)} on port {port}",
+            body=raw,
+            result_of=lambda outcome: outcome)
+    return raw()
 
 
 def _headless_start_raw(binary: str, port: int = HEADLESS_DEFAULT_PORT,
@@ -9817,6 +10859,515 @@ def session_close(session_id: str) -> dict:
                       "message": f"no session with the ID '{session_id}'"}}
 
 
+# ================= Background tasks (I7) =================
+
+@mcp.tool()
+@text_output
+def tasks_list() -> dict:
+    """List the background tasks started with async_mode=True
+
+    The registry lives in this bridge process, like the Kuna export jobs: a
+    task started by a previous bridge is not addressable here.
+
+    Returns:
+        dict: Every task with its id, kind, status and elapsed time
+    """
+    with _bg_tasks_lock:
+        tasks = [_task_view(record) for record in
+                 sorted(_bg_tasks.values(), key=lambda r: r["id"])]
+    return {"success": True, "result": {"count": len(tasks), "tasks": tasks}}
+
+
+@mcp.tool()
+@text_output
+def tasks_get(task_id: str) -> dict:
+    """Get the status and outcome of a background task
+
+    Args:
+        task_id: The task ID returned by the async_mode call (e.g. "T-0001")
+
+    Returns:
+        dict: The task view — status working/completed/failed/cancelled,
+              elapsed seconds, and the result once it has one
+    """
+    with _bg_tasks_lock:
+        record = _bg_tasks.get(task_id)
+        if record is None:
+            return {"success": False,
+                    "error": {"code": "TASK_NOT_FOUND",
+                              "message": f"no task with the ID '{task_id}' "
+                                         f"(tasks live in the bridge process "
+                                         f"that started them)"}}
+        view = _task_view(record)
+    return {"success": True, "result": view}
+
+
+@mcp.tool()
+@text_output
+def tasks_cancel(task_id: str) -> dict:
+    """Stop waiting for a background task
+
+    Cancelling marks the task and frees the caller. The work already sent to
+    the server is not interrupted — a batch keeps decompiling server-side and
+    a headless run keeps running (that is what headless_stop is for); what
+    cancel stops is the waiting, and the task's result is discarded when it
+    arrives.
+
+    Args:
+        task_id: The task ID returned by the async_mode call (e.g. "T-0001")
+
+    Returns:
+        dict: The task view after the cancel was requested
+    """
+    with _bg_tasks_lock:
+        record = _bg_tasks.get(task_id)
+        if record is None:
+            return {"success": False,
+                    "error": {"code": "TASK_NOT_FOUND",
+                              "message": f"no task with the ID '{task_id}'"}}
+        if record["status"] == "working":
+            record["cancel_requested"] = True
+        view = _task_view(record)
+    return {"success": True, "result": view}
+
+
+# ================= Progressive tool discovery (I15) =================
+# 116 tools in one list degrade tool selection: an agent that has to pick
+# from everything picks worse. The bridge groups them by workflow and can
+# load only the groups a session asked for (`GHYDRA_TOOL_GROUPS=core,functions`
+# or at runtime with tools_load_group). The four tools_* meta-tools are always
+# loaded, and the full catalogue stays searchable even when a tool is hidden.
+
+_TOOL_GROUPS = {
+    "core": {"programs", "project", "projects", "instances", "ui", "doctor",
+             "evidence", "session", "tasks", "tools"},
+    "functions": {"functions", "analysis", "inspect", "variables", "memory"},
+    "data": {"data", "xrefs", "scalars", "comments", "segments"},
+    "types": {"structs", "datatypes", "classes", "raw", "symbols",
+              "namespaces"},
+    "scripts": {"scripts"},
+    "headless": {"headless"},
+    "kuna": {"kuna"},
+    "x64dbg": {"x64dbg"},
+}
+
+_META_NAMESPACE = "tools"
+_tool_stash: Dict[str, Dict[str, object]] = {}
+_loaded_groups: set[str] = set(_TOOL_GROUPS)
+
+
+def _tool_namespace(tool_name: str) -> str:
+    return tool_name.split("_", 1)[0]
+
+
+def _tool_group(tool_name: str) -> str:
+    """The group a tool belongs to; an unknown namespace is always loaded."""
+    namespace = _tool_namespace(tool_name)
+    for group, namespaces in _TOOL_GROUPS.items():
+        if namespace in namespaces:
+            return group
+    return "core"
+
+
+def _tool_catalog() -> Dict[str, dict]:
+    """The FULL catalogue, including tools a profile has hidden."""
+    catalog = {}
+    manager = getattr(mcp, "_tool_manager", None)
+    live = getattr(manager, "_tools", {}) if manager else {}
+    for name, tool in live.items():
+        catalog[name] = _catalog_entry(name, tool)
+    for tools in _tool_stash.values():
+        for name, tool in tools.items():
+            catalog.setdefault(name, _catalog_entry(name, tool))
+    return catalog
+
+
+def _catalog_entry(name: str, tool) -> dict:
+    description = str(getattr(tool, "description", "") or "")
+    summary = description.strip().splitlines()[0] if description.strip() else ""
+    return {
+        "name": name,
+        "namespace": _tool_namespace(name),
+        "group": _tool_group(name),
+        "summary": summary[:160],
+    }
+
+
+def _tool_loaded(name: str) -> bool:
+    manager = getattr(mcp, "_tool_manager", None)
+    return name in getattr(manager, "_tools", {}) if manager else False
+
+
+def apply_tool_groups(spec: str | None = None) -> dict:
+    """Load only the named groups (comma-separated), or all of them.
+
+    Called at startup from GHYDRA_TOOL_GROUPS and at runtime from
+    tools_load_group/tools_unload_group. The tools_* meta-tools are never
+    removed, and the full catalogue stays searchable: a hidden tool can be
+    found with tools_search and loaded with tools_load_group.
+    """
+    global _loaded_groups
+    requested = [part.strip().lower() for part in (spec or "").split(",")
+                 if part.strip()]
+    unknown = [group for group in requested if group not in _TOOL_GROUPS]
+    if unknown:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNKNOWN",
+                          "message": f"unknown group(s): {', '.join(unknown)}",
+                          "known": sorted(_TOOL_GROUPS)}}
+    target = set(requested) if requested else set(_TOOL_GROUPS)
+    target.add("core")  # the basics are always available
+    manager = getattr(mcp, "_tool_manager", None)
+    if manager is None:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNAVAILABLE",
+                          "message": "this bridge has no tool manager"}}
+
+    loaded_now = set()
+    for name, tool in list(manager._tools.items()):
+        group = _tool_group(name)
+        if group in target:
+            loaded_now.add(name)
+            continue
+        if _tool_namespace(name) == _META_NAMESPACE:
+            loaded_now.add(name)  # the meta-tools are the way back
+            continue
+        _tool_stash.setdefault(group, {})[name] = tool
+        manager._tools.pop(name, None)
+
+    _loaded_groups = target
+    return {"success": True,
+            "result": {"groups": sorted(_loaded_groups),
+                       "loaded": len(loaded_now),
+                       "loaded_tools": sorted(loaded_now)[:200]}}
+
+
+@mcp.tool()
+@text_output
+def tools_groups() -> dict:
+    """List the tool groups, their sizes and whether they are loaded
+
+    The bridge groups its tools by workflow so a session can keep only the
+    namespaces its work needs. `core` is always loaded; the rest are opt-in
+    with GHYDRA_TOOL_GROUPS or tools_load_group.
+
+    Returns:
+        dict: Every group with its tool count and loaded state
+    """
+    catalog = _tool_catalog()
+    counts: Dict[str, int] = {}
+    for entry in catalog.values():
+        counts[entry["group"]] = counts.get(entry["group"], 0) + 1
+    groups = []
+    for group in sorted(_TOOL_GROUPS):
+        groups.append({
+            "group": group,
+            "tools": counts.get(group, 0),
+            "loaded": group in _loaded_groups,
+            "namespaces": sorted(_TOOL_GROUPS[group]),
+        })
+    return {"success": True,
+            "result": {"count": len(groups), "groups": groups,
+                       "visible_tools": len(getattr(
+                           getattr(mcp, "_tool_manager", None), "_tools", {})),
+                       "total_tools": len(catalog)}}
+
+
+@mcp.tool()
+@text_output
+def tools_search(query: str, limit: int = 20) -> dict:
+    """Search every tool, including those a loaded profile hides
+
+    Matches the query against tool names, their one-line summaries and their
+    namespaces — so an agent that needs a capability can find the tool and
+    the group to load, instead of carrying the whole list in context.
+
+    Args:
+        query: What to look for (e.g. "decompile", "struct", "x64dbg")
+        limit: Maximum matches to return (default: 20)
+
+    Returns:
+        dict: The matching tools with name, group, namespace, summary and
+              whether each one is currently loaded
+    """
+    needle = (query or "").lower()
+    matches = []
+    for name, entry in sorted(_tool_catalog().items()):
+        haystack = f"{name} {entry['summary']} {entry['namespace']} " \
+                   f"{entry['group']}".lower()
+        if needle not in haystack:
+            continue
+        matches.append({**entry, "loaded": _tool_loaded(name)})
+        if len(matches) >= limit:
+            break
+    return {"success": True,
+            "result": {"query": query, "count": len(matches),
+                       "matches": matches}}
+
+
+@mcp.tool()
+@text_output
+def tools_load_group(group: str) -> dict:
+    """Load one tool group into this session
+
+    The tools come back into the server's list; MCP clients that cache the
+    tool list should re-read it (most read it on demand). For a guaranteed
+    profile, restart the bridge with GHYDRA_TOOL_GROUPS.
+
+    Args:
+        group: The group to load (see tools_groups)
+
+    Returns:
+        dict: The groups now loaded and how many tools they hold
+    """
+    if group not in _TOOL_GROUPS:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNKNOWN",
+                          "message": f"unknown group '{group}'",
+                          "known": sorted(_TOOL_GROUPS)}}
+    stashed = _tool_stash.pop(group, {})
+    manager = getattr(mcp, "_tool_manager", None)
+    if manager is None:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNAVAILABLE",
+                          "message": "this bridge has no tool manager"}}
+    for name, tool in stashed.items():
+        manager._tools[name] = tool
+    _loaded_groups.add(group)
+    return {"success": True,
+            "result": {"group": group, "restored": len(stashed),
+                       "groups": sorted(_loaded_groups),
+                       "note": "re-read the tool list to see them; a restart "
+                               "with GHYDRA_TOOL_GROUPS gives a guaranteed "
+                               "profile"}}
+
+
+@mcp.tool()
+@text_output
+def tools_unload_group(group: str) -> dict:
+    """Remove one tool group from this session, keeping the meta-tools
+
+    Args:
+        group: The group to unload
+
+    Returns:
+        dict: The groups now loaded and how many tools were removed
+    """
+    if group not in _TOOL_GROUPS:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNKNOWN",
+                          "message": f"unknown group '{group}'",
+                          "known": sorted(_TOOL_GROUPS)}}
+    if group == "core":
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_CORE",
+                          "message": "the core group cannot be unloaded"}}
+    manager = getattr(mcp, "_tool_manager", None)
+    if manager is None:
+        return {"success": False,
+                "error": {"code": "TOOL_GROUP_UNAVAILABLE",
+                          "message": "this bridge has no tool manager"}}
+    removed = 0
+    for name, tool in list(manager._tools.items()):
+        if _tool_group(name) == group and _tool_namespace(name) != _META_NAMESPACE:
+            _tool_stash.setdefault(group, {})[name] = manager._tools.pop(name)
+            removed += 1
+    _loaded_groups.discard(group)
+    return {"success": True,
+            "result": {"group": group, "removed": removed,
+                       "groups": sorted(_loaded_groups)}}
+
+
+# ================= Local telemetry (I14) =================
+# What this bridge actually did, recorded on this machine only. Nothing is
+# ever sent anywhere: the file is ~/.ghydra/telemetry.jsonl (or under
+# GHYDRA_STATE_DIR), one JSON object per call, capped at ~1 MB. Disabled with
+# GHYDRA_TELEMETRY=0. The recorder must never break a tool call, so every
+# failure in it is swallowed.
+_TELEMETRY_MAX_BYTES = 1_000_000
+_TELEMETRY_KEEP_LINES = 2000
+
+
+def _telemetry_path() -> str:
+    return os.path.join(_headless_state_dir(), "telemetry.jsonl")
+
+
+def _telemetry_enabled() -> bool:
+    return os.environ.get("GHYDRA_TELEMETRY", "1").strip().lower() not in (
+        "0", "false", "off", "no")
+
+
+def _telemetry_trim(path: str) -> None:
+    """Keep the log bounded by dropping the oldest lines."""
+    try:
+        if os.path.getsize(path) <= _TELEMETRY_MAX_BYTES:
+            return
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()[-_TELEMETRY_KEEP_LINES:]
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError:
+        pass
+
+
+def _telemetry_record(tool: str, ok: bool, code: str | None,
+                      duration_ms: float, tokens: int) -> None:
+    if not _telemetry_enabled():
+        return
+    try:
+        path = _telemetry_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        entry = {"ts": round(time.time(), 3), "tool": tool, "ok": bool(ok),
+                 "code": code, "ms": round(float(duration_ms), 1),
+                 "tokens": int(tokens)}
+        _telemetry_trim(path)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass  # telemetry must never break a tool call
+
+
+def _telemetry_safely(tool: str, started: float, response, text) -> None:
+    """Record one call from the RAW response, without ever raising.
+
+    The envelope decides success, not the rendered text: with
+    GHYDRA_MCP_OUTPUT=json an error is a string starting with "{" and a
+    prefix check would count every failure as a success.
+    """
+    try:
+        failed = False
+        code = None
+        if isinstance(response, dict):
+            failed = response.get("success") is False
+            error = response.get("error")
+            if failed and isinstance(error, dict):
+                code = error.get("code")
+        elif isinstance(response, str):
+            failed = response.startswith("Error")
+        _telemetry_record(
+            tool, not failed, code,
+            (time.perf_counter() - started) * 1000.0,
+            max(1, len(text) // 4) if isinstance(text, str) else 0)
+    except Exception:
+        pass
+
+
+def _telemetry_read(max_entries: int = 5000) -> list:
+    try:
+        with open(_telemetry_path(), encoding="utf-8") as handle:
+            lines = handle.read().splitlines()[-max_entries:]
+    except OSError:
+        return []
+    entries = []
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("tool"):
+            entries.append(entry)
+    return entries
+
+
+def _telemetry_recommendations(entries: list) -> list:
+    """Name the composed tool when the log shows the pattern it replaces."""
+    recommendations = []
+    counts: Dict[str, int] = {}
+    slow: Dict[str, float] = {}
+    for entry in entries:
+        tool = str(entry.get("tool"))
+        counts[tool] = counts.get(tool, 0) + 1
+        if entry.get("ok"):
+            slow[tool] = max(slow.get(tool, 0.0), float(entry.get("ms") or 0))
+
+    inspection = sum(counts.get(name, 0) for name in (
+        "functions_get", "functions_decompile", "analysis_callers",
+        "analysis_callees", "xrefs_list", "inspect_address"))
+    if inspection >= 4:
+        recommendations.append(
+            f"{inspection} inspection calls in the window: "
+            f"analysis_context_pack(question, address) answers that pattern "
+            f"in one call, with a token budget and citable addresses.")
+    listing = sum(counts.get(name, 0) for name in (
+        "functions_list", "data_list", "symbols_list", "variables_list"))
+    if listing >= 4:
+        recommendations.append(
+            f"{listing} listing calls: programs_overview composes the counts "
+            f"and imports in one call, and a page takes limit/offset.")
+    batch = counts.get("functions_decompile", 0)
+    if batch >= 4:
+        recommendations.append(
+            f"{batch} single decompiles: functions_batch_decompile takes a "
+            f"list (async_mode=True for a long batch).")
+    for tool, worst in sorted(slow.items(), key=lambda item: -item[1])[:3]:
+        if worst >= 500:
+            recommendations.append(
+                f"{tool} took up to {worst:.0f} ms: consider async_mode=True "
+                f"or a narrower request.")
+    return recommendations[:5]
+
+
+@mcp.tool()
+@text_output
+def telemetry_summary(days: int = 7) -> dict:
+    """Summarize what this bridge has actually done, from the local log
+
+    The log is local only (never sent anywhere): one JSON object per tool
+    call under ~/.ghydra/telemetry.jsonl, capped at about 1 MB. This tool
+    aggregates it — calls, failures, latency and estimated token volume per
+    tool, the error codes seen — and names the composed tool when the log
+    shows a pattern one of them replaces.
+
+    Args:
+        days: Only count entries from the last N days (default: 7)
+
+    Returns:
+        dict: totals, per-tool rows, error codes and recommendations
+    """
+    cutoff = time.time() - max(1, int(days)) * 86400
+    entries = [entry for entry in _telemetry_read()
+               if float(entry.get("ts") or 0) >= cutoff]
+    if not entries:
+        return {"success": True,
+                "result": {"days": days, "calls": 0, "tools": [],
+                           "error_codes": {},
+                           "recommendations": [],
+                           "path": _telemetry_path(),
+                           "message": "no telemetry recorded in this window"}}
+
+    totals: Dict[str, dict] = {}
+    codes: Dict[str, int] = {}
+    for entry in entries:
+        tool = str(entry.get("tool"))
+        row = totals.setdefault(tool, {"tool": tool, "calls": 0, "failed": 0,
+                                       "ms_total": 0.0, "ms_max": 0.0,
+                                       "tokens": 0})
+        row["calls"] += 1
+        if not entry.get("ok"):
+            row["failed"] += 1
+        row["ms_total"] += float(entry.get("ms") or 0)
+        row["ms_max"] = max(row["ms_max"], float(entry.get("ms") or 0))
+        row["tokens"] += int(entry.get("tokens") or 0)
+        code = entry.get("code")
+        if code:
+            codes[str(code)] = codes.get(str(code), 0) + 1
+
+    rows = []
+    for row in sorted(totals.values(), key=lambda item: -item["calls"]):
+        rows.append({**row,
+                     "ms_avg": round(row["ms_total"] / row["calls"], 1),
+                     "ms_max": round(row["ms_max"], 1)})
+    return {"success": True,
+            "result": {
+                "days": days,
+                "calls": len(entries),
+                "tools": rows[:25],
+                "error_codes": codes,
+                "recommendations": _telemetry_recommendations(entries),
+                "path": _telemetry_path(),
+            }}
+
+
 # ================= Startup =================
 
 def main():
@@ -9835,6 +11386,21 @@ def main():
     discovery_thread.start()
 
     signal.signal(signal.SIGINT, handle_sigint)
+
+    # Progressive tool discovery (I15): a profile keeps only the groups the
+    # session asked for. Unset loads everything, which is the old behaviour.
+    profile = os.environ.get("GHYDRA_TOOL_GROUPS", "").strip()
+    if profile:
+        applied = apply_tool_groups(profile)
+        if applied.get("success"):
+            print(f"GhydraMCP: tool profile loaded — "
+                  f"{', '.join(applied['result']['groups'])} "
+                  f"({applied['result']['loaded']} tools)",
+                  file=sys.stderr, flush=True)
+        else:
+            print(f"GhydraMCP: ignored GHYDRA_TOOL_GROUPS '{profile}': "
+                  f"{applied['error']['message']}", file=sys.stderr, flush=True)
+
     mcp.run(transport="stdio")
 
 

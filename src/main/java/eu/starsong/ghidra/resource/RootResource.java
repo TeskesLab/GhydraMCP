@@ -2,6 +2,7 @@ package eu.starsong.ghidra.resource;
 
 import eu.starsong.ghidra.api.ApiConstants;
 import eu.starsong.ghidra.hateoas.Response;
+import eu.starsong.ghidra.service.CapabilityService;
 import eu.starsong.ghidra.server.GhidraContext;
 import eu.starsong.ghidra.server.Resource;
 import io.javalin.Javalin;
@@ -27,6 +28,7 @@ public class RootResource implements Resource {
         app.get("/", ctx -> root(contextFactory.apply(ctx)));
         app.get("/info", ctx -> info(contextFactory.apply(ctx)));
         app.get("/plugin-version", ctx -> version(contextFactory.apply(ctx)));
+        app.get("/capabilities", ctx -> capabilities(contextFactory.apply(ctx)));
     }
 
     /**
@@ -42,6 +44,7 @@ public class RootResource implements Resource {
             .self("/")
             .link("info", "/info")
             .link("plugin-version", "/plugin-version")
+            .link("capabilities", "/capabilities")
             .link("instances", "/instances")
             .link("projects", "/projects")
             .link("programs", "/programs");
@@ -110,6 +113,23 @@ public class RootResource implements Resource {
         ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
             .self("/plugin-version")
             .link("root", "/")
+            .link("capabilities", "/capabilities")
+            .build());
+    }
+
+    /**
+     * GET /capabilities - versions, runtime, feature flags and limits.
+     *
+     * <p>Clients negotiate against this instead of assuming a version. It is
+     * additive: an older plugin answers 404 and the bridge falls back to
+     * /plugin-version, so API_VERSION does not move.
+     */
+    private void capabilities(GhidraContext ctx) {
+        ctx.json(Response.ok(ctx.ctx(), ctx.port(), CapabilityService.describe(ctx))
+            .self("/capabilities")
+            .link("root", "/")
+            .link("info", "/info")
+            .link("plugin-version", "/plugin-version")
             .build());
     }
 }

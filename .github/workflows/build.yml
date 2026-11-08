@@ -44,6 +44,10 @@ jobs:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
       - name: Version constants must agree
         # The plugin (Java) and the bridge (Python) each announce a version.
         # If they drift apart, a release ships artifacts that lie about
@@ -55,6 +59,15 @@ jobs:
         # syntax error in either breaks the release without failing the
         # Java build, so it gets its own gate.
         run: python3 -m compileall -q bridge_mcp_hydra.py ghydra
+
+      - name: Install Python dependencies
+        run: python3 -m pip install --upgrade pip && python3 -m pip install -e .
+
+      - name: Contract suites (no Ghidra required)
+        # These six suites always execute and always give a signal. A green
+        # `run_tests.py` against no Ghidra used to mean "everything skipped",
+        # so CI runs the no-Ghidra set explicitly on every push and PR.
+        run: python3 run_tests.py --no-ghidra
 
   build:
     name: Build ${{ matrix.ghidra-series }}.x

@@ -30,6 +30,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from . import __version__
+
 # The plugin's defaults: 9094 for a 64-bit debuggee, 9095 for a 32-bit one.
 # The released plugin binds exactly those and stops serving when the port is
 # taken; the fixed build walks up instead.
@@ -449,7 +451,7 @@ class Client:
         result = self._post("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
-            "clientInfo": {"name": "ghydramcp", "version": "3.0.0"},
+            "clientInfo": {"name": "ghydramcp", "version": __version__},
         }, timeout=timeout, connect_timeout=connect_timeout, idempotent=True,
             connect_attempts=connect_attempts)
         return result if isinstance(result, dict) else {}
@@ -707,6 +709,20 @@ def parse_modules(text: str) -> List[Dict[str, Any]]:
     return modules
 
 
+def path_name(path: str) -> str:
+    """The file name of a path, on any platform.
+
+    os.path.basename only knows the separators of the machine it runs on, so
+    on POSIX it takes the whole "C:\\dir\\cmd.exe" as the name and the
+    by-name module match silently fails. The two sides of this integration
+    always speak Windows paths, so both separators are separators here.
+    """
+    text = str(path or "").strip().strip('"')
+    if text.startswith("\\\\?\\"):
+        text = text[4:]
+    return text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
 def find_module(modules: List[Dict[str, Any]], binary_path: str) -> Optional[Dict[str, Any]]:
     """The module that is the given binary.
 
@@ -720,10 +736,10 @@ def find_module(modules: List[Dict[str, Any]], binary_path: str) -> Optional[Dic
     for module in modules:
         if normalize_path(module.get("path", "")) == wanted:
             return module
-    wanted_name = os.path.basename(wanted).lower()
+    wanted_name = path_name(wanted).lower()
     for module in modules:
         candidate = normalize_path(module.get("path", ""))
-        if candidate and os.path.basename(candidate).lower() == wanted_name:
+        if candidate and path_name(candidate).lower() == wanted_name:
             return module
     return None
 

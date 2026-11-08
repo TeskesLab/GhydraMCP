@@ -5,18 +5,16 @@ A .NET assembly, an Android APK, an EVM contract, a WASM module, a
 JavaScript application, a firmware image and a native PE all need
 completely different treatment.
 
-The address inspection lives here too: it is the same question asked of
-the binary rather than of the file - what is at this address?
+The address inspection (`ghydra inspect-address`) lives in its own module,
+`ghydra/cli/inspect_address.py`; this module is the file-level triage.
 """
 
 import json
-from urllib.parse import quote
 
 import click
 
-from ..client.exceptions import GhidraError
-from ..triage import TriageError, format_of, hashes, overview
-from ..utils import rich_echo, validate_address
+from ..triage import TriageError, overview
+from ..utils import rich_echo
 
 
 @click.command('inspect')
@@ -83,35 +81,6 @@ def inspect(ctx, target, facts_only):
             lines.append(f"  - {item}")
 
     rich_echo("\n".join(lines))
-
-
-@click.command('inspect-address')
-@click.argument('address')
-@click.pass_context
-def inspect_address(ctx, address):
-    """Say what is at ADDRESS, in one call.
-
-    An agent that lands on an address has to ask four questions: what is
-    called here, what function is it in, what does it hold, and who refers
-    to it. This answers all four at once - the symbol, the containing
-    function, the data, the instruction, the comments, and the references on
-    both sides of the address.
-
-    \b
-    Example:
-        ghydra inspect-address 0x140001008
-    """
-    client = ctx.obj['client']
-    formatter = ctx.obj['formatter']
-
-    try:
-        response = client.get(f'inspect/address/{quote(validate_address(address))}')
-        click.echo(formatter.format_address_context(response))
-
-    except GhidraError as e:
-        error_output = formatter.format_error(e)
-        rich_echo(error_output, err=True)
-        ctx.exit(1)
 
 
 def _render_details(details: dict, indent: str = "  ") -> str:

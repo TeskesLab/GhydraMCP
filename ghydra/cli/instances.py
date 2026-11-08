@@ -150,6 +150,43 @@ def register(ctx, port, url):
         ctx.exit(1)
 
 
+@instances.command('capabilities')
+@click.pass_context
+def capabilities(ctx):
+    """Describe what this instance can do (capability negotiation).
+
+    Shows the plugin, API, Ghidra and Java versions, whether the instance runs
+    headless, which feature flags are enabled and the limits a client must
+    respect. An older plugin without /capabilities is answered with the
+    subset that /plugin-version provides.
+
+    \b
+    Example:
+        ghydra instances capabilities
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+
+    try:
+        try:
+            data = client.get('capabilities')
+        except GhidraError as e:
+            # An older plugin has no /capabilities at all: the client raises
+            # on the 404, so the fallback has to be here, not after a check
+            # on a response that cannot be returned.
+            code = getattr(e, "code", "") or ""
+            if code not in ("HTTP_404", "NOT_FOUND") and "404" not in str(e):
+                raise
+            data = client.get('plugin-version')
+        if not data.get('success', False):
+            data = client.get('plugin-version')
+        click.echo(formatter.format_capabilities(data))
+    except GhidraError as e:
+        error_output = formatter.format_error(e)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+
 @instances.command('unregister')
 @click.option('--port', '-p', type=int, required=True, help='Port number to unregister')
 @click.pass_context

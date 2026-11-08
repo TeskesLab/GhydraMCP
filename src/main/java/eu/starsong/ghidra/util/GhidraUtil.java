@@ -8,6 +8,7 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressFactory;
 import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.DataTypeComponent;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Parameter;
@@ -25,6 +26,7 @@ import ghidra.program.model.symbol.SymbolType;
 import ghidra.util.Msg;
 import ghidra.util.task.TaskMonitor;
 
+import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -442,6 +444,42 @@ public class GhidraUtil {
     }
 
     /**
+     * Rename a structure field, across Ghidra versions.
+     *
+     * <p>The return type changed: 11.x / 12.0-12.1 declare
+     * {@code void setFieldName(String)}, 12.2 declares
+     * {@code DataTypeComponent setFieldName(String)}. The return type is part of
+     * the JVM method descriptor, so a direct call compiled against one series
+     * fails on the other with {@code NoSuchMethodError} — an {@code Error},
+     * invisible to every {@code catch (Exception)} on the way out. Resolving the
+     * method by name at runtime removes that descriptor from the call site.
+     *
+     * @throws IllegalArgumentException when the name clashes (11.x throws a
+     *         checked {@code DuplicateNameException}, which 12.x dropped)
+     * @throws IncompatibleGhidraBuildException when neither series' method exists
+     */
+    public static void setFieldName(DataTypeComponent component, String name) {
+        try {
+            // Resolve on the PUBLIC interface, not on component.getClass():
+            // the implementation (DataTypeComponentDB) is package-private, and
+            // a Method obtained from it fails the access check on invoke with
+            // IllegalAccessException - which would break the rename that used
+            // to work instead of gaining 12.2 compatibility.
+            DataTypeComponent.class.getMethod("setFieldName", String.class)
+                    .invoke(component, name);
+        } catch (NoSuchMethodException e) {
+            throw new IncompatibleGhidraBuildException(
+                "This Ghidra build has no DataTypeComponent.setFieldName(String)", e);
+        } catch (InvocationTargetException e) {
+            throw new IllegalArgumentException(
+                "Field name already exists or invalid: " + name, e.getCause());
+        } catch (ReflectiveOperationException e) {
+            throw new IncompatibleGhidraBuildException(
+                "Could not rename a structure field on this Ghidra build", e);
+        }
+    }
+
+    /**
      * Remove a data type, across Ghidra versions.
      *
      * <p>The overload moved: 11.x and 12.0-12.1 have
@@ -452,7 +490,9 @@ public class GhidraUtil {
     public static void removeDataType(DataTypeManager dtm, DataType type) {
         String name = type != null ? type.getName() : "null";
         try {
-            dtm.getClass().getMethod("remove", DataType.class, TaskMonitor.class)
+            // The interface, not dtm.getClass(): DataTypeManagerDB is
+            // package-private, so a Method from it fails the access check.
+            DataTypeManager.class.getMethod("remove", DataType.class, TaskMonitor.class)
                .invoke(dtm, type, TaskMonitor.DUMMY);
             return;
         } catch (NoSuchMethodException e) {
@@ -461,7 +501,7 @@ public class GhidraUtil {
             throw new IllegalStateException("Failed to remove data type " + name, e);
         }
         try {
-            dtm.getClass().getMethod("remove", DataType.class).invoke(dtm, type);
+            DataTypeManager.class.getMethod("remove", DataType.class).invoke(dtm, type);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Failed to remove data type " + name, e);
         }

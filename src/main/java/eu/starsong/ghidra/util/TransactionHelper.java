@@ -28,7 +28,10 @@ public class TransactionHelper {
         }
 
         AtomicReference<T> result = new AtomicReference<>();
-        AtomicReference<Exception> exception = new AtomicReference<>();
+        // Throwable, not Exception: a jar compiled against the wrong Ghidra
+        // series throws NoSuchMethodError (an Error) from inside the transaction.
+        // Catching only Exception let it escape, taking the 500 body with it.
+        AtomicReference<Throwable> exception = new AtomicReference<>();
         // Ghidra calls this callback with the tx id if the transaction was explicitly aborted
         // (rollback). A null value after endTransaction means the transaction committed; a
         // false return from endTransaction WITHOUT this being set means we nested inside
@@ -48,7 +51,7 @@ public class TransactionHelper {
                     }
                     result.set(operation.get());
                     success = true;
-                } catch (Exception e) {
+                } catch (Throwable e) {
                     exception.set(e);
                     Msg.error(TransactionHelper.class, "Transaction failed: " + transactionName, e);
                 } finally {
@@ -77,6 +80,21 @@ public class TransactionHelper {
             // instead of burying them in a checked TransactionException -> 500.
             if (exception.get() instanceof IllegalArgumentException iae) {
                 throw iae;
+            }
+            // Javalin's app.exception(...) is bounded by Exception, so an Error
+            // reaching it would produce an empty 500. Convert linkage failures
+            // into an unchecked exception with a structured, actionable answer.
+            if (exception.get() instanceof LinkageError linkage) {
+                throw new IncompatibleGhidraBuildException(
+                    "Incompatible Ghidra build during '" + transactionName + "': "
+                    + linkage.getClass().getSimpleName() + ": " + linkage.getMessage()
+                    + ". The extension jar must be compiled against the Ghidra series "
+                    + "that is running it.", linkage);
+            }
+            if (exception.get() instanceof Error error) {
+                throw new IncompatibleGhidraBuildException(
+                    "Unexpected JVM error during '" + transactionName + "': "
+                    + error.getClass().getSimpleName() + ": " + error.getMessage(), error);
             }
             throw new TransactionException("Operation failed", exception.get());
         }

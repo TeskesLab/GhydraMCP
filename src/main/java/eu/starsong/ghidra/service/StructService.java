@@ -156,13 +156,12 @@ public class StructService {
                 }
             } else {
                 if (hasNewName && !Objects.equals(updatedName, originalName)) {
-                    try {
-                        component.setFieldName(updatedName);
-                    } catch (Exception e) {
-                        // 11.x declares a checked DuplicateNameException here; 12.x dropped it.
-                        // Catching Exception compiles against both and a clash maps to 400.
-                        throw new IllegalArgumentException("Field name already exists or invalid: " + updatedName, e);
-                    }
+                    // Resolved reflectively: a direct call site carries the return
+                    // type in its JVM descriptor, and that type changed in 12.2.
+                    // Calling it directly produced NoSuchMethodError there (an
+                    // Error, so it escaped every catch (Exception) and every
+                    // Javalin handler, and the client saw an empty 500).
+                    GhidraUtil.setFieldName(component, updatedName);
                 }
                 if (hasNewComment) {
                     component.setComment(updatedComment);

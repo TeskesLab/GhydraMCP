@@ -15,11 +15,11 @@ decompilation, annotation, and data manipulation.
   subsequent instances walk up to `MAX_PORT_ATTEMPTS` = 256 ports (8192–8447).
 - The bridge auto-discovers instances on startup and on a daemon timer, but `QUICK_DISCOVERY_RANGE`
   only scans **8192–8201**. Instances above 8202 need `instances_register` / the CLI.
-- 110 MCP tools in 28 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
+- 121 MCP tools in 31 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
   `doctor_*`, `evidence_*`, `functions_*`, `headless_*`, `inspect_*`, `instances_*`, `kuna_*`,
   `memory_*`, `namespaces_*`, `programs_*`, `project_*`, `projects_*`, `raw_image_*`, `scalars_*`,
-  `scripts_*`, `segments_*`, `session_*`, `structs_*`, `symbols_*`, `ui_*`, `variables_*`,
-  `x64dbg_*`, `xrefs_*`.
+  `scripts_*`, `segments_*`, `session_*`, `structs_*`, `symbols_*`, `tasks_*`, `telemetry_*`, `tools_*`, `ui_*`,
+  `variables_*`, `x64dbg_*`, `xrefs_*`.
 - v3.0.0 migrated `HttpServer` → **Javalin** with service/DTO/resource layering. `API_VERSION` is
   **3000** (breaking: fully-qualified names everywhere).
 - The `kuna_*` namespace is **local**: it drives the Kuna decompiler CLI as a subprocess, so it
@@ -195,12 +195,25 @@ The bridge and the CLI duplicate all request logic, so one endpoint means **six*
 
 Name tools `resource_verb` (`functions_get_cfg`, `data_create`).
 
+**Every text answer ends with a `Next:` line** (I8): `text_output` translates the envelope's
+`_links` into the bridge call that follows them (`functions_decompile(address="0x…")`, the next
+page for a paginated listing). The hrefs carry real values, so the suggestion is directly
+callable; a link that does not map to a registered tool is left out rather than guessed.
+
 **A tool parameter must not be called `arguments`.** That is the name of the container the MCP
 protocol uses for a tool's parameters, so a client that re-encodes the container loses the value
 — the call goes through with no arguments and the tool does something else instead of failing. It
 happened to `x64dbg_call`, and the unit tests did not catch it because they called the function
 instead of the protocol: `test_x64dbg.py` now drives a tool through `mcp.call_tool(...)`, and a
 guard asserts that no bridge tool declares a parameter the protocol reserves.
+
+**The tool list is groupable** (I15): 120 tools in one list degrade selection, so the bridge groups
+them by workflow — `core` (always), `functions`, `data`, `types`, `scripts`, `headless`, `kuna`,
+`x64dbg`. `GHYDRA_TOOL_GROUPS=core,functions` at startup keeps only those groups registered;
+at runtime `tools_load_group` / `tools_unload_group` change it, and `tools_search` searches the
+FULL catalogue (including hidden tools) and names the group to load. `tools_groups` shows what is
+loaded. A client that caches the tool list must re-read it after a runtime change — the env var
+gives a guaranteed profile.
 
 **A tool parameter that takes a nested object should take it as one piece of text.** A client that
 delivers a tool's parameters over stdio flattens what is nested in them: every value of a nested
@@ -240,9 +253,11 @@ whole release preparation (CHANGELOG section + versions) in one step.
 
 `API_VERSION` / `REQUIRED_API_VERSION` only move for breaking API changes and are
 never touched by `--set`. The bridge enforces it
-in exactly one place — `register_instance`, by exact equality against `3000` — and never
-per-request, so a mismatch surfaces later as a generic "No active Ghidra instance". The CLI never
-checks it.
+in exactly one place — `register_instance` — by exact equality against `3000`, and never
+per-request. It negotiates through `GET /capabilities` (falling back to `/plugin-version` on
+older plugins), so a mismatch is reported immediately with both versions, the Ghidra/Java
+runtime and the remedy. Optional features are discovered from that payload's `features` map;
+they are additive and never require an `API_VERSION` bump. The CLI never checks the version.
 
 SemVer: patch for fixes, minor for features, major for breaking.
 
@@ -378,15 +393,20 @@ Two endpoints refuse to work until explicitly enabled — start Ghidra with the 
 
 ## CLI notes
 
-`--json` is defined once on the root group and injected as `ctx.obj['formatter']`; no subcommand
-redefines it, so it must come **before** the subcommand (`ghydra --json functions list`) — after it
-is a usage error. Paging auto-disables under `--json`. Config precedence is
-**CLI flag > `GHYDRA_HOST`/`GHYDRA_PORT` > `~/.ghydra/config.json` > defaults** (`localhost:8192`,
-timeout 900).
+`--json` is defined once on the root group and injected as `ctx.obj['formatter']`; no
+subcommand redefines it. The root group class (`GhydraCLI`) lifts a `--json` found
+**anywhere** in the arguments into `GHYDRA_JSON` before parsing, so both
+`ghydra --json functions list` and `ghydra functions list --json` work (and so does
+the environment variable alone). Paging auto-disables under `--json`. Config precedence
+is **CLI flag > `GHYDRA_HOST`/`GHYDRA_PORT` > `~/.ghydra/config.json` > defaults**
+(`localhost:8192`, timeout 900). The CLI also reconfigures stdout/stderr to UTF-8 with
+`errors="replace"` at startup, so Rich tables survive a cp1252 Windows pipe.
 
-The bridge's env vars are a *different, asymmetric* set: `GHYDRA_HYDRA_HOST` > `GHYDRA_HOST`,
-plus `GHYDRA_TIMEOUT`, `GHYDRA_DECOMP_TIMEOUT`, `GHYDRA_ALLOWED_ORIGINS`. **The bridge never reads
-`GHYDRA_PORT`.**
+The bridge's env vars are a *different, asymmetric* set: `GHIDRA_HYDRA_HOST` > `GHIDRA_HOST`,
+plus `GHIDRA_TIMEOUT`, `GHIDRA_DECOMP_TIMEOUT`, `GHIDRA_ALLOWED_ORIGINS`. **The bridge never reads
+`GHYDRA_PORT`.** The MCP-side switches keep the `GHYDRA_` prefix (`GHYDRA_MCP_OUTPUT`,
+`GHYDRA_KUNA`, `GHYDRA_KUNA_TIMEOUT`, `GHYDRA_STATE_DIR`); the CLI's `GHYDRA_HOST`/`GHYDRA_PORT`
+above are a separate set.
 
 `GHYDRA_MCP_OUTPUT=json` is the exception to the rule that the bridge answers in **text**: it hands the
 raw envelope as one JSON document instead of the formatted table. The default stays text — that is the
@@ -870,13 +890,12 @@ Verified rough edges — check before trusting anything downstream:
 - The pom's Ghidra dependency `<version>` tags are hardcoded to `12.1.2`; `-Dghidra.version` only
   rewrites the `ghidraVersion` property in `extension.properties`, not those tags. They're
   system-scoped, so this is cosmetic — the `systemPath` jars are what matter.
-- **The rich tables break on a Windows pipe.** `TableFormatter` renders with rich's default
+- **The rich tables used to break on a Windows pipe.** `TableFormatter` renders with rich's default
   `HEAVY_HEAD` box, whose frame characters are outside cp1252; piped on a Western Windows
-  (`sys.stdout.encoding == 'cp1252'`) `click.echo` raises `UnicodeEncodeError`. This is
-  pre-existing and affects every table in the CLI, not just the new ones. The Kuna tables pass
-  `box=box.ASCII` to stay inside cp1252, and `ghydra kuna` additionally writes with
-  `errors="replace"`. A real fix would reconfigure stdout to UTF-8, which changes the CLI
-  globally — not done here.
+  (`sys.stdout.encoding == 'cp1252'`) `click.echo` raised `UnicodeEncodeError`. Fixed: the CLI
+  entrypoint now reconfigures stdout/stderr to UTF-8 with `errors="replace"` before any output
+  (covered by `test_errors.py`, which runs the CLI under `PYTHONIOENCODING=cp1252`). The Kuna
+  tables keep `box=box.ASCII` as defense in depth.
 
 ## Key documentation
 
