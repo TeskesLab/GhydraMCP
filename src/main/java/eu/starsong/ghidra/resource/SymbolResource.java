@@ -57,9 +57,11 @@ public class SymbolResource implements Resource {
             ctx.queryParam("is_global")
         );
 
-        var page = symbolService.list(program, filter, pagination.offset(), pagination.limit());
+        var page = symbolService.list(program, filter, pagination.offset(),
+            pagination.limit(), pagination.counted());
 
-        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(), pagination.limit(), "/symbols")
+        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(),
+            pagination.limit(), "/symbols", pagination.counted())
             .withItemLinks(sym -> Links.builder()
                 .self("/symbols/{}", sym.address())
                 .build());

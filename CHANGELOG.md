@@ -7,6 +7,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Read-only mode, dry-run and a local audit trail (I12)**: a Ghidra started
+  with `-Dghidra.mcp.readOnly=true` or `GHYDRA_READ_ONLY=1` refuses every
+  `POST`/`PUT`/`PATCH`/`DELETE` with `403 READ_ONLY_MODE` - one `before`
+  handler, so a mutation endpoint added later is covered without anyone
+  remembering to ask - and every mutation is appended to a local JSONL trail
+  (`~/.ghydra/audit.jsonl`, `GHYDRA_AUDIT_LOG`, disable with `GHYDRA_AUDIT=0`):
+  timestamp, request id, method, path, status, duration and port, capped at
+  ~1 MB and never carrying the request body. `/capabilities` advertises both
+  (`features.read_only`, `features.audit_log`), the CLI answers `--dry-run`
+  with the exact request it would send (client-side: the server never sees it)
+  and `ghydra audit` reads the trail back. `test_read_only.py` covers the
+  client, the CLI, the reader and the Java contract; `ReadOnlyGuardTest`
+  covers the method set and the JSON escaping.
+- **`ghydra assert`: CI assertions with JUnit and SARIF (I16)**: a JSON file
+  of assertions (`has_import`, `no_import`, `has_string`, `no_string`,
+  `has_function`, `no_function`, `has_xref_to`, `reaches`) is evaluated against
+  the running instance and rendered as text, JUnit XML (`--format junit`) or
+  SARIF 2.1.0 (`--format sarif`), exiting non-zero on a failure. A truncated
+  listing is reported as *inconclusive*, never as a pass: proving the absence
+  of an import requires reading the whole list. `test_assertions.py` covers
+  the loader, the evaluator, both renderers and the command.
+- **`?count=false` on the listings (I10)**: the symbol and function listings
+  used to walk the whole program to compute `meta.total`. `?count=false`
+  skips that walk: the page is still exact, `meta.total` is absent and
+  `meta.counted` is `false`, and the `next` link comes from a full page
+  instead of a total that was never computed. `functions_list` and
+  `symbols_list` expose it as `count`, and `PaginatedResultTest` pins the
+  counted/uncounted rules.
 - **Local telemetry and `ghydra stats` (I14)**: the bridge records what it
   actually did — one JSON object per call (tool, ok, error code, latency,
   estimated tokens) under `~/.ghydra/telemetry.jsonl`, capped at ~1 MB, never

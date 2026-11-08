@@ -35,11 +35,13 @@ class GhydraCLI(click.Group):
 @click.option('--port', '-p', type=int, envvar='GHYDRA_PORT', help='Ghidra port (default: from config or 8192)')
 @click.option('--json', 'output_json', is_flag=True, envvar='GHYDRA_JSON',
               help='Output raw JSON instead of formatted text (accepted in any position)')
+@click.option('--dry-run', 'dry_run', is_flag=True,
+              help='Describe mutating requests instead of sending them')
 @click.option('--no-color', is_flag=True, help='Disable colored output')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
 @click.version_option(version=__version__, prog_name='ghydra')
 @click.pass_context
-def cli(ctx, host, port, output_json, no_color, verbose):
+def cli(ctx, host, port, output_json, dry_run, no_color, verbose):
     """Ghydra CLI - Interact with Ghidra reverse engineering tool.
 
     This CLI provides command-line access to all Ghidra functionality exposed
@@ -100,7 +102,8 @@ def cli(ctx, host, port, output_json, no_color, verbose):
     client = GhidraHTTPClient(
         host=config.default_host,
         port=config.default_port,
-        timeout=config.timeout
+        timeout=config.timeout,
+        dry_run=dry_run,
     )
 
     # Create formatter
@@ -151,6 +154,8 @@ from . import (
 )
 
 from .stats import stats as stats_command
+from .assertions_cmd import assert_cmd
+from .audit import audit_cmd
 
 cli.add_command(instances.instances)
 cli.add_command(functions.functions)
@@ -180,6 +185,8 @@ cli.add_command(evidence.evidence)
 cli.add_command(session.session)
 cli.add_command(inspect.inspect)
 cli.add_command(stats_command)
+cli.add_command(assert_cmd)
+cli.add_command(audit_cmd)
 cli.add_command(inspect_address.inspect_address)
 
 

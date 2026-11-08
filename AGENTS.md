@@ -904,3 +904,25 @@ Verified rough edges — check before trusting anything downstream:
 layout), `GHYDRA_X64DBG.md` (the x64dbg integration: the contract, the address model, the tools),
 `CONTRIBUTING.md` (PR/release process),
 `TESTING.md` (stale on flags), `CHANGELOG.md` (release history — also the release-notes source).
+
+## Read-only mode, audit trail and CI assertions
+
+- **Read-only is one handler** (`middleware/ReadOnlyGuard`, I12): with
+  `-Dghidra.mcp.readOnly=true` or `GHYDRA_READ_ONLY=1`, every `POST`/`PUT`/`PATCH`/`DELETE`
+  is refused with `403 READ_ONLY_MODE` before the resource runs. It is registered in
+  `GhydraServer` right after CORS, so a mutation added later cannot bypass it. Do not
+  add a per-service check: that is how one endpoint ends up unfenced.
+- **Every mutation is recorded** (`middleware/AuditTrail`, I12): one JSONL line per
+  state-changing request (`ts`, `request_id`, `method`, `path`, `status`, `ms`, `port`)
+  under `~/.ghydra/audit.jsonl`, bounded and local; the request body is deliberately
+  not recorded. `/capabilities` carries `features.read_only` and `features.audit_log`.
+- **`--dry-run` is client-side** (`GhydraHTTPClient._dry_run`, I12): a mutating method
+  returns the plan as its result instead of sending it, so a dry run cannot change
+  anything even if the server disagrees about the method. `ghydra audit` reads the trail.
+- **`ghydra assert` (I16)** evaluates a JSON list of assertions and exits non-zero on a
+  failure (`--format text|junit|sarif`). An absence claim against a truncated listing is
+  `inconclusive`, never a pass: proving "no import X" needs the whole list.
+- **`?count=false` (I10)** skips the counting walk. The page stays exact; `meta.total` is
+  omitted and `meta.counted` is false, and `next` comes from a full page. `Pagination`
+  carries `counted`, `PaginatedResult` honours it, and the two listing services take a
+  `count` flag; the bridge exposes it as `count` on `functions_list`/`symbols_list`.

@@ -24,7 +24,7 @@ public class Paginator {
      * @return A paginated result with items and metadata
      */
     public static <T> PaginatedResult<T> paginate(List<T> items, Pagination pagination, String basePath) {
-        return paginate(items, pagination.offset(), pagination.limit(), basePath);
+        return paginate(items, pagination.offset(), pagination.limit(), basePath, pagination.counted());
     }
 
     /**
@@ -38,8 +38,14 @@ public class Paginator {
      * @return A paginated result with items and metadata
      */
     public static <T> PaginatedResult<T> paginate(List<T> items, int offset, int limit, String basePath) {
+        return paginate(items, offset, limit, basePath, true);
+    }
+
+    /** The uncounted variant: the total passed in is not one. */
+    public static <T> PaginatedResult<T> paginate(List<T> items, int offset, int limit,
+                                                 String basePath, boolean counted) {
         if (items == null || items.isEmpty()) {
-            return new PaginatedResult<>(Collections.emptyList(), 0, offset, limit, basePath);
+            return new PaginatedResult<>(Collections.emptyList(), 0, offset, limit, basePath, counted);
         }
 
         int total = items.size();
@@ -48,7 +54,7 @@ public class Paginator {
 
         List<T> pageItems = start < end ? items.subList(start, end) : Collections.emptyList();
 
-        return new PaginatedResult<>(pageItems, total, offset, limit, basePath);
+        return new PaginatedResult<>(pageItems, total, offset, limit, basePath, counted);
     }
 
     /**

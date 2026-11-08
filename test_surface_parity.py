@@ -84,6 +84,57 @@ class SurfaceParityTests(unittest.TestCase):
             with self.subTest(tool=name):
                 self.assertTrue(callable(getattr(bridge, name, None)))
 
+class PagingCountTests(unittest.TestCase):
+    """I10: ?count=false is offered by both listing tools and reaches the server.
+
+    The counting walk over a large program is what a first-page request pays
+    for nothing; the option is only useful if both the tool and the request
+    carry it, so both halves are asserted here.
+    """
+
+    def setUp(self):
+        self.sent = []
+
+    def _patched(self):
+        from unittest import mock
+        return mock.patch.object(bridge, "_get_instance_port",
+                                 side_effect=lambda port=None: 8192)
+
+    def _fake_get(self, port, endpoint, params=None):
+        self.sent.append((endpoint, dict(params or {})))
+        return {"success": True, "result": [{"name": "f"}],
+                "meta": {"counted": False, "offset": 0, "limit": 100, "count": 1}}
+
+    def test_functions_list_sends_count_false(self):
+        from unittest import mock
+        with self._patched(), mock.patch.object(
+                bridge, "safe_get", side_effect=self._fake_get):
+            bridge.functions_list.__wrapped__(count=False)
+        endpoint, params = self.sent[0]
+        self.assertEqual("functions", endpoint)
+        self.assertEqual("false", params["count"])
+
+    def test_symbols_list_sends_count_false(self):
+        from unittest import mock
+        with self._patched(), mock.patch.object(
+                bridge, "safe_get", side_effect=self._fake_get):
+            bridge.symbols_list.__wrapped__(count=False)
+        endpoint, params = self.sent[0]
+        self.assertEqual("symbols", endpoint)
+        self.assertEqual("false", params["count"])
+
+    def test_the_default_keeps_counting(self):
+        from unittest import mock
+        with self._patched(), mock.patch.object(
+                bridge, "safe_get", side_effect=self._fake_get):
+            bridge.functions_list.__wrapped__()
+        self.assertEqual("true", self.sent[0][1]["count"])
+
+    def test_both_tools_document_the_option(self):
+        for tool in (bridge.functions_list, bridge.symbols_list):
+            with self.subTest(tool=tool.__name__):
+                self.assertIn("count", inspect.signature(tool).parameters)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

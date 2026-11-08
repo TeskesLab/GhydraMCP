@@ -51,6 +51,8 @@ public final class CapabilityService {
         features.put("call_path", true);
         features.put("xrefs_by_name", true);
         features.put("ui_cursor", !ctx.isHeadless());
+        features.put("read_only", eu.starsong.ghidra.middleware.ReadOnlyGuard.enabled());
+        features.put("audit_log", eu.starsong.ghidra.middleware.AuditTrail.enabled());
         features.put("capabilities", true);
         data.put("features", features);
 

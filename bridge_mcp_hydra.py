@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.1.1"
+BRIDGE_VERSION = "v3.2.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -4452,6 +4452,7 @@ def functions_list(offset: int = 0, limit: int = 100,
                   name_matches_regex: str | None = None,
                   addr_min: str | None = None,
                   addr_max: str | None = None,
+                  count: bool = True,
                   port: int | None = None) -> dict:
     """List functions with filtering and pagination
 
@@ -4462,6 +4463,7 @@ def functions_list(offset: int = 0, limit: int = 100,
         name_matches_regex: Regex name filter
         addr_min: Only return functions at or above this address (hex)
         addr_max: Only return functions at or below this address (hex)
+        count: Compute the total (default True); false skips the counting scan (I10)
         port: Specific Ghidra instance port (optional)
 
     Returns:
@@ -4471,7 +4473,8 @@ def functions_list(offset: int = 0, limit: int = 100,
 
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
+        "count": "true" if count else "false",
     }
     if name_contains:
         params["name_contains"] = name_contains
@@ -5329,7 +5332,7 @@ def xrefs_list(to_addr: str | None = None, from_addr: str | None = None, type: s
     
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
     }
     if to_addr:
         params["to_addr"] = to_addr
@@ -5383,7 +5386,7 @@ def xrefs_find_by_name(name: str, offset: int = 0, limit: int = 100,
 
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
     }
 
     response = safe_get(port, f"xrefs/to-name/{quote(name)}", params)
@@ -5426,7 +5429,7 @@ def data_list(offset: int = 0, limit: int = 100, addr: str | None = None,
 
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
     }
     # Server filters are label/label_contains; map the friendlier arg names.
     if name:
@@ -5498,7 +5501,7 @@ def data_list_strings(offset: int = 0, limit: int = 2000, filter: str | None = N
     
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
     }
     
     if filter:
@@ -5646,7 +5649,7 @@ def structs_list(offset: int = 0, limit: int = 100, category: str | None = None,
 
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
     }
     if category:
         params["category"] = category
@@ -9074,19 +9077,22 @@ def classes_list(offset: int = 0, limit: int = 100, port: int | None = None) -> 
 
 @mcp.tool()
 @text_output
-def symbols_list(offset: int = 0, limit: int = 100, port: int | None = None) -> dict:
+def symbols_list(offset: int = 0, limit: int = 100, count: bool = True,
+                port: int | None = None) -> dict:
     """List all symbols in the program
 
     Args:
         offset: Pagination offset (default: 0)
         limit: Maximum items to return (default: 100)
+        count: Compute the total (default True); false skips the counting scan (I10)
         port: Specific Ghidra instance port (optional)
 
     Returns:
         dict: List of symbols with name, address, type, and namespace
     """
     port = _get_instance_port(port)
-    params = {"offset": offset, "limit": limit}
+    params = {"offset": offset, "limit": limit,
+              "count": "true" if count else "false"}
     response = safe_get(port, "symbols", params)
     simplified = simplify_response(response)
     if isinstance(simplified, dict) and "error" not in simplified:

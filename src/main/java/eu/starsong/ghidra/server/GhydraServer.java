@@ -2,7 +2,9 @@ package eu.starsong.ghidra.server;
 
 import eu.starsong.ghidra.api.ApiConstants;
 import eu.starsong.ghidra.hateoas.Response;
+import eu.starsong.ghidra.middleware.AuditTrail;
 import eu.starsong.ghidra.middleware.CorsHandler;
+import eu.starsong.ghidra.middleware.ReadOnlyGuard;
 import eu.starsong.ghidra.middleware.ErrorHandler;
 import eu.starsong.ghidra.service.CompatibilityService;
 import eu.starsong.ghidra.util.IncompatibleGhidraBuildException;
@@ -152,6 +154,12 @@ public class GhydraServer {
 
     private void configureMiddleware() {
         app.before(new CorsHandler());
+
+        // I12: a read-only instance refuses every mutation, and every mutation
+        // is written to a local audit trail. Registration order matters: CORS
+        // answers the pre-flight, the guard refuses, the trail records.
+        ReadOnlyGuard.register(app, port);
+        AuditTrail.register(app, port);
 
         app.exception(GhidraContext.NoProgramException.class, (e, ctx) -> {
             ctx.status(HttpStatus.SERVICE_UNAVAILABLE);
