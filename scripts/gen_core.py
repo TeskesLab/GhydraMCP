@@ -41,6 +41,7 @@ CORE_MODULES = (
     "ghydra/core/fleet.py",
     "ghydra/core/capabilities.py",
     "ghydra/core/contextpack.py",
+    "ghydra/core/telemetry.py",
 )
 
 #: Per module, the public name -> the private name the bridge uses.
@@ -96,6 +97,15 @@ CORE_RENAMES = {
         "classify_question": "_core_context_classify",
         "estimate_tokens": "_core_context_tokens",
         "build_context_pack": "_core_build_context_pack",
+    },
+    "ghydra/core/telemetry.py": {
+        "MAX_BYTES": "_CORE_TELEMETRY_MAX_BYTES",
+        "KEEP_LINES": "_CORE_TELEMETRY_KEEP_LINES",
+        "INSPECTION_TOOLS": "_CORE_TELEMETRY_INSPECTION_TOOLS",
+        "LISTING_TOOLS": "_CORE_TELEMETRY_LISTING_TOOLS",
+        "filter_recent": "_core_telemetry_recent",
+        "recommendations": "_core_telemetry_recommendations",
+        "summarize": "_core_telemetry_summarize",
     },
     "ghydra/core/hints.py": {
         "HINT_PATTERNS": "_CORE_HINT_PATTERNS",

@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.17.0"
+BRIDGE_VERSION = "v3.18.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1465,6 +1465,92 @@ def _core_build_context_pack(question, template, program, sections, budget_token
                 citations.append(citation)
     return {'success': True, 'result': {'question': question, 'template': template, 'program': program, 'sections': included, 'citations': citations, 'omitted': omitted, 'budget_tokens': budget_tokens, 'used_tokens': header + used, 'method': 'Composed from already-fetched endpoints; ranked by relevance to the question, truncated by budget. Every address is citable.'}}
 # <<< end generated from ghydra/core/contextpack.py
+
+
+# >>> generated from ghydra/core/telemetry.py (58f503bc88f0d56d) — edit the core, then run scripts/gen_core.py
+_CORE_TELEMETRY_MAX_BYTES = 1000000
+
+_CORE_TELEMETRY_KEEP_LINES = 2000
+
+_CORE_TELEMETRY_INSPECTION_TOOLS = ('functions_get', 'functions_decompile', 'analysis_callers', 'analysis_callees', 'xrefs_list', 'inspect_address')
+
+_CORE_TELEMETRY_LISTING_TOOLS = ('functions_list', 'data_list', 'symbols_list', 'variables_list')
+
+def _core_telemetry_recent(entries, days, now=None):
+    """The entries inside the last ``days`` days.
+
+    Args:
+        entries: The rows of the log (as :func:`read_entries` returns them).
+        days: The size of the window, at least one day.
+        now: The current epoch time; passed in so the answer is reproducible.
+
+    Returns:
+        list: The entries whose timestamp is inside the window.
+    """
+    import time as _time
+    moment = _time.time() if now is None else now
+    cutoff = moment - max(1, int(days)) * 86400
+    return [entry for entry in entries if float(entry.get('ts') or 0) >= cutoff]
+
+def _core_telemetry_recommendations(entries):
+    """Name the composed tool when the log shows the pattern it replaces."""
+    found: List[str] = []
+    counts: Dict[str, int] = {}
+    slow: Dict[str, float] = {}
+    for entry in entries:
+        tool = str(entry.get('tool'))
+        counts[tool] = counts.get(tool, 0) + 1
+        if entry.get('ok'):
+            slow[tool] = max(slow.get(tool, 0.0), float(entry.get('ms') or 0))
+    inspection = sum((counts.get(name, 0) for name in _CORE_TELEMETRY_INSPECTION_TOOLS))
+    if inspection >= 4:
+        found.append(f'{inspection} inspection calls in the window: analysis_context_pack(question, address) answers that pattern in one call, with a token budget and citable addresses.')
+    listing = sum((counts.get(name, 0) for name in _CORE_TELEMETRY_LISTING_TOOLS))
+    if listing >= 4:
+        found.append(f'{listing} listing calls: programs_overview composes the counts and imports in one call, and a page takes limit/offset.')
+    batch = counts.get('functions_decompile', 0)
+    if batch >= 4:
+        found.append(f'{batch} single decompiles: functions_batch_decompile takes a list (async_mode=True for a long batch).')
+    for tool, worst in sorted(slow.items(), key=lambda item: -item[1])[:3]:
+        if worst >= 500:
+            found.append(f'{tool} took up to {worst:.0f} ms: consider async_mode=True or a narrower request.')
+    return found[:5]
+
+def _core_telemetry_summarize(entries, days=7, path=''):
+    """Aggregate the log rows into the report the CLI and the tool share.
+
+    Args:
+        entries: The rows inside the window (see :func:`filter_recent`).
+        days: The window, echoed in the report.
+        path: Where the log lives, echoed so the reader can open it.
+
+    Returns:
+        dict: call and failure totals per tool (the 25 busiest), the error codes
+              seen, the advice, and the path of the log. An empty window says so
+              instead of answering with an empty table.
+    """
+    totals: Dict[str, Dict[str, Any]] = {}
+    codes: Dict[str, int] = {}
+    for entry in entries:
+        tool = str(entry.get('tool'))
+        row = totals.setdefault(tool, {'tool': tool, 'calls': 0, 'failed': 0, 'ms_total': 0.0, 'ms_max': 0.0, 'tokens': 0})
+        row['calls'] += 1
+        if not entry.get('ok'):
+            row['failed'] += 1
+        row['ms_total'] += float(entry.get('ms') or 0)
+        row['ms_max'] = max(row['ms_max'], float(entry.get('ms') or 0))
+        row['tokens'] += int(entry.get('tokens') or 0)
+        code = entry.get('code')
+        if code:
+            codes[str(code)] = codes.get(str(code), 0) + 1
+    rows = []
+    for row in sorted(totals.values(), key=lambda item: -item['calls']):
+        rows.append({**row, 'ms_avg': round(row['ms_total'] / row['calls'], 1), 'ms_max': round(row['ms_max'], 1)})
+    report: Dict[str, Any] = {'days': days, 'calls': len(entries), 'tools': rows[:25], 'error_codes': codes, 'recommendations': _core_telemetry_recommendations(entries), 'path': path}
+    if not entries:
+        report['message'] = 'no telemetry recorded in this window'
+    return report
+# <<< end generated from ghydra/core/telemetry.py
 
 
 def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
@@ -12952,8 +13038,9 @@ def tools_unload_group(group: str) -> dict:
 # GHYDRA_STATE_DIR), one JSON object per call, capped at ~1 MB. Disabled with
 # GHYDRA_TELEMETRY=0. The recorder must never break a tool call, so every
 # failure in it is swallowed.
-_TELEMETRY_MAX_BYTES = 1_000_000
-_TELEMETRY_KEEP_LINES = 2000
+#: Both defined once, in the generated core (I1).
+_TELEMETRY_MAX_BYTES = _CORE_TELEMETRY_MAX_BYTES
+_TELEMETRY_KEEP_LINES = _CORE_TELEMETRY_KEEP_LINES
 
 
 def _telemetry_path() -> str:
@@ -13038,41 +13125,8 @@ def _telemetry_read(max_entries: int = 5000) -> list:
 
 
 def _telemetry_recommendations(entries: list) -> list:
-    """Name the composed tool when the log shows the pattern it replaces."""
-    recommendations = []
-    counts: Dict[str, int] = {}
-    slow: Dict[str, float] = {}
-    for entry in entries:
-        tool = str(entry.get("tool"))
-        counts[tool] = counts.get(tool, 0) + 1
-        if entry.get("ok"):
-            slow[tool] = max(slow.get(tool, 0.0), float(entry.get("ms") or 0))
-
-    inspection = sum(counts.get(name, 0) for name in (
-        "functions_get", "functions_decompile", "analysis_callers",
-        "analysis_callees", "xrefs_list", "inspect_address"))
-    if inspection >= 4:
-        recommendations.append(
-            f"{inspection} inspection calls in the window: "
-            f"analysis_context_pack(question, address) answers that pattern "
-            f"in one call, with a token budget and citable addresses.")
-    listing = sum(counts.get(name, 0) for name in (
-        "functions_list", "data_list", "symbols_list", "variables_list"))
-    if listing >= 4:
-        recommendations.append(
-            f"{listing} listing calls: programs_overview composes the counts "
-            f"and imports in one call, and a page takes limit/offset.")
-    batch = counts.get("functions_decompile", 0)
-    if batch >= 4:
-        recommendations.append(
-            f"{batch} single decompiles: functions_batch_decompile takes a "
-            f"list (async_mode=True for a long batch).")
-    for tool, worst in sorted(slow.items(), key=lambda item: -item[1])[:3]:
-        if worst >= 500:
-            recommendations.append(
-                f"{tool} took up to {worst:.0f} ms: consider async_mode=True "
-                f"or a narrower request.")
-    return recommendations[:5]
+    """Delegates to the generated core (I1)."""
+    return _core_telemetry_recommendations(entries)
 
 
 @mcp.tool()
@@ -13097,48 +13151,12 @@ def telemetry_summary(days: int = 7) -> dict:
     Returns:
         dict: totals, per-tool rows, error codes and recommendations
     """
-    cutoff = time.time() - max(1, int(days)) * 86400
-    entries = [entry for entry in _telemetry_read()
-               if float(entry.get("ts") or 0) >= cutoff]
-    if not entries:
-        return {"success": True,
-                "result": {"days": days, "calls": 0, "tools": [],
-                           "error_codes": {},
-                           "recommendations": [],
-                           "path": _telemetry_path(),
-                           "message": "no telemetry recorded in this window"}}
-
-    totals: Dict[str, dict] = {}
-    codes: Dict[str, int] = {}
-    for entry in entries:
-        tool = str(entry.get("tool"))
-        row = totals.setdefault(tool, {"tool": tool, "calls": 0, "failed": 0,
-                                       "ms_total": 0.0, "ms_max": 0.0,
-                                       "tokens": 0})
-        row["calls"] += 1
-        if not entry.get("ok"):
-            row["failed"] += 1
-        row["ms_total"] += float(entry.get("ms") or 0)
-        row["ms_max"] = max(row["ms_max"], float(entry.get("ms") or 0))
-        row["tokens"] += int(entry.get("tokens") or 0)
-        code = entry.get("code")
-        if code:
-            codes[str(code)] = codes.get(str(code), 0) + 1
-
-    rows = []
-    for row in sorted(totals.values(), key=lambda item: -item["calls"]):
-        rows.append({**row,
-                     "ms_avg": round(row["ms_total"] / row["calls"], 1),
-                     "ms_max": round(row["ms_max"], 1)})
+    # The window and the aggregate are pure and generated from the core (I1);
+    # reading the file and finding its path stay here.
+    entries = _core_telemetry_recent(_telemetry_read(), days)
     return {"success": True,
-            "result": {
-                "days": days,
-                "calls": len(entries),
-                "tools": rows[:25],
-                "error_codes": codes,
-                "recommendations": _telemetry_recommendations(entries),
-                "path": _telemetry_path(),
-            }}
+            "result": _core_telemetry_summarize(entries, days,
+                                               _telemetry_path())}
 
 
 # ================= Startup =================

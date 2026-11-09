@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The telemetry report into the single core (I1, slice 8)**: the window
+  filter, the per-tool aggregate and the advice moved into
+  `ghydra/core/telemetry.py`, which is told the current time instead of reading
+  the clock — so "the last 7 days" means the same thing on both surfaces and a
+  test can pin it. The bridge's tool now reads the file and hands the rows
+  over; the CLI does the same. The advice is unchanged in substance (a
+  suggestion appears only when the log shows the pattern a composed tool
+  replaces), but it is decided in one place.
 - **The context pack into the single core (I1, slice 7)**: the question
   classifier, the token estimate and the budget composer moved whole —
   `ghydra/core/contextpack.py` is the definition, `ghydra/contextpack.py` is a

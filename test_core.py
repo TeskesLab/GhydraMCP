@@ -25,11 +25,13 @@ import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra.core import digest as core  # noqa: E402
 from ghydra import capabilities  # noqa: E402
 from ghydra import contextpack  # noqa: E402
+from ghydra import telemetry  # noqa: E402
 from ghydra.core import cache as cache_core  # noqa: E402
 from ghydra.core import capabilities as cap_core  # noqa: E402
 from ghydra.core import contextpack as ctx_core  # noqa: E402
 from ghydra.core import diff as diff_core  # noqa: E402
 from ghydra.core import fleet as fleet_core  # noqa: E402
+from ghydra.core import telemetry as tel_core  # noqa: E402
 from ghydra.core import hints as hints_core  # noqa: E402
 from ghydra.core import runbook as runbook_core  # noqa: E402
 from scripts import gen_core  # noqa: E402
@@ -723,6 +725,123 @@ class ContextPackCoreTests(unittest.TestCase):
         report = ctx_core.build_context_pack("q", "overview", "a.exe",
                                              sections, 4000)
         self.assertEqual(["0x1", "0x2", "0x3"], report["result"]["citations"])
+
+class TelemetryCoreTests(unittest.TestCase):
+    """The window, the aggregate and the advice live once, in the core."""
+
+    NOW = 1_000_000.0
+
+    def _entries(self):
+        return [
+            {"ts": self.NOW, "tool": "functions_get", "ok": True, "ms": 10,
+             "tokens": 100},
+            {"ts": self.NOW, "tool": "functions_decompile", "ok": True, "ms": 900,
+             "tokens": 400},
+            {"ts": self.NOW, "tool": "analysis_callers", "ok": True, "ms": 20,
+             "tokens": 50},
+            {"ts": self.NOW, "tool": "xrefs_list", "ok": False, "code": "XREF_IO",
+             "ms": 5, "tokens": 10},
+            {"ts": self.NOW - 30 * 86400, "tool": "functions_get", "ok": True,
+             "ms": 10, "tokens": 5},
+        ]
+
+    def test_the_window_is_the_callers(self):
+        recent = tel_core.filter_recent(self._entries(), 7, now=self.NOW)
+        self.assertEqual(4, len(recent))
+        self.assertEqual([], tel_core.filter_recent(self._entries(), 7,
+                                                    now=self.NOW + 40 * 86400))
+
+    def test_the_window_never_goes_below_one_day(self):
+        self.assertEqual(4, len(tel_core.filter_recent(self._entries(), 0,
+                                                       now=self.NOW)))
+
+    def test_the_advice_agrees(self):
+        entries = tel_core.filter_recent(self._entries(), 7, now=self.NOW)
+        self.assertEqual(tel_core.recommendations(entries),
+                         bridge._core_telemetry_recommendations(entries))
+        self.assertEqual(tel_core.recommendations(entries),
+                         bridge._telemetry_recommendations(entries))
+
+    def test_the_inspection_pattern_names_the_context_pack(self):
+        entries = tel_core.filter_recent(self._entries(), 7, now=self.NOW)
+        advice = " ".join(tel_core.recommendations(entries))
+        self.assertIn("analysis_context_pack", advice)
+
+    def test_a_slow_tool_is_named(self):
+        entries = tel_core.filter_recent(self._entries(), 7, now=self.NOW)
+        advice = " ".join(tel_core.recommendations(entries))
+        self.assertIn("functions_decompile", advice)
+
+    def test_the_advice_is_capped(self):
+        many = [{"ts": self.NOW, "tool": name, "ok": True, "ms": 10}
+                for name in ("functions_get", "functions_decompile",
+                             "analysis_callers", "analysis_callees", "xrefs_list",
+                             "inspect_address", "functions_list", "data_list",
+                             "symbols_list", "variables_list") * 2]
+        self.assertLessEqual(len(tel_core.recommendations(many)), 5)
+
+    def test_the_report_agrees(self):
+        entries = tel_core.filter_recent(self._entries(), 7, now=self.NOW)
+        expected = tel_core.summarize(entries, 7, "/log")
+        self.assertEqual(expected, bridge._core_telemetry_summarize(
+            entries, 7, "/log"))
+
+    def test_the_totals_count_and_sort(self):
+        entries = tel_core.filter_recent(self._entries(), 7, now=self.NOW)
+        report = tel_core.summarize(entries, 7, "/log")
+        self.assertEqual(4, report["calls"])
+        rows = {row["tool"]: row for row in report["tools"]}
+        self.assertEqual(1, rows["xrefs_list"]["failed"])
+        self.assertEqual("XREF_IO", list(report["error_codes"])[0])
+        self.assertEqual(4, len(report["tools"]))
+        calls = [row["calls"] for row in report["tools"]]
+        self.assertEqual(sorted(calls, reverse=True), calls)
+
+    def test_an_empty_window_says_so(self):
+        report = tel_core.summarize([], 7, "/log")
+        self.assertEqual(0, report["calls"])
+        self.assertIn("no telemetry", report["message"])
+
+    def test_only_the_busiest_25_tools_are_listed(self):
+        entries = [{"ts": self.NOW, "tool": f"tool_{index}", "ok": True, "ms": 1}
+                   for index in range(40)]
+        self.assertEqual(25, len(tel_core.summarize(entries, 7, "/l")["tools"]))
+
+    def test_the_constants_come_from_the_core(self):
+        self.assertEqual(tel_core.MAX_BYTES, telemetry.MAX_BYTES)
+        self.assertEqual(tel_core.KEEP_LINES, telemetry.KEEP_LINES)
+        self.assertEqual(tel_core.MAX_BYTES, bridge._TELEMETRY_MAX_BYTES)
+        self.assertEqual(tel_core.KEEP_LINES, bridge._TELEMETRY_KEEP_LINES)
+
+
+class TelemetryToolTests(unittest.TestCase):
+    """The bridge's tool reads the file, then hands the rows to the core."""
+
+    def test_the_tool_summarizes_a_real_log(self):
+        import os
+        import tempfile
+        directory = tempfile.mkdtemp(prefix="ghydra-telemetry-")
+        previous = os.environ.get("GHYDRA_STATE_DIR")
+        os.environ["GHYDRA_STATE_DIR"] = directory
+        try:
+            bridge._telemetry_record("functions_get", True, None, 12.0, 100)
+            bridge._telemetry_record("xrefs_list", False, "XREF_IO", 5.0, 10)
+            result = bridge.telemetry_summary.__wrapped__(days=7)
+        finally:
+            if previous is None:
+                os.environ.pop("GHYDRA_STATE_DIR", None)
+            else:
+                os.environ["GHYDRA_STATE_DIR"] = previous
+            import shutil
+            shutil.rmtree(directory, ignore_errors=True)
+        self.assertTrue(result["success"], result)
+        payload = result["result"]
+        self.assertEqual(2, payload["calls"])
+        self.assertEqual(1, len(payload["error_codes"]))
+        self.assertIn("telemetry.jsonl", payload["path"])
+        for row in payload["tools"]:
+            self.assertEqual({"tool", "calls", "failed", "ms_total", "ms_max",
+                              "tokens", "ms_avg"}, set(row))
 
 
 if __name__ == "__main__":
