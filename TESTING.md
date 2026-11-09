@@ -28,6 +28,16 @@ python run_tests.py --comments   # comment tests
 python run_tests.py --port       # Javalin port edge-case tests
 python run_tests.py --kuna       # Kuna integration tests
 python run_tests.py --x64dbg     # x64dbg integration tests
+
+> **The x64dbg fixture listens with a backlog of 128, not the default 5.** A burst
+> of connections fills a 5-deep queue, the OS drops the SYN, and the client sees a
+> server that never came up — the same symptom as a dead debugger. It is not port
+> exhaustion: the dynamic range here is 16 384 ports and a full run leaves about 5
+> connections in TIME_WAIT, so the *queue* was the limit. The fixture also waits
+> until the port actually answers before a test uses it (a started thread is not an
+> accepting one), and keeps its own side of a reset: set
+> `GHYDRA_X64DBG_TEST_LOG=<file>` to see the half of a failed run that the client
+> never sees.
 python run_tests.py --headless   # headless runner, report and annotations
 python run_tests.py --evidence   # evidence ledger and sessions
 python run_tests.py --triage     # target triage

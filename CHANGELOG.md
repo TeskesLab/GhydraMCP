@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The x64dbg fixture listens with a 128-deep backlog, not 5**: the remaining
+  local flake had a measurable cause. `ThreadingHTTPServer` listens with
+  `request_queue_size = 5`; a burst of connections fills that queue, the OS drops
+  the SYN, and the client sees a server that never answered — the same symptom as
+  a dead debugger. It is **not** port exhaustion: this machine's dynamic range is
+  16 384 ports and a full run leaves about 5 connections in TIME_WAIT, so the
+  queue was the limit. The fixture now uses a 128-deep backlog with address reuse,
+  waits until the port actually answers before a test uses it, and keeps its own
+  side of a reset under `GHYDRA_X64DBG_TEST_LOG`. Measured after the change: 8
+  clean runs in a row (13 in total) against 2 consecutive failures before it. The
+  retry in the harness from the previous round stays: the two answer different
+  halves of the problem.
 - **The BSim surface is documented where people look for it**: a new
   `GHYDRA_BSIM.md` guide (setup, building a corpus, querying, applying a match,
   comparing two versions, the five measured traps, and the commands that
