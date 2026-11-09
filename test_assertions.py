@@ -346,16 +346,31 @@ class ExampleTests(unittest.TestCase):
         reaches = [item for item in items if item["kind"] == "reaches"][0]
         self.assertEqual("main -> strcmp", reaches["name"])
 
-    def test_the_example_workflow_is_valid_yaml_and_runs_the_cli(self):
-        import yaml
+    def test_the_example_workflow_runs_the_cli_and_stops_the_run(self):
+        """Structural checks that need no YAML parser (the project has none)."""
+        path = os.path.join(self.ROOT, "examples", "ci", "analyze.yml")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        for expected in ("ghydra assert", "--format sarif",
+                         "ghydra headless start", "ghydra headless stop",
+                         "upload-sarif", "if: always()", "jobs:",
+                         "examples/asserts.json".replace("examples/asserts.json",
+                                                         "asserts.json")):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, text)
+        # A workflow that does not mention a stop step leaks the project lock.
+        self.assertLess(text.index("ghydra headless start"),
+                        text.index("ghydra headless stop"))
+
+    def test_the_example_workflow_parses_when_a_yaml_parser_is_available(self):
+        """PyYAML is not a dependency, so this is a bonus check, not a gate."""
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("PyYAML is not installed (it is not a dependency)")
         path = os.path.join(self.ROOT, "examples", "ci", "analyze.yml")
         with open(path, encoding="utf-8") as handle:
             document = yaml.safe_load(handle)
-        text = open(path, encoding="utf-8").read()
-        self.assertIn("ghydra assert", text)
-        self.assertIn("--format sarif", text)
-        self.assertIn("ghydra headless start", text)
-        self.assertIn("ghydra headless stop", text)
         self.assertIsInstance(document, dict)
         self.assertIn("jobs", document)
 
