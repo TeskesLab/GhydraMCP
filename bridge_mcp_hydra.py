@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.14.0"
+BRIDGE_VERSION = "v3.15.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1263,6 +1263,80 @@ def _core_diff_snapshots(a, b):
     result['summary'] = {'functions_added': len(added), 'functions_removed': len(removed), 'functions_renamed': len(renamed), 'imports_added': len(imports['added']), 'imports_removed': len(imports['removed']), 'strings_added': len(strings['added']), 'strings_removed': len(strings['removed']), 'program_changed': result['program_changed']}
     return result
 # <<< end generated from ghydra/core/diff.py
+
+
+# >>> generated from ghydra/core/fleet.py (c80eb884de60cc6d) — edit the core, then run scripts/gen_core.py
+_CORE_FLEET_KINDS = ('overview', 'has_function', 'has_import', 'has_string', 'xrefs_to')
+
+_CORE_FLEET_IDENTITY_FIELDS = ('programId', 'path', 'executablePath', 'imageBase')
+
+def _core_fleet_identity_of(program):
+    """The key two instances serving the same file share.
+
+    ``programId`` is project + pathname, and is what the plugin already uses to
+    name a program. The path is the fallback. A program with none of them has no
+    identity (``""``), which the caller reports rather than merging every
+    stranger together.
+
+    Args:
+        program: The ``result`` of ``/program`` (any shape).
+
+    Returns:
+        str: The identity, or the empty string when the program has none.
+    """
+    if not isinstance(program, dict):
+        return ''
+    for key in _CORE_FLEET_IDENTITY_FIELDS:
+        value = program.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ''
+
+def _core_fleet_merge(seen, kind, target, unreachable=None):
+    """Merge what every reachable instance answered into one report.
+
+    Args:
+        seen: One entry per instance that answered: ``port``, ``identity``,
+              ``name``, ``program`` and ``answer`` (itself a dict with
+              ``ok``/``present``/``detail``/``complete``).
+        kind: The question, echoed in the report.
+        target: What the question was about (``None`` for an overview).
+        unreachable: The ports that did not answer, with their reason.
+
+    Returns:
+        dict: The envelope — one row per *binary*, the counts, the members that
+              could not answer, the rows that were partial or truncated.
+    """
+    members: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for entry in seen:
+        identity = entry.get('identity')
+        if not identity:
+            continue
+        answer = entry.get('answer') or {}
+        existing = members.get(identity)
+        if existing is None:
+            members[identity] = {'identity': identity, 'name': entry.get('name'), 'ports': [entry.get('port')], 'program': entry.get('program'), 'answer': answer}
+            order.append(identity)
+        else:
+            existing['ports'].append(entry.get('port'))
+            if existing['answer'].get('present') != answer.get('present'):
+                existing.setdefault('disagreements', []).append({'port': entry.get('port'), 'answer': answer})
+    rows = []
+    for identity in order:
+        member = members[identity]
+        answer = member.get('answer') or {}
+        row = {'identity': identity, 'name': member.get('name'), 'ports': member['ports'], 'present': bool(answer.get('present')), 'ok': bool(answer.get('ok')), 'detail': answer.get('detail') or {}}
+        if answer.get('complete') is False:
+            row['complete'] = False
+        if member.get('disagreements'):
+            row['disagreements'] = member['disagreements']
+        rows.append(row)
+    partial = [row['identity'] for row in rows if not row['ok']]
+    truncated = [row['identity'] for row in rows if row.get('complete') is False]
+    missing = list(unreachable or [])
+    return {'success': True, 'result': {'kind': kind, 'target': target, 'binaries': rows, 'count': len(rows), 'with_it': sum((1 for row in rows if row['present'])), 'without_it': sum((1 for row in rows if row['ok'] and (not row['present']))), 'unreachable': missing, 'partial': partial, 'truncated': truncated, 'ok': not partial and (not missing)}}
+# <<< end generated from ghydra/core/fleet.py
 
 
 def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
@@ -12527,8 +12601,10 @@ def cache_clear(port: int | None = None) -> dict:
 
 _FLEET_PAGE_LIMIT = 1000
 _FLEET_MAX_PAGES = 5
-_FLEET_KINDS = ("overview", "has_function", "has_import", "has_string", "xrefs_to")
-_FLEET_IDENTITY_FIELDS = ("programId", "path", "executablePath", "imageBase")
+#: Defined once, in the core (I1).
+_FLEET_KINDS = _CORE_FLEET_KINDS
+#: Defined once, in the core (I1).
+_FLEET_IDENTITY_FIELDS = _CORE_FLEET_IDENTITY_FIELDS
 
 
 def _fleet_result(envelope):
@@ -12538,13 +12614,8 @@ def _fleet_result(envelope):
 
 
 def _fleet_identity_of(program) -> str:
-    if not isinstance(program, dict):
-        return ""
-    for key in _FLEET_IDENTITY_FIELDS:
-        value = program.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+    """Delegates to the generated core (I1)."""
+    return _core_fleet_identity_of(program)
 
 
 def _fleet_collect_member(port: int) -> dict:
@@ -12651,50 +12722,20 @@ def _fleet_query(ports, kind: str, target=None) -> dict:
                 "error": {"code": "FLEET_UNKNOWN_KIND",
                           "message": "the kinds are: " + ", ".join(_FLEET_KINDS)}}
 
-    members = {}
+    # The merge is pure and generated from the core (I1); the I/O stays here.
+    seen = []
     unreachable = []
-    order = []
     for port in sorted(int(p) for p in ports):
         member = _fleet_collect_member(port)
         if not member["reachable"]:
             unreachable.append({"port": port, "reason": member.get("error")})
             continue
-        identity = member["identity"]
-        answer = _fleet_ask(port, kind, target)
-        existing = members.get(identity)
-        if existing is None:
-            members[identity] = {"identity": identity, "name": member.get("name"),
-                                 "ports": [port], "program": member.get("program"),
-                                 "answer": answer}
-            order.append(identity)
-        else:
-            existing["ports"].append(port)
-            if existing["answer"].get("present") != answer.get("present"):
-                existing.setdefault("disagreements", []).append(
-                    {"port": port, "answer": answer})
+        seen.append({"port": port, "identity": member["identity"],
+                     "name": member.get("name"),
+                     "program": member.get("program"),
+                     "answer": _fleet_ask(port, kind, target)})
 
-    rows = []
-    for identity in order:
-        member = members[identity]
-        answer = member["answer"]
-        row = {"identity": identity, "name": member.get("name"),
-               "ports": member["ports"], "present": bool(answer.get("present")),
-               "ok": bool(answer.get("ok")),
-               "detail": answer.get("detail") or {}}
-        if answer.get("complete") is False:
-            row["complete"] = False
-        if member.get("disagreements"):
-            row["disagreements"] = member["disagreements"]
-        rows.append(row)
-
-    partial = [row["identity"] for row in rows if not row["ok"]]
-    truncated = [row["identity"] for row in rows if row.get("complete") is False]
-    return {"success": True, "result": {
-        "kind": kind, "target": target, "binaries": rows, "count": len(rows),
-        "with_it": sum(1 for row in rows if row["present"]),
-        "without_it": sum(1 for row in rows if row["ok"] and not row["present"]),
-        "unreachable": unreachable, "partial": partial, "truncated": truncated,
-        "ok": not partial and not unreachable}}
+    return _core_fleet_merge(seen, kind, target, unreachable)
 
 
 def _fleet_ports(text) -> list:

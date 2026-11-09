@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The fleet merge into the single core (I1, slice 5)**: `ghydra/core/fleet.py`
+  owns the two rules that make a fleet answer trustworthy — the merge is by
+  **file identity** (two ports serving one program are one row, and their
+  disagreement is reported rather than overwritten) and a port that did not
+  answer is **carried** as unreachable ("not present" is not "not asked"). Both
+  surfaces now collect the answers and hand them to the same merge, so the same
+  fleet cannot group differently on the CLI and through the bridge. The step
+  also replaced a brittle test — one that counted a field tuple by text, which
+  became legitimately two once fleet owned its own tuple — with one that scales:
+  **no core function may be defined twice in the bridge**.
 - **The snapshot comparison into the single core (I1, slice 4)**:
   `ghydra/core/diff.py` owns what "what changed?" means — a function is
   identified by its address (a rename is not an add plus a remove), imports and

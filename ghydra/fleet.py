@@ -23,13 +23,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from .core import fleet as core_fleet
+
 PAGE_LIMIT = 1000
 MAX_PAGES = 5
 
-#: The questions a fleet can be asked.
-KINDS = ("overview", "has_function", "has_import", "has_string", "xrefs_to")
-
-IDENTITY_FIELDS = ("programId", "path", "executablePath", "imageBase")
+#: Both defined once, in the core (I1).
+KINDS = core_fleet.KINDS
+IDENTITY_FIELDS = core_fleet.IDENTITY_FIELDS
 
 
 def _get(client, endpoint: str, params: Dict[str, Any] | None = None) -> Any:
@@ -55,18 +56,10 @@ def _quote(value: str) -> str:
 def program_identity_of(program: Any) -> str:
     """The key two instances serving the same file share.
 
-    ``programId`` is project + pathname, and is what the plugin already uses to
-    name a program. The executable path is the fallback; a completely unknown
-    program gets the empty string, which the caller reports as unknown rather
-    than merging every stranger together.
+    Delegates to the core (I1): the bridge merges with the same rule, so the two
+    surfaces cannot group the same fleet differently.
     """
-    if not isinstance(program, dict):
-        return ""
-    for key in IDENTITY_FIELDS:
-        value = program.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+    return core_fleet.program_identity_of(program)
 
 
 def collect_member(client, port: int) -> Dict[str, Any]:
@@ -178,58 +171,20 @@ def query(clients: Dict[int, Any], kind: str,
                 "error": {"code": "FLEET_UNKNOWN_KIND",
                           "message": f"the kinds are: {', '.join(KINDS)}"}}
 
-    members: Dict[str, Dict[str, Any]] = {}
+    # The merge is pure and lives in the core (I1); the I/O stays here.
+    seen: List[Dict[str, Any]] = []
     unreachable: List[Dict[str, Any]] = []
-    order: List[str] = []
     for port in sorted(clients):
         member = collect_member(clients[port], port)
         if not member["reachable"]:
             unreachable.append({"port": port, "reason": member.get("error")})
             continue
-        identity = member["identity"]
-        answer = ask(clients[port], kind, target)
-        existing = members.get(identity)
-        if existing is None:
-            members[identity] = {"identity": identity, "name": member.get("name"),
-                                 "ports": [port], "program": member.get("program"),
-                                 "answer": answer}
-            order.append(identity)
-        else:
-            # Two ports, one program: the answers must agree, and the row keeps
-            # both ports so a disagreement can be seen.
-            existing["ports"].append(port)
-            if existing["answer"].get("present") != answer.get("present"):
-                existing.setdefault("disagreements", []).append(
-                    {"port": port, "answer": answer})
+        seen.append({"port": port, "identity": member["identity"],
+                     "name": member.get("name"),
+                     "program": member.get("program"),
+                     "answer": ask(clients[port], kind, target)})
 
-    rows = []
-    for identity in order:
-        member = members[identity]
-        answer = member["answer"]
-        row = {"identity": identity, "name": member.get("name"),
-               "ports": member["ports"],
-               "present": bool(answer.get("present")),
-               "ok": bool(answer.get("ok")),
-               "detail": answer.get("detail") or {}}
-        if answer.get("complete") is False:
-            row["complete"] = False
-        if member.get("disagreements"):
-            row["disagreements"] = member["disagreements"]
-        rows.append(row)
-
-    partial = [row["identity"] for row in rows if not row["ok"]]
-    truncated = [row["identity"] for row in rows if row.get("complete") is False]
-    return {"success": True, "result": {
-        "kind": kind, "target": target,
-        "binaries": rows,
-        "count": len(rows),
-        "with_it": sum(1 for row in rows if row["present"]),
-        "without_it": sum(1 for row in rows if row["ok"] and not row["present"]),
-        "unreachable": unreachable,
-        "partial": partial,
-        "truncated": truncated,
-        "ok": not partial and not unreachable,
-    }}
+    return core_fleet.merge_answers(seen, kind, target, unreachable)
 
 
 def to_text(report: Dict[str, Any]) -> str:

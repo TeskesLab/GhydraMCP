@@ -25,6 +25,7 @@ import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra.core import digest as core  # noqa: E402
 from ghydra.core import cache as cache_core  # noqa: E402
 from ghydra.core import diff as diff_core  # noqa: E402
+from ghydra.core import fleet as fleet_core  # noqa: E402
 from ghydra.core import hints as hints_core  # noqa: E402
 from ghydra.core import runbook as runbook_core  # noqa: E402
 from scripts import gen_core  # noqa: E402
@@ -352,9 +353,18 @@ class CacheDelegationTests(unittest.TestCase):
         self.assertIs(bridge._CACHE_IDENTITY_FIELDS, bridge._CORE_CACHE_IDENTITY_FIELDS)
         self.assertIs(bridge._CACHE_STATISTIC_FIELDS, bridge._CORE_CACHE_STATISTIC_FIELDS)
 
-    def test_the_bridge_keeps_no_second_copy_of_the_identity_fields(self):
+    def test_no_core_function_is_defined_twice_in_the_bridge(self):
+        """The point of the mechanism: one definition, not a second copy.
+
+        Every public name of every core module must exist in the bridge only as
+        the generated `_core_*` version — a bare `def <name>(` would be the
+        duplication coming back.
+        """
         text = _bridge_text()
-        self.assertEqual(1, text.count('"programId", "path", "executablePath"'))
+        for module in gen_core.CORE_MODULES:
+            for public in gen_core.CORE_RENAMES.get(module, {}):
+                with self.subTest(module=module, name=public):
+                    self.assertNotIn(f"def {public}(", text)
 
 
 class GeneratorGuardTests(unittest.TestCase):
@@ -469,6 +479,77 @@ class DiffCoreTests(unittest.TestCase):
     def test_the_program_fields_come_from_the_core(self):
         self.assertEqual(diff_core.PROGRAM_FIELDS, bridge._CORE_DIFF_PROGRAM_FIELDS)
         self.assertIs(bridge._DIFF_PROGRAM_FIELDS, bridge._CORE_DIFF_PROGRAM_FIELDS)
+
+class FleetCoreTests(unittest.TestCase):
+    """The fleet identity and the merge live once, in the core."""
+
+    def test_the_identity_agrees_and_prefers_the_program_id(self):
+        program = {"programId": "proj:/a.exe", "path": "/tmp/a.exe",
+                   "executablePath": "/tmp/a.exe", "imageBase": "0x400000"}
+        self.assertEqual("proj:/a.exe", fleet_core.program_identity_of(program))
+        self.assertEqual(fleet_core.program_identity_of(program),
+                         bridge._core_fleet_identity_of(program))
+
+    def test_the_identity_falls_back_to_the_paths(self):
+        self.assertEqual("/tmp/a.exe",
+                         fleet_core.program_identity_of({"path": "/tmp/a.exe"}))
+        self.assertEqual("/x", fleet_core.program_identity_of(
+            {"executablePath": "/x"}))
+
+    def test_a_program_with_no_identity_is_empty(self):
+        for value in ({}, None, [], "x"):
+            with self.subTest(value=value):
+                self.assertEqual("", fleet_core.program_identity_of(value))
+
+    def _seen(self):
+        return [
+            {"port": 8192, "identity": "p:/a.exe", "name": "a.exe",
+             "answer": {"ok": True, "present": True, "detail": {"address": "0x1"}}},
+            {"port": 8193, "identity": "p:/a.exe", "name": "a.exe",
+             "answer": {"ok": True, "present": True, "detail": {"address": "0x1"}}},
+            {"port": 8194, "identity": "p:/b.exe", "name": "b.exe",
+             "answer": {"ok": True, "present": False, "detail": {}}},
+        ]
+
+    def test_the_merge_agrees(self):
+        report = fleet_core.merge_answers(self._seen(), "has_function", "main", [])
+        self.assertEqual(report, bridge._core_fleet_merge(
+            self._seen(), "has_function", "main", []))
+
+    def test_two_ports_of_one_program_are_one_row(self):
+        report = fleet_core.merge_answers(self._seen(), "has_function", "main", [])
+        result = report["result"]
+        self.assertEqual(2, result["count"])
+        self.assertEqual([8192, 8193], result["binaries"][0]["ports"])
+        self.assertEqual(1, result["with_it"])
+        self.assertEqual(1, result["without_it"])
+
+    def test_a_disagreement_is_reported(self):
+        seen = self._seen()
+        seen[1]["answer"] = {"ok": True, "present": False, "detail": {}}
+        result = fleet_core.merge_answers(seen, "has_function", "main", [])["result"]
+        self.assertTrue(result["binaries"][0]["disagreements"])
+
+    def test_an_unreachable_member_is_carried_and_fails_the_answer(self):
+        result = fleet_core.merge_answers(
+            self._seen(), "has_function", "main",
+            [{"port": 8195, "reason": "NO_PROGRAM"}])["result"]
+        self.assertEqual([8195], [item["port"] for item in result["unreachable"]])
+        self.assertFalse(result["ok"])
+
+    def test_a_truncated_answer_marks_the_row(self):
+        seen = [{"port": 8192, "identity": "p", "name": "a",
+                 "answer": {"ok": True, "present": False, "complete": False,
+                            "detail": {}}}]
+        result = fleet_core.merge_answers(seen, "has_import", "X", [])["result"]
+        self.assertFalse(result["binaries"][0]["complete"])
+        self.assertEqual(["p"], result["truncated"])
+
+    def test_the_kinds_come_from_the_core(self):
+        self.assertEqual(fleet_core.KINDS, bridge._CORE_FLEET_KINDS)
+        self.assertIs(bridge._FLEET_KINDS, bridge._CORE_FLEET_KINDS)
+        self.assertIs(bridge._FLEET_IDENTITY_FIELDS,
+                      bridge._CORE_FLEET_IDENTITY_FIELDS)
 
 
 if __name__ == "__main__":
