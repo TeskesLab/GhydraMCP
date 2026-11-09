@@ -7,7 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Fleet queries (R7)**: a question can now be asked of several instances at
+- **Single core, generated into the bridge (I1, slice 1)**: the bridge ships as
+  one file and cannot import `ghydra`, so the pure helpers were duplicated — the
+  canonical-JSON digest alone existed three times (runbook, cache, and the two
+  that drifted apart). I1 replaces the copies with **one source and a
+  generator**: `ghydra/core/digest.py` defines the canonical form, its SHA-256
+  and the "stable view" of an answer, and `scripts/gen_core.py` writes them into
+  the bridge between markers as `_core_*`. The named helpers
+  (`_runbook_digest`, `_cache_digest`, …) are now one-line delegations, so a fix
+  lands in one place. The mechanism is guarded where drift would appear: the
+  generator has a `--check` mode, `test_core.py` asserts the region is current
+  and byte-identical to a fresh generation **and** that a tampered region is
+  detected, and **both CI pipelines run the check** before compiling. The rule
+  for the core: pure functions only — a generated copy of a pure function is
+  identical on both sides, which is what makes it safe.- **Fleet queries (R7)**: a question can now be asked of several instances at
   once. `ghydra fleet overview|has-function|has-import|has-string|xrefs-to
   --ports 8192,8193` and the bridge tool `fleet_query(kind, ports, target)`
   merge the answers **by file identity** — the program's `programId`, falling

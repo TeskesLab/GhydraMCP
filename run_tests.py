@@ -838,11 +838,36 @@ def run_fleet_tests():
         return False
 
 
+def run_core_tests():
+    """Run the single-core / generated-code (I1) tests."""
+    print_header("Running Single Core Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_core.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running core tests: {e}")
+        return False
+
+
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
     "--capability-summary", "--tasks", "--errors", "--context-pack", "--tool-groups", "--telemetry",
-    "--assertions", "--read-only", "--runbook", "--taint", "--mission", "--cache", "--fleet",
+    "--assertions", "--read-only", "--runbook", "--taint", "--mission", "--cache", "--fleet", "--core",
 )
 
 SUITES = {
@@ -876,6 +901,7 @@ SUITES = {
     "--mission": run_mission_tests,
     "--cache": run_cache_tests,
     "--fleet": run_fleet_tests,
+    "--core": run_core_tests,
 }
 
 USAGE = (

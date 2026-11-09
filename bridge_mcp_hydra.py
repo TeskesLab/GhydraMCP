@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.9.0"
+BRIDGE_VERSION = "v3.10.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -11187,24 +11187,18 @@ _DIFF_PROGRAM_FIELDS = ("name", "executable_path", "image_base", "language", "co
 
 
 def _runbook_canonical(value: Any) -> str:
-    """The text a digest is taken over: sorted keys, no separator noise."""
-    return json.dumps(value, ensure_ascii=False, sort_keys=True,
-                      separators=(",", ":"), default=str)
+    """Delegates to the generated core (I1): one definition, two surfaces."""
+    return _core_canonical(value)
 
 
 def _runbook_digest(value: Any) -> str:
-    return hashlib.sha256(_runbook_canonical(value).encode("utf-8")).hexdigest()
+    """Delegates to the generated core (I1)."""
+    return _core_digest(value)
 
 
 def _runbook_stable_result(envelope: Any) -> Any:
-    """The part of an answer a replay is compared on."""
-    if isinstance(envelope, dict):
-        payload = envelope.get("result", envelope)
-        if isinstance(payload, dict):
-            return {key: value for key, value in payload.items()
-                    if key not in _RUNBOOK_VOLATILE_KEYS}
-        return payload
-    return envelope
+    """Delegates to the generated core (I1), with the runbook's key set."""
+    return _core_stable_result(envelope, _RUNBOOK_VOLATILE_KEYS)
 
 
 def _runbook_load_steps(steps: str) -> list:
@@ -12139,12 +12133,13 @@ _CACHE_STATISTIC_FIELDS = ("functionCount", "symbolCount", "memoryBlockCount")
 
 
 def _cache_canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True,
-                      separators=(",", ":"), default=str)
+    """Delegates to the generated core (I1)."""
+    return _core_canonical(value)
 
 
 def _cache_digest(value: Any) -> str:
-    return hashlib.sha256(_cache_canonical(value).encode("utf-8")).hexdigest()
+    """Delegates to the generated core (I1)."""
+    return _core_digest(value)
 
 
 def _cache_root() -> str:
@@ -12601,6 +12596,34 @@ def bsim_status(port: int | None = None) -> dict:
     """
     port = _get_instance_port(port)
     return simplify_response(safe_get(port, "bsim/status"))
+
+
+# >>> generated from ghydra/core/digest.py (945a74f28ae18371) — edit the core, then run scripts/gen_core.py
+_CORE_VOLATILE_KEYS = ('id', 'timestamp', 'instance', '_links', 'api_links')
+
+def _core_canonical(value):
+    """The text a digest is taken over: sorted keys, no separator noise."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)
+
+def _core_digest(value):
+    """The SHA-256 of the canonical form of a value."""
+    return hashlib.sha256(_core_canonical(value).encode('utf-8')).hexdigest()
+
+def _core_stable_result(value, volatile=_CORE_VOLATILE_KEYS):
+    """The part of an answer that two identical calls share.
+
+    A dict loses the volatile keys; anything else is returned as it is. The
+    list of volatile keys is a parameter so a caller can widen it, never so it
+    can silently narrow it in one place and not the other.
+    """
+    if isinstance(value, dict):
+        payload = value.get('result', value)
+        if isinstance(payload, dict):
+            dropped = set(volatile)
+            return {key: item for key, item in payload.items() if key not in dropped}
+        return payload
+    return value
+# <<< end generated from ghydra/core/digest.py
 
 
 _TOOL_GROUPS = {

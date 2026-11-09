@@ -926,3 +926,20 @@ layout), `GHYDRA_X64DBG.md` (the x64dbg integration: the contract, the address m
   omitted and `meta.counted` is false, and `next` comes from a full page. `Pagination`
   carries `counted`, `PaginatedResult` honours it, and the two listing services take a
   `count` flag; the bridge exposes it as `count` on `functions_list`/`symbols_list`.
+
+## The single core (I1)
+
+The bridge is one file and must not import `ghydra`, so the pure helpers it shares with
+the CLI are **generated** into it instead of retyped.
+
+- **The source is `ghydra/core/`** — pure functions only (no I/O, no globals). A generated
+  copy of a pure function is identical on both sides; anything else is not safe to generate.
+- **`python scripts/gen_core.py`** writes each module into `bridge_mcp_hydra.py` between
+  `# >>> generated from …` and `# <<< end generated …`. Never edit that region by hand: edit
+  the core and regenerate.
+- **`--check` is the guard**, and both CI pipelines run it before compiling. A core change
+  that was not regenerated fails instead of leaving the two surfaces disagreeing — the
+  failure mode this mechanism exists to remove. `test_core.py` (`--core`) asserts the region
+  is current, byte-identical to a fresh generation, and that a tampered region is caught.
+- **What has moved so far:** `ghydra/core/digest.py` (canonical form, SHA-256, the stable
+  view of an answer) — the bridge's `_runbook_digest` / `_cache_digest` are now delegations.
