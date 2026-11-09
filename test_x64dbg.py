@@ -12,6 +12,7 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
@@ -170,11 +171,24 @@ class _Handler(BaseHTTPRequestHandler):
         self._fail(-32601, "Method not found")
 
 
+class _QuietServer(ThreadingHTTPServer):
+    """A server that can take a burst, and that the next test can rebind.
+
+    `request_queue_size` is the listen backlog: the default of 5 refuses SYNs
+    under a burst of connections, and a refused SYN is indistinguishable from a
+    dead server at the client.
+    """
+
+    request_queue_size = 128
+    allow_reuse_address = True
+    daemon_threads = True
+
+
 class FakeX64dbg:
     """The fake plugin, running on a port of its own."""
 
     def __init__(self, token="test-token", reset_first=False):
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self.server = _QuietServer(("127.0.0.1", 0), _Handler)
         self.server.expected_token = token
         self.server.calls = []
         self.server.errors = []
@@ -182,8 +196,24 @@ class FakeX64dbg:
         self.server.reset_done = False
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
+    def _wait_until_ready(self, timeout=5.0):
+        """Wait until the port actually answers a connect."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.settimeout(0.2)
+            try:
+                probe.connect(("127.0.0.1", self.port))
+                return
+            except OSError:
+                time.sleep(0.01)
+            finally:
+                probe.close()
+        raise RuntimeError(f"the fake plugin never started listening on {self.port}")
+
     def __enter__(self):
         self.thread.start()
+        self._wait_until_ready()
         return self
 
     def __exit__(self, *_exc):
