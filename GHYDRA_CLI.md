@@ -1428,7 +1428,8 @@ Three promises the tests enforce:
 The state is checkpointed after every step, and `resume` keeps what was spent
 while allowing the limits to be raised.
 
-O mesmo plano existe como tool no bridge (mission_start), sem checkpoint — o bridge é stateless; esume é da CLI.
+O mesmo plano existe como tool no bridge (mission_start), sem checkpoint — o bridge é stateless; 
+esume é da CLI.
 
 ## Decompile cache (I11)
 
@@ -1473,4 +1474,19 @@ dropped, because "not present" and "not asked" are different answers. An
 absence for an import or a string is only claimed when the listing was read to
 its end (`complete: false` marks the ones that were truncated).
 
-The same question exists on the bridge as `fleet_query(kind, ports, target)`.
+The same question exists on the bridge as `fleet_query(kind, ports, target)`.\n
+
+## BSim (R1)
+
+```bash
+ghydra bsim status        # is a signature query possible, and against which DB
+ghydra --json bsim status
+```
+
+BSim is a Ghidra **feature**, not a plugin API, so the plugin discovers it by
+loading the class — a build may ship without it, and `available: false` is a
+normal answer, not an error. The signature database is configuration
+(`-Dghydra.bsim.database=<path>` on the Ghidra side, or the
+`GHYDRA_BSIM_DATABASE` environment variable); `ready` is true only when the
+engine is present *and* a database is named, and `reason` says what is missing
+otherwise.

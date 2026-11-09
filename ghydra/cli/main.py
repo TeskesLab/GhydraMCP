@@ -160,6 +160,7 @@ from .runbook_cmd import runbook as runbook_group
 from .mission_cmd import mission as mission_group
 from .cache_cmd import cache as cache_group
 from .fleet_cmd import fleet as fleet_group
+from .bsim_cmd import bsim as bsim_group
 
 cli.add_command(instances.instances)
 cli.add_command(functions.functions)
@@ -195,6 +196,7 @@ cli.add_command(runbook_group)
 cli.add_command(mission_group)
 cli.add_command(cache_group)
 cli.add_command(fleet_group)
+cli.add_command(bsim_group)
 cli.add_command(inspect_address.inspect_address)
 
 

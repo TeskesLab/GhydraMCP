@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.8.0"
+BRIDGE_VERSION = "v3.9.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -3245,6 +3245,25 @@ def format_fleet_query(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_bsim_status(response: dict, **kwargs) -> str:
+    """Whether a signature query is possible, and what is missing if not."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    state = "ready" if result.get("ready") else "not ready"
+    lines = [f"BSim: {state}",
+             f"  engine: {'present' if result.get('available') else 'absent'}",
+             f"  database: {result.get('database') or '(none configured)'}"]
+    if result.get("database"):
+        lines.append(f"  database exists: "
+                     f"{'yes' if result.get('database_exists') else 'no'}")
+    if result.get("reason"):
+        lines.append(f"  {result['reason']}")
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -3380,6 +3399,7 @@ FORMATTERS = {
     "cache_stats": format_cache_stats,
     "cache_clear": format_cache_stats,
     "fleet_query": format_fleet_query,
+    "bsim_status": format_bsim_status,
 }
 
 
@@ -12560,10 +12580,34 @@ def fleet_query(kind: str, ports: str, target: str | None = None) -> dict:
     return _fleet_query(parsed, kind, target)
 
 
+# ================= BSim discovery (R1) =================
+
+
+@mcp.tool()
+@text_output
+def bsim_status(port: int | None = None) -> dict:
+    """Is a BSim signature query possible here, and against which database?
+
+    BSim is a Ghidra feature, not a plugin API, so it is discovered by loading
+    the class: a build may ship without it. The database is configuration
+    (-Dghydra.bsim.database or GHYDRA_BSIM_DATABASE), and the answer names it
+    rather than pretending a query would work.
+
+    Args:
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: available, database, database_exists, ready and the reason
+    """
+    port = _get_instance_port(port)
+    return simplify_response(safe_get(port, "bsim/status"))
+
+
 _TOOL_GROUPS = {
     "core": {"programs", "project", "projects", "instances", "ui", "doctor",
              "evidence", "session", "tasks", "tools", "mission", "cache"},
-    "functions": {"functions", "analysis", "inspect", "variables", "memory"},
+    "functions": {"functions", "analysis", "inspect", "variables", "memory",
+                  "bsim"},
     "data": {"data", "xrefs", "scalars", "comments", "segments"},
     "types": {"structs", "datatypes", "classes", "raw", "symbols",
               "namespaces"},

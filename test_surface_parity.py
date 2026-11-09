@@ -135,6 +135,50 @@ class PagingCountTests(unittest.TestCase):
             with self.subTest(tool=tool.__name__):
                 self.assertIn("count", inspect.signature(tool).parameters)
 
+class BSimStatusTests(unittest.TestCase):
+    """BSim discovery (R1): the tool, its formatter and the answer's shape.
+
+    The live half is validated against a running Ghidra; what can be pinned
+    down without one is that the tool exists, renders, and that "not ready"
+    always carries the reason a client needs to fix it.
+    """
+
+    def test_the_tool_is_registered_with_a_formatter(self):
+        tools = set(getattr(bridge.mcp._tool_manager, "_tools", {}))
+        self.assertIn("bsim_status", tools)
+        self.assertIn("bsim_status", bridge.FORMATTERS)
+
+    def test_it_is_part_of_the_analysis_workflow(self):
+        self.assertEqual("functions", bridge._tool_group("bsim_status"))
+
+    def test_a_ready_answer_says_so_without_a_reason(self):
+        text = bridge.format_bsim_status({"success": True, "result": {
+            "available": True, "database": "/tmp/sig.h2", "database_exists": True,
+            "ready": True, "reason": None}})
+        self.assertIn("BSim: ready", text)
+        self.assertIn("/tmp/sig.h2", text)
+
+    def test_a_missing_database_is_reported_with_how_to_fix_it(self):
+        text = bridge.format_bsim_status({"success": True, "result": {
+            "available": True, "database": None, "database_exists": False,
+            "ready": False,
+            "reason": "no signature database is configured; set "
+                      "-Dghydra.bsim.database=<path>"}})
+        self.assertIn("not ready", text)
+        self.assertIn("no signature database is configured", text)
+
+    def test_an_absent_engine_is_reported_as_absent(self):
+        text = bridge.format_bsim_status({"success": True, "result": {
+            "available": False, "database": None, "database_exists": False,
+            "ready": False, "reason": "this Ghidra build has no BSim query engine"}})
+        self.assertIn("engine: absent", text)
+        self.assertIn("has no BSim query engine", text)
+
+    def test_an_error_answer_renders_as_the_error(self):
+        failure = {"success": False,
+                   "error": {"code": "INSTANCE_NOT_FOUND", "message": "no instance"}}
+        self.assertIn("INSTANCE_NOT_FOUND", bridge.format_bsim_status(failure))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
