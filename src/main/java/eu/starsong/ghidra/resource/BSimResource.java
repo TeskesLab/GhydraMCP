@@ -3,6 +3,7 @@ package eu.starsong.ghidra.resource;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
 import eu.starsong.ghidra.server.Resource;
+import eu.starsong.ghidra.service.BSimIngestService;
 import eu.starsong.ghidra.service.BSimService;
 import io.javalin.Javalin;
 
@@ -23,6 +24,39 @@ public class BSimResource implements Resource {
     public void register(Javalin app,
             Function<io.javalin.http.Context, GhidraContext> contextFactory) {
         app.get("/bsim/status", ctx -> status(contextFactory.apply(ctx)));
+        app.post("/bsim/ingest", ctx -> ingest(contextFactory.apply(ctx)));
+    }
+
+    /**
+     * Generate signatures for the open program and insert them into the
+     * configured database.
+     *
+     * <p>The work is long (a decompile per function), so the answer is a report,
+     * not a stream: how many functions were discovered, how many were scanned,
+     * what BSim itself says it inserted, and why it stopped when it did.
+     */
+    private void ingest(GhidraContext ctx) {
+        int maxFunctions = 0;
+        String requested = ctx.ctx().queryParam("max_functions");
+        if (requested != null && !requested.isBlank()) {
+            try {
+                maxFunctions = Integer.parseInt(requested.trim());
+            } catch (NumberFormatException bad) {
+                throw new IllegalArgumentException(
+                    "max_functions must be a number, got: " + requested);
+            }
+        }
+        boolean trackCallGraph = Boolean.parseBoolean(
+            ctx.ctx().queryParam("track_call_graph") == null ? "false"
+                : ctx.ctx().queryParam("track_call_graph").trim());
+        java.util.Map<String, Object> data =
+            BSimIngestService.ingest(ctx.program(), maxFunctions, trackCallGraph);
+        ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
+            .self(requested == null ? "/bsim/ingest"
+                : "/bsim/ingest?max_functions=" + maxFunctions)
+            .link("status", "/bsim/status")
+            .link("capabilities", "/capabilities")
+            .build());
     }
 
     private void status(GhidraContext ctx) {

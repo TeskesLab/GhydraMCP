@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.20.0"
+BRIDGE_VERSION = "v3.21.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -3971,6 +3971,37 @@ def format_bsim_status(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_bsim_ingest(response: dict, **kwargs) -> str:
+    """What the ingest did: how much was scanned, how much BSim inserted."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    if result.get("already_present"):
+        lines = [f"BSim ingest: {result.get('program')} is already in the database",
+                 f"  database: {result.get('database')}",
+                 f"  inserted: 0 functions (nothing to do)"]
+        if result.get("reason"):
+            lines.append(f"  {result['reason']}")
+        return "\n".join(lines)
+    lines = [f"BSim ingest: {result.get('program')}",
+             f"  database: {result.get('database')}"
+             + (" (created)" if result.get("created") else ""),
+             f"  discovered: {result.get('discovered_functions', 0)} functions",
+             f"  scanned: {result.get('scanned_functions', 0)}"
+             f" ({result.get('skipped_functions', 0)} skipped)",
+             f"  described: {result.get('described_functions', 0)}",
+             f"  inserted: {result.get('inserted_functions', 0)} functions"
+             f" into {result.get('inserted_executables', 0)} executable(s)",
+             f"  took: {result.get('seconds', 0)}s"]
+    if result.get("track_call_graph") is False:
+        lines.append("  call graph: not recorded (track_call_graph=false)")
+    if result.get("reason"):
+        lines.append(f"  note: {result['reason']}")
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -4107,6 +4138,7 @@ FORMATTERS = {
     "cache_clear": format_cache_stats,
     "fleet_query": format_fleet_query,
     "bsim_status": format_bsim_status,
+    "bsim_ingest": format_bsim_ingest,
 }
 
 
@@ -12912,6 +12944,44 @@ def bsim_status(port: int | None = None) -> dict:
     """
     port = _get_instance_port(port)
     return simplify_response(safe_get(port, "bsim/status"))
+
+
+@mcp.tool()
+@text_output
+def bsim_ingest(max_functions: int = 0, track_call_graph: bool = False,
+                port: int | None = None) -> dict:
+    """Generate BSim signatures for this program and insert them into the database
+
+    Ingests the *open* program: every function with a body is decompiled and its
+    signature stored in the configured database (-Dghydra.bsim.database or
+    GHYDRA_BSIM_DATABASE), which is created when it does not exist yet. That is
+    what makes a signature query possible later, and what a corpus is built from.
+
+    The call graph is **not** recorded by default: measured on Ghidra 12.2/H2, a
+    database created with `trackcallgraph=true` rejects the insert with a
+    duplicate `callgraphtable(src,dest)` key on ordinary recursion, and the
+    signature tables are what a similarity query needs. Pass
+    `track_call_graph=True` to ask for it anyway.
+
+    Re-ingesting a program that is already there is not an error: the answer says
+    `already_present` and inserted 0, because the goal — the program is in the
+    database — is already true.
+
+    Args:
+        max_functions: How many functions to scan at most (0 = all, default 0)
+        track_call_graph: Record the call graph in the database (default False)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: discovered/scanned/described/inserted counts, whether the database
+              was created, and the reason when nothing was inserted
+    """
+    port = _get_instance_port(port)
+    params = {}
+    if max_functions:
+        params["max_functions"] = int(max_functions)
+    params["track_call_graph"] = "true" if track_call_graph else "false"
+    return simplify_response(safe_post(port, "bsim/ingest", params=params))
 
 
 

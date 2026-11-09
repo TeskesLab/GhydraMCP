@@ -60,18 +60,31 @@ public final class BSimService {
         return null;
     }
 
-    /** Is the configured database an existing path? */
+    /**
+     * Is the configured database on disk?
+     *
+     * <p>An H2 database is not the path that names it: the file is
+     * {@code <path>.mv.db} (older builds used {@code .h2.db}). Measured: a
+     * 120 KB database created by an ingest was reported as "does not exist"
+     * because only the bare path was checked — so every suffix H2 can use is
+     * checked, and the bare path too, for a path that is a file already.
+     */
     public static boolean databaseExists() {
         String configured = database();
         if (configured == null) {
             return false;
         }
-        try {
-            Path path = Paths.get(configured);
-            return Files.exists(path);
-        } catch (RuntimeException invalid) {
-            return false;
+        for (String suffix : new String[] { ".mv.db", ".h2.db", "" }) {
+            try {
+                Path path = Paths.get(configured + suffix);
+                if (Files.exists(path)) {
+                    return true;
+                }
+            } catch (RuntimeException invalid) {
+                // A path the platform cannot express is "not there".
+            }
         }
+        return false;
     }
 
     /**
@@ -90,6 +103,9 @@ public final class BSimService {
         data.put("database", configured);
         data.put("database_exists", exists);
         data.put("ready", available && configured != null);
+        // Ingest creates the database when it does not exist yet, so it needs
+        // only the engine and a name; a query needs the file on disk.
+        data.put("can_ingest", available && configured != null);
         if (!available) {
             data.put("reason", "this Ghidra build has no BSim query engine "
                 + "(" + BSim_MARKER + " is not on the classpath)");

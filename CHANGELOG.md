@@ -7,6 +7,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **BSim ingest (R1, slice 2), validated against a live Ghidra 12.2**:
+  `POST /bsim/ingest`, `bsim_ingest` and `ghydra bsim ingest` generate signatures
+  for the open program and insert them into the configured H2 database, creating
+  the database when it is absent. Measured on `where.exe`: **94 functions
+  inserted in 3.1 s**, a 120 KB `.mv.db`, and a second ingest answered as
+  `already_present` with 0 inserted — because BSim deduplicates by executable
+  fingerprint and a satisfied goal is not a failure.
+  The implementation is **entirely reflective** (`H2FileFunctionDatabase`,
+  `CreateDatabase`, `GenSignatures`, `InsertRequest` are internal API that has
+  moved between series, and the extension builds against 11.x *and* 12.x), and it
+  follows Ghidra's own script exactly — which the live run corrected twice: the
+  `GenSignatures` boolean is `trackcallgraph`, not a cache flag, and a generator
+  without `setVectorFactory(...)` dies on a database created in the same call.
+  Three things the live run also found: `initialize()` on a missing H2 file
+  answers "Database does not exist" (so ingest creates it with Ghidra's
+  `CreateDatabase` command and the `medium_nosize` template); `database_exists`
+  was checking the bare path while H2 writes `<path>.mv.db`, so a 120 KB
+  database was reported as missing; and a database created with
+  `trackcallgraph=true` rejects the insert with a duplicate
+  `callgraphtable(src,dest)` key on ordinary recursion — so the call graph is
+  **off by default** and turning it on is an explicit request.
 - **I1 complete: eleven modules of pure logic in one core, generated into the
   bridge**: `digest`, `runbook`, `hints`, `cache`, `diff`, `fleet`,
   `capabilities`, `contextpack`, `telemetry`, `taint` and `mission` now have

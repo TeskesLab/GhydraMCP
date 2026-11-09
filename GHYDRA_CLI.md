@@ -1480,6 +1480,7 @@ The same question exists on the bridge as `fleet_query(kind, ports, target)`.\n
 
 ```bash
 ghydra bsim status        # is a signature query possible, and against which DB
+ghydra bsim ingest        # generate signatures for the open program and insert them
 ghydra --json bsim status
 ```
 
