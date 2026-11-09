@@ -7,7 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Reproducible runbooks and `analysis_diff` (R6)**: `ghydra runbook
+- **Source-to-sink hypotheses (R5)**: `analysis_taint(source, sink)`
+  (`ghydra analysis taint -s recv -t system`) composes the references to each
+  name, the pcode of the functions that call them and the call graph into
+  candidate data flows, each with its confidence (`direct` when the sink call
+  follows the source call in one function, `reachable` when a call path
+  connects the two functions, `weak` when the sink runs before the source or
+  the bounded search gave up) and the evidence addresses. Three honesty rules
+  are enforced by the tests: a sink that precedes the source is never a flow, a
+  truncated search is `weak` rather than a proven path, and "nothing found" is
+  never rendered as safety. The bridge duplicates the engine (single-file
+  rule); `test_taint.py` asserts both sides produce the same report.- **Reproducible runbooks and `analysis_diff` (R6)**: `ghydra runbook
   record -s steps.json` turns a sequence of API calls into a versionable JSONL
   file (`<program>.ghydrarb.jsonl`) that records a digest of every answer;
   `ghydra runbook replay` re-runs it and says which answers are identical,

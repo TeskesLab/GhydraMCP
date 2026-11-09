@@ -689,7 +689,7 @@ Any MCP client works. The bridge is a stdio server:
 }
 ```
 
-The bridge exposes **124 tools in 32 namespaces**. The namespaces are:
+The bridge exposes **125 tools in 32 namespaces**. The namespaces are:
 
 `analysis_*` · `classes_*` · `comments_*` · `data_*` · `datatypes_*` · `doctor_*` ·
 `evidence_*` · `functions_*` · `headless_*` · `inspect_*` · `instances_*` · `kuna_*` ·

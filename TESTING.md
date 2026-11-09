@@ -47,6 +47,7 @@ python run_tests.py --telemetry     # local telemetry recorder/summary (I14)
 python run_tests.py --assertions    # ghydra assert: SARIF/JUnit reports (I16)
 python run_tests.py --read-only     # read-only mode, dry-run and the audit trail (I12)
 python run_tests.py --runbook       # reproducible runbooks and analysis_diff (R6)
+python run_tests.py --taint         # source-to-sink hypotheses (R5)
 python run_tests.py --no-ghidra     # ALL suites that need no Ghidra (CI's set)
 python run_tests.py --surface --scripts   # several flags can be combined
 ```
@@ -55,7 +56,7 @@ python run_tests.py --surface --scripts   # several flags can be combined
 > each one separately. `--no-ghidra` expands to the suites that always execute
 > (`--kuna`, `--x64dbg`, `--surface`, `--capabilities`, `--scripts`,
 > `--compatibility`, `--runner`, `--docs`, `--capability-summary`, `--tasks`,
-> `--errors`, `--context-pack`, `--tool-groups`, `--telemetry`, `--assertions`, `--read-only`, `--runbook`); both CI workflows run exactly that
+> `--errors`, `--context-pack`, `--tool-groups`, `--telemetry`, `--assertions`, `--read-only`, `--runbook`, `--taint`); both CI workflows run exactly that
 > set on every push and pull request, so a green result is real evidence rather than a
 > summary made of skipped suites. `--require-live` probes `/plugin-version` first
 > and refuses to run when no Ghidra is serving.
@@ -66,7 +67,7 @@ python run_tests.py --surface --scripts   # several flags can be combined
 >
 > `--kuna`, `--x64dbg`, `--surface`, `--capabilities`, `--scripts`, `--compatibility`
 > `--runner`, `--docs`, `--capability-summary`, `--tasks`, `--errors`,
-> `--context-pack`, `--tool-groups`, `--telemetry`, `--assertions`, `--read-only` and `--runbook` are the exceptions: they need neither Ghidra
+> `--context-pack`, `--tool-groups`, `--telemetry`, `--assertions`, `--read-only`, `--runbook` and `--taint` are the exceptions: they need neither Ghidra
 > nor their respective binaries, so they always run
 > and always give a signal. `--rea` is
 > half contract (no Ghidra) and half live. `python run_tests.py --require-live`

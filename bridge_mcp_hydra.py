@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.3.0"
+BRIDGE_VERSION = "v3.4.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -3141,6 +3141,38 @@ def format_analysis_diff(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_analysis_taint(response: dict, **kwargs) -> str:
+    """Source-to-sink hypotheses: confidence, evidence and the disclaimer."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    source = result.get("source") or {}
+    sink = result.get("sink") or {}
+    counts = _taint_summarize(result)
+    lines = [f"Taint hypotheses: {source.get('name', '?')} -> {sink.get('name', '?')}",
+             f"  source sites: {source.get('sites', 0)}  "
+             f"sink sites: {sink.get('sites', 0)}  "
+             f"functions examined: {result.get('functions_examined', 0)}"]
+    if not counts["found"]:
+        lines.append("  no source-to-sink path was found - this is not proof of "
+                     "safety (the search is linear and bounded)")
+    for item in (result.get("hypotheses") or [])[:20]:
+        lines.append(f"  [{item.get('confidence')}] {item.get('reason')}")
+        if item.get("source_call"):
+            lines.append(f"      source call at {item['source_call']}")
+        if item.get("sink_call"):
+            lines.append(f"      sink call at {item['sink_call']}")
+        hops = item.get("hops") or []
+        if hops:
+            lines.append("      hops: " + " -> ".join(str(hop) for hop in hops))
+    if result.get("disclaimer"):
+        lines.append("")
+        lines.append(result["disclaimer"])
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -3271,6 +3303,7 @@ FORMATTERS = {
     "runbook_record": format_runbook_record,
     "runbook_replay": format_runbook_replay,
     "analysis_diff": format_analysis_diff,
+    "analysis_taint": format_analysis_taint,
 }
 
 
@@ -11413,6 +11446,226 @@ def analysis_diff(b_port: int, include_strings: bool = True,
     left = _diff_collect(port, include_strings=include_strings)
     right = _diff_collect(int(b_port), include_strings=include_strings)
     return {"success": True, "result": _diff_snapshots(left, right)}
+
+
+# ================= Source-to-sink hypotheses (R5) =================
+# Duplicated from ghydra/taint.py: the bridge is a standalone script and must
+# not import the ghydra package. test_taint.py asserts the two sides agree.
+
+_TAINT_CALL_OPCODES = {57, 58}
+_TAINT_DISCLAIMER = (
+    "These are hypotheses from pcode and the call graph, not proof of "
+    "exploitability. Branches are not modelled; a 'direct' finding means the "
+    "sink call appears after the source call in the same function.")
+
+
+def _taint_result(envelope: Any) -> Any:
+    if isinstance(envelope, dict) and envelope.get("success", False):
+        return envelope.get("result")
+    return None
+
+
+def _taint_resolve_name(port: int, name: str) -> dict:
+    addresses = []
+    references = []
+    function = _taint_result(safe_get(port, f"functions/by-name/{quote(name)}"))
+    if isinstance(function, dict) and function.get("address"):
+        addresses.append(str(function["address"]))
+    xrefs = _taint_result(safe_get(port, f"xrefs/to-name/{quote(name)}",
+                                   {"limit": 1000}))
+    if isinstance(xrefs, list):
+        for item in xrefs:
+            if not isinstance(item, dict):
+                continue
+            reference = {
+                "from_address": item.get("from_address") or item.get("fromAddress"),
+                "to_address": item.get("to_address") or item.get("toAddress"),
+                "type": item.get("type") or item.get("ref_type"),
+                "function": item.get("function") or item.get("from_function"),
+            }
+            references.append(reference)
+            if reference["to_address"]:
+                addresses.append(str(reference["to_address"]))
+    return {"name": name, "addresses": list(dict.fromkeys(addresses)),
+            "references": references}
+
+
+def _taint_calls_in_function(port: int, function_address: str) -> list:
+    payload = _taint_result(safe_get(port, f"functions/{function_address}/pcode"))
+    if not isinstance(payload, dict):
+        return []
+    operations = payload.get("operations")
+    if not isinstance(operations, list):
+        return []
+    calls = []
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        if op.get("opcode") not in _TAINT_CALL_OPCODES:
+            continue
+        inputs = op.get("inputs") or []
+        calls.append({"at": str(op.get("address") or ""),
+                      "target": str(inputs[0]) if inputs else "",
+                      "inputs": [str(value) for value in inputs]})
+    return calls
+
+
+def _taint_site_for(calls: list, wanted: str, wanted_name: str):
+    wanted_lower = (wanted or "").lower()
+    for call in calls:
+        target = (call.get("target") or "").lower()
+        if not target:
+            continue
+        if target == wanted_lower or wanted_name.lower() in target:
+            return call["at"]
+    return None
+
+
+def _taint_function_of(port: int, address: str) -> dict:
+    payload = _taint_result(safe_get(port, f"functions/containing/{quote(address)}"))
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
+def _taint_call_path(port: int, source_function: str, sink_function: str,
+                     max_depth: int = 8) -> dict:
+    payload = _taint_result(safe_get(port, "analysis/call-path",
+                                     {"from": source_function,
+                                      "to": sink_function,
+                                      "max_depth": max_depth}))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _taint_address_key(address: str) -> tuple:
+    try:
+        return (0, int(str(address), 16))
+    except (TypeError, ValueError):
+        return (1, 0)
+
+
+def _taint_functions_referencing(port: int, info: dict,
+                                 examined: list) -> dict:
+    found = {}
+    for reference in info.get("references") or []:
+        address = reference.get("from_address")
+        if not address:
+            continue
+        function = reference.get("function")
+        if isinstance(function, dict):
+            function_address = function.get("address") or function.get("entry")
+        else:
+            function_address = function
+        if not function_address:
+            containing = _taint_function_of(port, str(address))
+            function_address = containing.get("address") or containing.get("entry")
+        if function_address:
+            found[str(function_address)] = info["name"]
+    for address in info.get("addresses") or []:
+        if not address or str(address) in found:
+            continue
+        containing = _taint_function_of(port, str(address))
+        function_address = containing.get("address") or containing.get("entry")
+        if function_address:
+            found[str(function_address)] = info["name"]
+    examined.extend(found.keys())
+    return found
+
+
+def _taint_find_hypotheses(port: int, source: str, sink: str,
+                           max_depth: int = 8) -> dict:
+    source_info = _taint_resolve_name(port, source)
+    sink_info = _taint_resolve_name(port, sink)
+    examined = []
+    hypotheses = []
+    source_functions = _taint_functions_referencing(port, source_info, examined)
+    sink_functions = _taint_functions_referencing(port, sink_info, examined)
+
+    for function_address in sorted(set(source_functions) & set(sink_functions)):
+        calls = _taint_calls_in_function(port, function_address)
+        source_at = _taint_site_for(calls, (source_info["addresses"] or [""])[0], source)
+        sink_at = _taint_site_for(calls, (sink_info["addresses"] or [""])[0], sink)
+        if not source_at or not sink_at:
+            continue
+        if _taint_address_key(sink_at) <= _taint_address_key(source_at):
+            hypotheses.append({
+                "confidence": "weak",
+                "reason": "the sink call precedes the source call in this function",
+                "source_call": source_at, "sink_call": sink_at,
+                "hops": [function_address]})
+            continue
+        hypotheses.append({
+            "confidence": "direct",
+            "reason": "source and sink are called in the same function, sink after source",
+            "source_call": source_at, "sink_call": sink_at,
+            "hops": [function_address]})
+
+    for source_function in sorted(set(source_functions) - set(sink_functions)):
+        for sink_function in sorted(sink_functions):
+            path = _taint_call_path(port, source_function, sink_function, max_depth)
+            hops = path.get("path") or []
+            if not hops:
+                continue
+            if path.get("truncated"):
+                hypotheses.append({
+                    "confidence": "weak",
+                    "reason": "the call-path search hit its cap; a path was not proven",
+                    "source_call": None, "sink_call": None,
+                    "hops": [str(hop) for hop in hops]})
+                continue
+            hypotheses.append({
+                "confidence": "reachable",
+                "reason": f"a call path connects the source's function to the sink's "
+                          f"({len(hops)} hop(s))",
+                "source_call": None, "sink_call": None,
+                "hops": [str(hop) for hop in hops]})
+
+    return {
+        "source": {"name": source, "addresses": source_info["addresses"],
+                   "sites": len(source_info["references"])},
+        "sink": {"name": sink, "addresses": sink_info["addresses"],
+                 "sites": len(sink_info["references"])},
+        "hypotheses": hypotheses,
+        "functions_examined": len(set(examined)),
+        "max_depth": max_depth,
+        "disclaimer": _TAINT_DISCLAIMER}
+
+
+def _taint_summarize(report: dict) -> dict:
+    hypotheses = report.get("hypotheses") or []
+    counts = {}
+    for item in hypotheses:
+        key = item.get("confidence") or "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return {"total": len(hypotheses), "direct": counts.get("direct", 0),
+            "reachable": counts.get("reachable", 0),
+            "weak": counts.get("weak", 0),
+            "found": bool(counts.get("direct") or counts.get("reachable"))}
+
+
+@mcp.tool()
+@text_output
+def analysis_taint(source: str, sink: str, max_depth: int = 8,
+                   port: int | None = None) -> dict:
+    """Hypothesise whether data from a source reaches a dangerous sink
+
+    Composes the references to each name, the pcode of the functions that call
+    them and the call graph. The answer is a set of hypotheses with evidence
+    addresses and a confidence - not proof of exploitability, and no finding is
+    not proof of safety.
+
+    Args:
+        source: Where the data enters (e.g. recv, ReadFile)
+        sink: Where it would be dangerous (e.g. system, WinExec)
+        max_depth: How many call hops to look for (default 8)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Hypotheses with confidence, source and sink call sites, and hops
+    """
+    port = _get_instance_port(port)
+    return {"success": True,
+            "result": _taint_find_hypotheses(port, source, sink, max_depth)}
 
 
 _TOOL_GROUPS = {

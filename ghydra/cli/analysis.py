@@ -581,3 +581,48 @@ def diff_cmd(ctx, a_host, a_port, b_host, b_port, no_strings):
             page_output(output, use_pager=config.page_output)
         else:
             click.echo(output)
+
+
+@analysis.command('taint')
+@click.option('--source', '-s', required=True,
+              help='Where the data enters (e.g. recv, ReadFile)')
+@click.option('--sink', '-t', required=True,
+              help='Where it would be dangerous (e.g. system, WinExec)')
+@click.option('--max-depth', type=int, default=8, show_default=True,
+              help='How many call hops to look for')
+@click.pass_context
+def taint_cmd(ctx, source, sink, max_depth):
+    """Hypothesise whether data from SOURCE reaches SINK (R5).
+
+    Composes the references to each name, the pcode of the functions that call
+    them and the call graph. The answer is a set of hypotheses with evidence
+    addresses and a confidence - not proof of exploitability.
+
+    \b
+    Example:
+        ghydra analysis taint --source recv --sink system
+        ghydra analysis taint -s ReadFile -t WinExec --max-depth 4
+    """
+    from ..taint import find_hypotheses, summarize, to_text as render_text
+
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    try:
+        report = find_hypotheses(client, source, sink, max_depth=max_depth)
+    except GhidraError as exc:
+        error_output = formatter.format_error(exc)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+    if ctx.obj.get('output_json'):
+        payload = dict(report)
+        payload["summary"] = summarize(report)
+        click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        output = render_text(report)
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)

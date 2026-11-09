@@ -738,11 +738,36 @@ def run_runbook_tests():
         return False
 
 
+def run_taint_tests():
+    """Run the source-to-sink hypothesis (R5) tests."""
+    print_header("Running Taint Hypothesis Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_taint.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running taint tests: {e}")
+        return False
+
+
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
     "--capability-summary", "--tasks", "--errors", "--context-pack", "--tool-groups", "--telemetry",
-    "--assertions", "--read-only", "--runbook",
+    "--assertions", "--read-only", "--runbook", "--taint",
 )
 
 SUITES = {
@@ -772,6 +797,7 @@ SUITES = {
     "--assertions": run_assertions_tests,
     "--read-only": run_read_only_tests,
     "--runbook": run_runbook_tests,
+    "--taint": run_taint_tests,
 }
 
 USAGE = (
@@ -779,7 +805,7 @@ USAGE = (
     "--comments | --port | --kuna | --x64dbg | --headless | --evidence | "
     "--triage | --rea | --surface | --capabilities | --scripts | "
     "--compatibility | --runner | --docs | --capability-summary | --tasks | --errors |"
-    " --context-pack | --assertions | --read-only | --runbook | --require-live]"
+    " --context-pack | --assertions | --read-only | --runbook | --taint | --require-live]"
     "  (suite flags may be combined)"
 )
 

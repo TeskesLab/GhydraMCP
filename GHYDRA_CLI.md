@@ -1384,3 +1384,20 @@ functions (by address; a rename is reported as a rename), the imports and the
 defined strings. `--no-strings` skips the last comparison, and `--a-host`/
 `--b-host` reach instances on another machine. A listing that could not be read
 to its end is reported as a floor, never as a removal.
+
+## Source-to-sink hypotheses (R5)
+
+```bash
+ghydra analysis taint --source recv --sink system
+ghydra analysis taint -s ReadFile -t WinExec --max-depth 4
+```
+
+Composes the references to both names, the pcode of the functions that call
+them and the call graph, and reports candidate flows with a confidence —
+`direct` (both calls in one function, sink after source), `reachable` (a call
+path connects them) or `weak` (the sink precedes the source, or the bounded
+search gave up). Every hypothesis carries its evidence addresses.
+
+This is a **lead generator, not a verdict**: branches are not modelled and a
+"nothing found" answer is not evidence of safety. The text answer says both
+things.
