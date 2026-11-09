@@ -158,6 +158,7 @@ from .assertions_cmd import assert_cmd
 from .audit import audit_cmd
 from .runbook_cmd import runbook as runbook_group
 from .mission_cmd import mission as mission_group
+from .cache_cmd import cache as cache_group
 
 cli.add_command(instances.instances)
 cli.add_command(functions.functions)
@@ -191,6 +192,7 @@ cli.add_command(assert_cmd)
 cli.add_command(audit_cmd)
 cli.add_command(runbook_group)
 cli.add_command(mission_group)
+cli.add_command(cache_group)
 cli.add_command(inspect_address.inspect_address)
 
 

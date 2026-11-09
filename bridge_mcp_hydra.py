@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.6.0"
+BRIDGE_VERSION = "v3.7.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -3183,6 +3183,30 @@ def format_mission_start(response: dict, **kwargs) -> str:
     return str(result.get("dossier") or "")
 
 
+def format_cache_stats(response: dict, **kwargs) -> str:
+    """The cache: entries, bytes, programs, age."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+
+    def when(value):
+        if not isinstance(value, (int, float)):
+            return "?"
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(value))
+
+    return "\n".join([
+        f"Decompile cache: {result.get('path', '?')}",
+        f"  entries: {result.get('entries', 0)}  "
+        f"bytes: {result.get('bytes', 0)} of {result.get('max_bytes', 0)}",
+        f"  programs: {result.get('programs', 0)}  "
+        f"kinds: {', '.join(result.get('kinds') or []) or '-'}",
+        f"  oldest: {when(result.get('oldest'))}  "
+        f"newest: {when(result.get('newest'))}",
+    ])
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -3315,6 +3339,8 @@ FORMATTERS = {
     "analysis_diff": format_analysis_diff,
     "analysis_taint": format_analysis_taint,
     "mission_start": format_mission_start,
+    "cache_stats": format_cache_stats,
+    "cache_clear": format_cache_stats,
 }
 
 
@@ -4726,6 +4752,7 @@ def functions_decompile(name: str | None = None, address: str | None = None,
                         syntax_tree: bool = False, style: str = "normalize",
                         show_constants: bool = True, timeout: int = DEFAULT_DECOMPILATION_TIMEOUT,
                         start_line: int | None = None, end_line: int | None = None, max_lines: int | None = None,
+                        use_cache: bool = False, max_age: int = 86400,
                         port: int | None = None) -> dict:
     """Get decompiled code for a function with optional line filtering and configurable options
 
@@ -4739,6 +4766,8 @@ def functions_decompile(name: str | None = None, address: str | None = None,
         start_line: Start at this line number (1-indexed, optional)
         end_line: End at this line number (inclusive, optional)
         max_lines: Maximum number of lines to return (optional, takes precedence over end_line)
+        use_cache: Serve an unchanged program from the local cache (default False)
+        max_age: How old a cached answer may be, in seconds (default 86400)
         port: Specific Ghidra instance port (optional)
 
     Returns:
@@ -4787,7 +4816,12 @@ def functions_decompile(name: str | None = None, address: str | None = None,
     else:
         endpoint = f"functions/by-name/{quote(name)}/decompile"
 
-    response = safe_get(port, endpoint, params)
+    if use_cache:
+        response, _cached = _cache_get_or_compute(
+            port, "decompile", {"endpoint": endpoint, "params": params},
+            lambda: safe_get(port, endpoint, params), max_age=max_age)
+    else:
+        response = safe_get(port, endpoint, params)
     simplified = simplify_response(response)
 
     return simplified
@@ -12032,9 +12066,243 @@ def mission_start(goal: str, max_calls: int = 60, max_tokens: int = 200000,
                        "mission": mission.as_dict()}}
 
 
+# ================= Decompile cache (I11) =================
+# Duplicated from ghydra/cache.py: the bridge is a standalone script and must
+# not import the ghydra package. test_cache.py asserts the two sides agree on
+# the identity, the key and the stored shape.
+
+_CACHE_VERSION = 1
+_CACHE_DEFAULT_MAX_BYTES = 50_000_000
+_CACHE_DEFAULT_MAX_AGE = 24 * 60 * 60
+_CACHE_IDENTITY_FIELDS = ("programId", "path", "executablePath", "language",
+                          "languageId", "imageBase", "creationDate")
+_CACHE_STATISTIC_FIELDS = ("functionCount", "symbolCount", "memoryBlockCount")
+
+
+def _cache_canonical(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"), default=str)
+
+
+def _cache_digest(value: Any) -> str:
+    return hashlib.sha256(_cache_canonical(value).encode("utf-8")).hexdigest()
+
+
+def _cache_root() -> str:
+    base = os.environ.get("GHYDRA_STATE_DIR")
+    root = base if base else os.path.join(os.path.expanduser("~"), ".ghydra")
+    return os.path.join(root, "cache")
+
+
+def _cache_entries_dir() -> str:
+    return os.path.join(_cache_root(), f"v{_CACHE_VERSION}")
+
+
+def _cache_program_identity(port: int) -> dict:
+    response = safe_get(port, "program")
+    payload = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(payload, dict):
+        return {}
+    identity = {key: payload[key] for key in _CACHE_IDENTITY_FIELDS
+                if payload.get(key) is not None}
+    statistics = payload.get("statistics")
+    if isinstance(statistics, dict):
+        identity["statistics"] = {key: statistics[key]
+                                  for key in _CACHE_STATISTIC_FIELDS
+                                  if statistics.get(key) is not None}
+    return identity
+
+
+def _cache_key(identity: dict, kind: str, request: dict) -> str:
+    return _cache_digest({"version": _CACHE_VERSION, "kind": kind,
+                          "program": identity, "request": request})
+
+
+def _cache_entry_path(key: str) -> str:
+    return os.path.join(_cache_entries_dir(), key[:2], f"{key}.json")
+
+
+def _cache_get(key: str, max_age: int = _CACHE_DEFAULT_MAX_AGE):
+    try:
+        with open(_cache_entry_path(key), encoding="utf-8") as handle:
+            entry = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(entry, dict):
+        return None
+    created = entry.get("created")
+    if not isinstance(created, (int, float)):
+        return None
+    if max_age > 0 and time.time() - created > max_age:
+        return None
+    if not isinstance(entry.get("response"), dict):
+        return None
+    return entry
+
+
+def _cache_put(key: str, identity: dict, kind: str, request: dict,
+               response: dict, max_bytes: int = _CACHE_DEFAULT_MAX_BYTES) -> bool:
+    if not isinstance(response, dict):
+        return False
+    path = _cache_entry_path(key)
+    entry = {"key": key, "created": time.time(), "kind": kind,
+             "program": identity, "request": request, "response": response}
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(_cache_canonical(entry))
+        os.replace(temporary, path)
+    except OSError:
+        return False
+    _cache_evict(max_bytes)
+    return True
+
+
+def _cache_iter_entries() -> list:
+    found = []
+    root = _cache_entries_dir()
+    if not os.path.isdir(root):
+        return found
+    for bucket in sorted(os.listdir(root)):
+        bucket_path = os.path.join(root, bucket)
+        if not os.path.isdir(bucket_path):
+            continue
+        for name in sorted(os.listdir(bucket_path)):
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(bucket_path, name)
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    entry = json.load(handle)
+            except (OSError, ValueError):
+                entry = {}
+            found.append((path, entry if isinstance(entry, dict) else {}, size))
+    return found
+
+
+def _cache_stats() -> dict:
+    entries = _cache_iter_entries()
+    created = [entry["created"] for _path, entry, _size in entries
+               if isinstance(entry.get("created"), (int, float))]
+    return {"path": _cache_entries_dir(), "entries": len(entries),
+            "bytes": sum(size for _p, _e, size in entries),
+            "max_bytes": _CACHE_DEFAULT_MAX_BYTES,
+            "oldest": min(created) if created else None,
+            "newest": max(created) if created else None,
+            "programs": len({_cache_canonical(entry.get("program"))
+                             for _p, entry, _s in entries}),
+            "kinds": sorted({str(entry.get("kind")) for _p, entry, _s in entries
+                             if entry.get("kind")})}
+
+
+def _cache_clear() -> int:
+    removed = 0
+    for path, _entry, _size in _cache_iter_entries():
+        try:
+            os.unlink(path)
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def _cache_evict(max_bytes: int = _CACHE_DEFAULT_MAX_BYTES) -> int:
+    entries = _cache_iter_entries()
+    total = sum(size for _p, _e, size in entries)
+    if total <= max_bytes:
+        return 0
+    removed = 0
+
+    def age(item):
+        path, entry, _size = item
+        created = entry.get("created")
+        if isinstance(created, (int, float)):
+            return created
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0.0
+
+    for path, _entry, size in sorted(entries, key=age):
+        if total <= max_bytes:
+            break
+        try:
+            os.unlink(path)
+            total -= size
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def _cache_get_or_compute(port: int, kind: str, request: dict, compute,
+                          identity=None, max_age: int = _CACHE_DEFAULT_MAX_AGE):
+    """Serve from the cache, or compute and store. (response, cached)"""
+    identity = identity if identity is not None else _cache_program_identity(port)
+    if not identity:
+        return compute(), False
+    key = _cache_key(identity, kind, request)
+    if max_age == 0:
+        response = compute()
+        if isinstance(response, dict) and response.get("success", False):
+            _cache_put(key, identity, kind, request, response)
+        return response, False
+    entry = _cache_get(key, max_age=max_age)
+    if entry is not None:
+        return entry["response"], True
+    response = compute()
+    if isinstance(response, dict) and response.get("success", False):
+        _cache_put(key, identity, kind, request, response)
+    return response, False
+
+
+@mcp.tool()
+@text_output
+def cache_stats(port: int | None = None) -> dict:
+    """Show what the local decompile cache holds
+
+    The cache is opt-in (``functions_decompile(use_cache=True)``), local only,
+    bounded, and keyed on the program the answer belongs to.
+
+    Args:
+        port: Unused; accepted for symmetry with the other tools (optional)
+
+    Returns:
+        dict: Entries, bytes, programs, kinds and the age of the cache
+    """
+    return {"success": True, "result": _cache_stats()}
+
+
+@mcp.tool()
+@text_output
+def cache_clear(port: int | None = None) -> dict:
+    """Remove every cached decompile answer
+
+    Needed when a program is edited in a way the cache cannot see: the server
+    exposes no modification counter, so a rename does not change the identity
+    the key is built from.
+
+    Args:
+        port: Unused; accepted for symmetry with the other tools (optional)
+
+    Returns:
+        dict: How many entries were removed
+    """
+    removed = _cache_clear()
+    return {"success": True,
+            "result": {"removed": removed,
+                       "message": f"Removed {removed} cached entr"
+                                  f"{'y' if removed == 1 else 'ies'}."}}
+
+
 _TOOL_GROUPS = {
     "core": {"programs", "project", "projects", "instances", "ui", "doctor",
-             "evidence", "session", "tasks", "tools", "mission"},
+             "evidence", "session", "tasks", "tools", "mission", "cache"},
     "functions": {"functions", "analysis", "inspect", "variables", "memory"},
     "data": {"data", "xrefs", "scalars", "comments", "segments"},
     "types": {"structs", "datatypes", "classes", "raw", "symbols",

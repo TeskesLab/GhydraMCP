@@ -7,7 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **`mission_start` on the bridge**: mission mode now has a tool as well as a
+- **Decompile cache on disk (I11)**: decompilation is the expensive call in
+  this API, and a session that revisits a function paid for it again.
+  `ghydra functions decompile --cache` (CLI) and
+  `functions_decompile(use_cache=True)` (bridge) now serve an unchanged program
+  from `~/.ghydra/cache`, keyed on the program's identity — `programId`,
+  `path`, `language`, `imageBase`, `creationDate` and the reported statistics —
+  so a different binary never reads another one's answer. The server exposes no
+  modification counter, so the cache is **opt-in**, has a **max age** (24 h by
+  default, `--max-age 0` forces a fresh answer), is **bounded** (50 MB, oldest
+  evicted first) and can be inspected and cleared with `ghydra cache
+  stats|path|clear` (`cache_stats` / `cache_clear` on the bridge). A cache
+  failure is never a failed call: a full disk costs a re-decompile. The note
+  that an answer came from the cache goes to **stderr**, so the answer itself
+  stays parseable. `test_cache.py` covers the identity, the key, the age, the
+  bound, eviction, the unwritable disk, the CLI and the bridge, and asserts the
+  two sides compute the same key and read each other's entries.- **`mission_start` on the bridge**: mission mode now has a tool as well as a
   CLI, so the three surfaces agree. `mission_start(goal, max_calls, max_tokens,
   output, verify)` runs the same plan through the bridge's own primitives, writes
   the dossier to `~/.ghydra/missions/<id>.md` and answers with it. The bridge

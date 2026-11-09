@@ -1429,3 +1429,26 @@ The state is checkpointed after every step, and `resume` keeps what was spent
 while allowing the limits to be raised.
 
 O mesmo plano existe como tool no bridge (mission_start), sem checkpoint — o bridge é stateless; esume é da CLI.
+
+## Decompile cache (I11)
+
+```bash
+ghydra functions decompile --address 0x401000 --cache
+ghydra functions decompile -n main --cache --max-age 3600
+ghydra cache stats        # entries, bytes, programs, age
+ghydra cache path         # the directory
+ghydra cache clear        # after editing a program the cache cannot see
+```
+
+The cache is **opt-in** and keyed on the program's identity (programId, path,
+language, image base, creation date, reported statistics), so a different
+binary never reads another one's answer. It is bounded at 50 MB (oldest
+evicted), expires after `--max-age` seconds (default 24 h; `0` forces a fresh
+answer) and cannot break a call — a disk failure costs a re-decompile.
+
+When an answer comes from the cache the CLI says so on **stderr**, so the
+answer on stdout stays parseable.
+
+The server exposes no modification counter, which is why the cache is opt-in:
+a rename does not change the identity it can see. `ghydra cache clear` exists
+for that case.
