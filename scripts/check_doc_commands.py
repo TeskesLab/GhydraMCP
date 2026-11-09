@@ -67,7 +67,7 @@ def scan(text: str, groups=None) -> list:
         if stripped.startswith("```"):
             in_fence = not in_fence
             continue
-        if not in_fence:
+        if not in_fence and not getattr(scan, "everything", False):
             continue
         match = COMMAND.match(line)
         if not match:
@@ -106,6 +106,8 @@ def scan(text: str, groups=None) -> list:
 def problems_in(relative: str, text: str) -> list:
     """Every command the document shows that the CLI does not have."""
     commands = _tree()
+    # A shell script has no fences: every `ghydra …` line in it is a command.
+    scan.everything = relative.endswith(".sh")
     problems = []
     for number, group, sub, flags in scan(text, commands):
         command = commands.get(group)
@@ -134,10 +136,18 @@ def problems_in(relative: str, text: str) -> list:
     return problems
 
 
+def _documents() -> list:
+    """The files whose `ghydra …` lines are a promise: docs and example scripts."""
+    paths = sorted(glob.glob(os.path.join(ROOT, "*.md")))
+    paths.extend(sorted(glob.glob(os.path.join(ROOT, "examples", "**", "*.sh"),
+                                  recursive=True)))
+    return paths
+
+
 def main() -> int:
     problems = []
-    for path in sorted(glob.glob(os.path.join(ROOT, "*.md"))):
-        relative = os.path.basename(path)
+    for path in _documents():
+        relative = os.path.relpath(path, ROOT).replace(os.sep, "/")
         with io.open(path, encoding="utf-8") as handle:
             problems.extend(problems_in(relative, handle.read()))
     if problems:

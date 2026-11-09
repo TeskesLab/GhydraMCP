@@ -7,6 +7,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Four examples, one of them runnable with nothing installed — and the suite that
+  proves it**: `examples/` was one CI workflow and a JSON file; it is now an index
+  of four jobs, each with what it needs and what to look for in the output.
+  `examples/twin/` is the offline one: a snapshot and the queries it answers with
+  **no Ghidra running**, and the snapshot says in its own README that it is
+  synthetic — an example that pretends to be a real analysis teaches the wrong
+  thing. `examples/mission/mission.sh` and `examples/fleet/fleet.sh` are complete
+  scripts that start what they need, run the job, and stop it even when the job
+  fails, with the traps called out where they happen.
+  The suite (`test_examples.py`, wired as `--examples` and into CI) does the part
+  that makes examples trustworthy: it **runs** the offline queries and compares
+  the output, validates `asserts.json` against `ASSERTION_KINDS` (which caught
+  three kinds the README had invented: `has_export`,
+  `function_count_at_least`, `has_segment`), checks that every path the index
+  names exists, and loads the snapshot through `ghydra/twin.py` — version, md5 and
+  completeness. The command guard now reads the example **scripts** too, not just
+  the Markdown fences, so a flag that stops existing in
+  `examples/mission/mission.sh` fails the build.
 - **A generated cheat sheet, and the guard that proves every documented command
   exists**: [GHYDRA_CHEATSHEET.md](GHYDRA_CHEATSHEET.md) is one line per command —
   the 21 that get used most, then all of them, with the first line of each

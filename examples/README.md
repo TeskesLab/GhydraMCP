@@ -1,114 +1,81 @@
-# Reverse engineering as a CI test
+# Examples
 
-This directory is the smallest useful example of the thing that makes this
-project different from a Ghidra wrapper: **an analysis that a pipeline can gate
-on.**
+Four examples, in the order you should read them. Two run with **nothing
+installed but the CLI**; two need a Ghidra instance, because the thing they
+demonstrate is a question to a live program.
 
-Two files:
-
-| File | What it is |
-| --- | --- |
-| [`asserts.json`](asserts.json) | eight assertions — the shape of the binary you expect |
-| [`ci/analyze.yml`](ci/analyze.yml) | a GitHub Actions workflow that runs them and publishes SARIF |
-
-Copy them into your own repository, change the `BINARY` and the assertions, and
-your CI starts failing when a build stops looking like it should.
-
----
-
-## Run it locally
-
-The assertions are checked against a **running instance**. Start one headless on
-the binary you care about (any binary — here, a small Windows tool):
-
-```bash
-ghydra headless start /path/to/binary --port 8192
-ghydra assert -f examples/asserts.json
-```
-
-Text output, one line per assertion, with the evidence that decided it:
-
-```
-Assertions: 8 (7 passed, 1 failed, 0 inconclusive)
-  [PASS] A1 has_function main
-         scanned 0 of 0 entries; matched 'main'
-  [FAIL] A2 no_import CreateRemoteThread
-         scanned 412 of 412 entries; matched 'CreateRemoteThread'
-  ...
-```
-
-Exit codes: `0` all passed, `1` at least one failed, `2` the file or the instance
-could not be used — so a pipeline can tell "the binary is wrong" from "the check
-did not run".
-
-The other formats are for machines:
-
-```bash
-ghydra assert -f examples/asserts.json --format junit -o report.xml
-ghydra assert -f examples/asserts.json --format sarif -o report.sarif
-```
-
-Finally:
-
-```bash
-ghydra headless stop
-```
-
----
-
-## Run it in CI
-
-[`ci/analyze.yml`](ci/analyze.yml) is a template — copy it to
-`.github/workflows/analyze.yml` **in your repository** (not this one: it expects
-your binary). It:
-
-1. installs the CLI (`pip install -e .` from a checkout, or `pip install ghydra`),
-2. starts a headless run on the artifact you built,
-3. runs the assertions with `--format sarif`,
-4. uploads the SARIF to code scanning **and keeps the JUnit report as an artifact**,
-5. stops the run even when the assertions fail (`if: always()`).
-
-The interesting step is the fourth: a binary that loses a property it used to
-have now shows up where a reviewer already looks — in the security tab — instead
-of in a log nobody reads.
-
----
-
-## The eight kinds of assertion
-
-| Kind | Question | Reads |
+| Example | Needs | What it shows |
 | --- | --- | --- |
-| `has_import` / `no_import` | does the binary import this symbol? | the import listing |
-| `has_string` / `no_string` | does it contain this text? | the defined strings |
-| `has_function` / `no_function` | is there a function by this name? | the function table |
-| `has_xref_to` | does anything reference this name? | the references |
-| `reaches` | does `from` reach `to` in the call graph? | the call path search |
-
-A field worth knowing: **`message`**. It is printed on failure and put in the
-`failure` element of the JUnit report, so the person reading the red build learns
-*why* the assertion exists, not just that it broke.
+| [`twin/`](twin/) | nothing | a snapshot that answers queries with no Ghidra running |
+| [`asserts.json`](asserts.json) + [`ci/`](ci/) | a Ghidra instance | the analysis as a CI gate: assertions, exit codes, SARIF |
+| [`mission/`](mission/) | a Ghidra instance | a goal against a hard budget, with a dossier that re-reads its evidence |
+| [`fleet/`](fleet/) | two Ghidra instances | one question across several binaries, merged by file |
 
 ---
 
-## Two rules that make the result trustworthy
+## `twin/` — answer again with Ghidra closed
 
-**A truncated listing is not proof.** `no_import` and `no_string` can only pass
-when the listing was read to its end. If the page cap was hit, the verdict is
-`inconclusive` — never `pass` — and the evidence says the listing was truncated.
-Proving the *absence* of an import from half a list is a lie a CI gate cannot
-afford.
+```bash
+ghydra twin query examples/twin/example-snapshot.json
+ghydra twin query examples/twin/example-snapshot.json --kind functions --match Parse
+ghydra twin query examples/twin/example-snapshot.json --kind function --match ParseConfig
+ghydra twin diff examples/twin/example-snapshot.json examples/twin/example-snapshot.json
+```
 
-**Inconclusive does not fail the build.** `1` means a property was violated; an
-`inconclusive` verdict means the question could not be answered (raise the page
-cap, or narrow the assertion). The exit code keeps them apart on purpose.
+```
+Twin: example.dll (built 2026-11-09 04:53 UTC from http://localhost:8192)
+  functions: 6, imports: 4, exports: 2, strings: 5
+```
+
+**The snapshot is synthetic**, and says so in its README: six functions, four
+imports and five strings invented to look like a real program. It is here so the
+example runs anywhere and prints the same thing every time — `test_examples.py`
+asserts that it does. To make a real one: `ghydra twin build --name <name>`.
+
+## `asserts.json` and `ci/` — the analysis as a gate
+
+```bash
+ghydra assert -f examples/asserts.json                       # text, exit 0/1/2
+ghydra assert -f examples/asserts.json --format sarif -o report.sarif
+ghydra assert -f examples/asserts.json --format junit -o report.xml
+```
+
+The eight assertions are the ones worth having by default: the entry point
+exists, the injection pair is absent, the interesting strings are present. The
+`ci/analyze.yml` workflow is a complete GitHub Actions job that analyses a
+binary, runs the assertions, uploads the SARIF and fails the build.
+
+**The eight kinds are the contract** — and only these exist:
+`has_import`, `no_import`, `has_string`, `no_string`, `has_function`,
+`no_function`, `has_xref_to`, `reaches`. `test_examples.py` fails if this file, or
+`asserts.json`, ever names one that does not.
+
+## `mission/` — a goal, a budget, a dossier
+
+```bash
+bash examples/mission/mission.sh              # starts a headless run, runs the mission, stops it
+```
+
+The script shows the whole shape: a goal in prose, a budget, and the dossier that
+comes out — with a `not determined` section and a `verification` section that
+re-reads every piece of evidence before keeping a conclusion.
+
+## `fleet/` — one question, several binaries
+
+```bash
+bash examples/fleet/fleet.sh 'C:\Windows\System32\where.exe' 'C:\Windows\System32\whoami.exe'
+```
+
+Starts two headless instances on two ports, asks the same question of both, and
+prints the merged table — one row per **file**, with an unreachable instance
+reported as unreachable rather than as "does not have it".
 
 ---
 
-## Where to go next
+## How the examples are kept true
 
-- `ghydra analysis context-pack -q "what does this function do?" -a 0x401000` —
-  one budgeted dossier instead of a dozen calls.
-- `ghydra runbook record` / `replay --fail-on-change` — when the *whole session*
-  should be reproducible, not just eight properties.
-- `ghydra analysis diff --a-port 8192 --b-port 8193` — what changed between two
-  builds, as a report.
+`test_examples.py` (suite `--examples`, run by CI) does four things: it runs the
+offline example and compares the output, it validates `asserts.json` against the
+kinds the code has, it checks that every path this README names exists, and it
+loads the snapshot through `ghydra/twin.py` and checks its version and md5. An
+example that stops working fails the build.
