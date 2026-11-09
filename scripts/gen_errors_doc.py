@@ -29,7 +29,8 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DOCUMENT = os.path.join(ROOT, "GHYDRA_ERRORS.md")
+DOCS = os.path.join(ROOT, "docs")
+DOCUMENT = os.path.join(DOCS, "GHYDRA_ERRORS.md")
 
 JAVA_PATTERN = re.compile(
     r'Response\.error\([^,]+,[^,]+,\s*"([A-Z0-9_]+)",\s*(?:"([^"]{0,120})"|([A-Za-z_][\w.]*))')

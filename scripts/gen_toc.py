@@ -31,19 +31,19 @@ BEGIN = "<!-- toc -->"
 END = "<!-- /toc -->"
 
 #: The documents that get an index, and how deep it goes.
-INDEXED = {
-    "GHIDRA_HTTP_API.md": 3,
-    "GHYDRA_CLI.md": 3,
+INDEXED = {  # paths relative to the repository
+    "docs/GHIDRA_HTTP_API.md": 3,
+    "docs/GHYDRA_CLI.md": 3,
     # The medium guides: their sections are few enough for a level-2 index,
     # which is what a reader needs to see the shape of the page.
-    "GHYDRA_GETTING_STARTED.md": 2,
-    "GHYDRA_CONCEPTS.md": 2,
-    "GHYDRA_RECIPES.md": 2,
-    "GHYDRA_TROUBLESHOOTING.md": 2,
-    "GHYDRA_OUTPUT.md": 2,
-    "GHYDRA_BSIM.md": 2,
-    "ARCHITECTURE.md": 2,
-    "TESTING.md": 2,
+    "docs/GHYDRA_GETTING_STARTED.md": 2,
+    "docs/GHYDRA_CONCEPTS.md": 2,
+    "docs/GHYDRA_RECIPES.md": 2,
+    "docs/GHYDRA_TROUBLESHOOTING.md": 2,
+    "docs/GHYDRA_OUTPUT.md": 2,
+    "docs/GHYDRA_BSIM.md": 2,
+    "docs/ARCHITECTURE.md": 2,
+    "docs/TESTING.md": 2,
 }
 
 

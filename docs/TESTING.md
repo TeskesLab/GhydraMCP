@@ -26,7 +26,7 @@ This document describes how to test the GhydraMCP plugin and bridge.
 
 ## Where the suites live
 
-The suites are the `test_*.py` files in [`tests/`](tests/). The runner stays at
+The suites are the `test_*.py` files in [`tests/`](../tests/). The runner stays at
 the repository root because CI and the documentation call `python run_tests.py`
 there; it builds every suite command from one helper, so a suite only has to
 exist in `tests/` to be runnable.

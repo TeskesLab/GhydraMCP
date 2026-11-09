@@ -29,7 +29,8 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BRIDGE = os.path.join(ROOT, "bridge_mcp_hydra.py")
-DOCUMENT = os.path.join(ROOT, "GHYDRA_TOOLS.md")
+DOCS = os.path.join(ROOT, "docs")
+DOCUMENT = os.path.join(DOCS, "GHYDRA_TOOLS.md")
 
 REQUEST_VERBS = ("safe_get", "safe_post", "safe_patch", "safe_put", "safe_delete")
 

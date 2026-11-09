@@ -14,7 +14,7 @@
 <!-- /toc -->
 
 How the pieces fit, and why they are shaped this way. Read this before changing
-something structural; [AGENTS.md](AGENTS.md) has the day-to-day rules.
+something structural; [AGENTS.md](../AGENTS.md) has the day-to-day rules.
 
 ---
 

@@ -228,5 +228,5 @@ per-tool latency from the local log, which is a better starting point than a gue
 
 - [TESTING.md](TESTING.md) — which suite proves which contract;
 - [GHYDRA_CONCEPTS.md](GHYDRA_CONCEPTS.md) — the envelope, completeness, budgets;
-- [AGENTS.md](AGENTS.md) — the conventions, including the known drift that is not
+- [AGENTS.md](../AGENTS.md) — the conventions, including the known drift that is not
   a bug (Ghidra 12.2's JDK, the `lib/` jars, the loading of the extension).

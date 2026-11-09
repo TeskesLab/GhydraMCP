@@ -1,6 +1,6 @@
 # Internals: the drift, the REA gaps and the composed calls
 
-Reference material split out of [AGENTS.md](AGENTS.md) so that file fits the
+Reference material split out of [AGENTS.md](../AGENTS.md) so that file fits the
 instruction budget. Open this when a symptom points at it.
 
 `AGENTS.md` holds the rules that apply to every change; this page holds the

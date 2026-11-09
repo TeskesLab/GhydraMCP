@@ -811,7 +811,8 @@ class KunaErrorTaxonomyTests(unittest.TestCase):
 class KunaDocumentationTests(unittest.TestCase):
     """The reference must describe the code that actually exists."""
 
-    DOC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "GHYDRA_KUNA.md")
+    DOC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                   "docs", "GHYDRA_KUNA.md")
 
     def setUp(self):
         with open(self.DOC, "r", encoding="utf-8") as handle:

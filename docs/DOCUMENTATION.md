@@ -14,7 +14,7 @@ are trying to do**, not by where the code lives.
 
 | If you want to… | Read | It is |
 | --- | --- | --- |
-| install and get a first answer | [README.md](README.md) → [GHYDRA_GETTING_STARTED.md](GHYDRA_GETTING_STARTED.md) | onboarding |
+| install and get a first answer | [README.md](../README.md) → [GHYDRA_GETTING_STARTED.md](GHYDRA_GETTING_STARTED.md) | onboarding |
 | understand how the pieces fit | [GHYDRA_CONCEPTS.md](GHYDRA_CONCEPTS.md) | the mental model |
 | do a specific job | [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) | task recipes with real commands |
 | translate an answer that looks wrong | [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md) | error codes → cause → fix |
@@ -28,7 +28,7 @@ are trying to do**, not by where the code lives.
 | run without a window | [GHYDRA_HEADLESS.md](GHYDRA_HEADLESS.md) | headless runs and the report |
 | use Kuna | [GHYDRA_KUNA.md](GHYDRA_KUNA.md) | the decompiler integration, and its costs |
 | use x64dbg | [GHYDRA_X64DBG.md](GHYDRA_X64DBG.md) | the debugger integration, the address model |
-| contribute code | [AGENTS.md](AGENTS.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [ARCHITECTURE.md](ARCHITECTURE.md) | conventions, workflow, internals |
+| contribute code | [AGENTS.md](../AGENTS.md) · [CONTRIBUTING.md](../CONTRIBUTING.md) · [ARCHITECTURE.md](ARCHITECTURE.md) | conventions, workflow, internals |
 | look up a verified rough edge | [GHYDRA_INTERNALS.md](GHYDRA_INTERNALS.md) | known drift, the REA gaps, the composed calls |
 | run or add tests | [TESTING.md](TESTING.md) | the 23 suites and what each proves |
 | cut a release | [RELEASING.md](RELEASING.md) | the one-tag procedure |
@@ -37,7 +37,7 @@ are trying to do**, not by where the code lives.
 
 ## Reading paths
 
-**An analyst who wants answers.** [README](README.md) → [GETTING
+**An analyst who wants answers.** [README](../README.md) → [GETTING
 STARTED](GHYDRA_GETTING_STARTED.md) → [RECIPES](GHYDRA_RECIPES.md). The catalogue
 and the references are lookup tables, not reading.
 
@@ -46,7 +46,7 @@ envelope, pagination, read-only mode, exit codes) → [RECIPES](GHYDRA_RECIPES.m
 (the CI gate) → [GHYDRA_TOOLS](GHYDRA_TOOLS.md) for the exact tool names.
 
 **A contributor.** [ARCHITECTURE](ARCHITECTURE.md) (the three tiers and the
-single core) → [AGENTS](AGENTS.md) (the rules: EDT, transactions, the generated
+single core) → [AGENTS](../AGENTS.md) (the rules: EDT, transactions, the generated
 blocks) → [TESTING](TESTING.md) (what a change must keep green).
 
 **Someone debugging.** [TROUBLESHOOTING](GHYDRA_TROUBLESHOOTING.md) first: most
@@ -68,3 +68,17 @@ or a feature that is off by design.
 - **Limits are stated next to the feature.** Every answer that could be
   over-read (a similarity match, a source-to-sink hypothesis, a snapshot) says
   what it is not, and the guides repeat it.
+
+---
+
+## History and proposals
+
+These are working documents, kept because the reasoning is worth more than the
+conclusion. They are **not** reference material: read the status line before you
+act on one.
+
+| Document | Status | What it argues |
+| --- | --- | --- |
+| [KUNA-MCP-ANALYSIS.md](KUNA-MCP-ANALYSIS.md) | **implemented** | whether the Kuna parameters belong in MCP, and as RAG |
+| [UNIFICATION-PLAN.md](UNIFICATION-PLAN.md) | **proposal** | unifying this project with the x64dbg MCP server |
+| [plans/2026-04-23-central-plugin-refactor.md](plans/2026-04-23-central-plugin-refactor.md) | **a design note** | one HTTP server on 8192 instead of a port per CodeBrowser |

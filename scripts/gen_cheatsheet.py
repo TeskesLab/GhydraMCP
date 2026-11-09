@@ -20,7 +20,8 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DOCUMENT = os.path.join(ROOT, "GHYDRA_CHEATSHEET.md")
+DOCS = os.path.join(ROOT, "docs")
+DOCUMENT = os.path.join(DOCS, "GHYDRA_CHEATSHEET.md")
 
 #: The commands people reach for first. Hand-written, and checked as a set: the
 #: generator fails if one of these is not a real command any more.

@@ -31,7 +31,7 @@ The two debugger sides share one model of addresses, so a static address from Gh
 into a live one for x64dbg — and a breakpoint the assistant sets lands on the instruction the
 static analysis was talking about.
 
-Documentation is mapped in [DOCUMENTATION.md](DOCUMENTATION.md); the tool catalogue is
+Documentation is mapped in [DOCUMENTATION.md](docs/DOCUMENTATION.md); the tool catalogue is
 generated, so it cannot fall behind the code.
 
 Neither of the two new integrations changes the Ghidra REST API: `API_VERSION` is still **3000**,
@@ -89,7 +89,7 @@ The plugin started as a set of endpoints. Most of what it answers now is
 
 Measured numbers, not estimates: BSim ingest of `where.exe` — 94 functions in
 3.1 s; a snapshot answers a name search **715x** faster than the API and builds in
-66 ms (see [GHYDRA_BSIM.md](GHYDRA_BSIM.md) and `scripts/bench_twin.py`).
+66 ms (see [GHYDRA_BSIM.md](docs/GHYDRA_BSIM.md) and `scripts/bench_twin.py`).
 
 ### What it does not do
 
@@ -107,30 +107,30 @@ Measured numbers, not estimates: BSim ingest of `where.exe` — 94 functions in
 
 ## Documentation
 
-**Start at [DOCUMENTATION.md](DOCUMENTATION.md)** — it is the map: what to read
+**Start at [DOCUMENTATION.md](docs/DOCUMENTATION.md)** — it is the map: what to read
 for which job, and the reading paths by audience.
 
 | Document | What is in it |
 | --- | --- |
-| [DOCUMENTATION.md](DOCUMENTATION.md) | The map of all documentation |
-| [GHYDRA_GETTING_STARTED.md](GHYDRA_GETTING_STARTED.md) | Install → first dossier, with real output |
-| [GHYDRA_CONCEPTS.md](GHYDRA_CONCEPTS.md) | The mental model: surfaces, envelope, budgets, profiles |
-| [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) | Twelve jobs with their commands and traps |
-| [GHYDRA_TOOLS.md](GHYDRA_TOOLS.md) | **Generated** catalogue of the 134 tools |
-| [GHYDRA_ERRORS.md](GHYDRA_ERRORS.md) | **Generated** reference of every error code |
-| [GHYDRA_CHEATSHEET.md](GHYDRA_CHEATSHEET.md) | **Generated** one line per command |
-| [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md) | Symptom → cause → fix |
-| [GHYDRA_OUTPUT.md](GHYDRA_OUTPUT.md) | Text vs JSON vs table vs report, the envelope, exit codes |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | The tiers, the single core, the rules that hold them |
-| [GHYDRA_INTERNALS.md](GHYDRA_INTERNALS.md) | Known drift, the REA gaps, the composed calls |
-| [GHYDRA_CLI.md](GHYDRA_CLI.md) | The whole command-line surface, command by command |
-| [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) | The REST reference — 106 routes, `API_VERSION` 3000 |
-| [GHYDRA_BSIM.md](GHYDRA_BSIM.md) | Signature similarity: setup, building a corpus, querying, applying a match, comparing versions, and the traps measured on Ghidra 12.2 |
-| [GHYDRA_HEADLESS.md](GHYDRA_HEADLESS.md) | The API with no window: `ghydra headless start/stop`, and the report |
-| [GHYDRA_KUNA.md](GHYDRA_KUNA.md) | The Kuna decompiler integration: opt-in, exports, measured costs |
-| [GHYDRA_X64DBG.md](GHYDRA_X64DBG.md) | The debugger integration: contract, address model, retry rules |
-| [TESTING.md](TESTING.md) | How to run the 23 suites, and what each of them proves |
-| [REA_PARITY.md](REA_PARITY.md) | The comparison against another agent's tool catalogue |
+| [DOCUMENTATION.md](docs/DOCUMENTATION.md) | The map of all documentation |
+| [GHYDRA_GETTING_STARTED.md](docs/GHYDRA_GETTING_STARTED.md) | Install → first dossier, with real output |
+| [GHYDRA_CONCEPTS.md](docs/GHYDRA_CONCEPTS.md) | The mental model: surfaces, envelope, budgets, profiles |
+| [GHYDRA_RECIPES.md](docs/GHYDRA_RECIPES.md) | Twelve jobs with their commands and traps |
+| [GHYDRA_TOOLS.md](docs/GHYDRA_TOOLS.md) | **Generated** catalogue of the 134 tools |
+| [GHYDRA_ERRORS.md](docs/GHYDRA_ERRORS.md) | **Generated** reference of every error code |
+| [GHYDRA_CHEATSHEET.md](docs/GHYDRA_CHEATSHEET.md) | **Generated** one line per command |
+| [GHYDRA_TROUBLESHOOTING.md](docs/GHYDRA_TROUBLESHOOTING.md) | Symptom → cause → fix |
+| [GHYDRA_OUTPUT.md](docs/GHYDRA_OUTPUT.md) | Text vs JSON vs table vs report, the envelope, exit codes |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | The tiers, the single core, the rules that hold them |
+| [GHYDRA_INTERNALS.md](docs/GHYDRA_INTERNALS.md) | Known drift, the REA gaps, the composed calls |
+| [GHYDRA_CLI.md](docs/GHYDRA_CLI.md) | The whole command-line surface, command by command |
+| [GHIDRA_HTTP_API.md](docs/GHIDRA_HTTP_API.md) | The REST reference — 106 routes, `API_VERSION` 3000 |
+| [GHYDRA_BSIM.md](docs/GHYDRA_BSIM.md) | Signature similarity: setup, building a corpus, querying, applying a match, comparing versions, and the traps measured on Ghidra 12.2 |
+| [GHYDRA_HEADLESS.md](docs/GHYDRA_HEADLESS.md) | The API with no window: `ghydra headless start/stop`, and the report |
+| [GHYDRA_KUNA.md](docs/GHYDRA_KUNA.md) | The Kuna decompiler integration: opt-in, exports, measured costs |
+| [GHYDRA_X64DBG.md](docs/GHYDRA_X64DBG.md) | The debugger integration: contract, address model, retry rules |
+| [TESTING.md](docs/TESTING.md) | How to run the 23 suites, and what each of them proves |
+| [REA_PARITY.md](docs/REA_PARITY.md) | The comparison against another agent's tool catalogue |
 | [AGENTS.md](AGENTS.md) | The conventions this codebase is built on (also `CLAUDE.md`) |
 
 ## What's new
@@ -176,7 +176,7 @@ in a headless Ghidra run and serves the same REST API from it — the same twent
 same decompiler service, the same middleware. `ghydra report build <binary>` puts Ghidra and Kuna
 side by side in one report and writes the annotations for the debugger, so a human opens it and
 finds the interesting functions already marked. Full reference:
-[GHYDRA_HEADLESS.md](GHYDRA_HEADLESS.md).
+[GHYDRA_HEADLESS.md](docs/GHYDRA_HEADLESS.md).
 
 ### The doctor
 
@@ -214,7 +214,7 @@ ghydra session close s-3f9a21c4
 The assistant can now drive a live debugger, with the static analysis and the dynamic one sharing
 one address model. Six tools, an address translation that works on a real process, and a failure
 taxonomy that tells an agent whether the debugger already acted. Full reference:
-[GHYDRA_X64DBG.md](GHYDRA_X64DBG.md).
+[GHYDRA_X64DBG.md](docs/GHYDRA_X64DBG.md).
 
 ### The Kuna exports are MCP resources
 
@@ -232,7 +232,7 @@ kuna://export/{digest}/README.md            what the export is
 
 That is the retrieval loop with **exact** addressing: list the exports, read the index, read one
 function. A corpus with an exact index does not need embeddings — they would retrieve the wrong
-function more often than the right one. Full reference: [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
+function more often than the right one. Full reference: [GHYDRA_KUNA.md](docs/GHYDRA_KUNA.md).
 
 ### The resources a client can actually read
 
@@ -254,7 +254,7 @@ document.
 
 ### 3.0.0
 
-`API_VERSION` is **3000** — see [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) for the full reference
+`API_VERSION` is **3000** — see [GHIDRA_HTTP_API.md](docs/GHIDRA_HTTP_API.md) for the full reference
 and [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 **Breaking — fully-qualified symbol names.** Functions, symbols, data labels, variables, and
@@ -551,7 +551,7 @@ Two rules keep a stale export from answering for the wrong thing:
   analysed again instead of answered with stale artifacts.
 
 Full reference, including the fourteen error codes and the export readers:
-[GHYDRA_KUNA.md](GHYDRA_KUNA.md).
+[GHYDRA_KUNA.md](docs/GHYDRA_KUNA.md).
 
 # The Ghidra plugin
 
@@ -755,7 +755,7 @@ downloading one.
 
 The bridge resolves the Kuna binary from `PATH` or from the `kuna.path` key in
 `~/.ghydra/config.json`, which is the way to point at a binary installed outside the
-default profile. See [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
+default profile. See [GHYDRA_KUNA.md](docs/GHYDRA_KUNA.md).
 
 Timeout defaults are intentionally high for large binaries:
 - CLI/bridge HTTP timeout default: `900s` (`GHYDRA_TIMEOUT`)
@@ -800,7 +800,7 @@ The MCP client setup for Claude Desktop, Claude Code, Cline and 5ire is in
 Every Ghidra-backed tool is also a REST endpoint, and the bridge is a thin layer over them. The
 local integrations are not: the 13 `kuna_*` tools drive the Kuna CLI as a subprocess and the 6
 `x64dbg_*` tools talk to the debugger plugin, so neither has an HTTP route and neither appears in
-[GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md). The full list of the REST surface is there; what
+[GHIDRA_HTTP_API.md](docs/GHIDRA_HTTP_API.md). The full list of the REST surface is there; what
 follows is the shape of it.
 
 ```bash
@@ -1259,7 +1259,7 @@ The links let a client discover related resources without hardcoding URLs.
 # Testing
 
 There are **24 suites**. Most need a running Ghidra; the contract suites do not, and they are
-what CI runs on every push. See [TESTING.md](TESTING.md) for what each one proves.
+what CI runs on every push. See [TESTING.md](docs/TESTING.md) for what each one proves.
 
 ```bash
 python run_tests.py --no-ghidra           # the 22 suites that execute without Ghidra

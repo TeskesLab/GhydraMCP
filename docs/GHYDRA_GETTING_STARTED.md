@@ -17,7 +17,7 @@
 From an installed extension to a first answer. Every command and output below was
 run; the values are from a real `where.exe` analysis on Ghidra 12.2.
 
-If you have not installed anything yet, do that first — [README.md](README.md) has
+If you have not installed anything yet, do that first — [README.md](../README.md) has
 the three ways (extension, CLI, MCP bridge).
 
 ---

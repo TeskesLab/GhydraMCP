@@ -124,7 +124,7 @@ def catalogue_problems() -> list:
         rendered = module.render(module.collect())
     except Exception as failure:  # noqa: BLE001
         return [f"the tool catalogue cannot be generated: {failure}"]
-    document = os.path.join(ROOT, "GHYDRA_TOOLS.md")
+    document = os.path.join(ROOT, "docs", "GHYDRA_TOOLS.md")
     if not os.path.exists(document):
         return ["GHYDRA_TOOLS.md is missing: run scripts/gen_tools_doc.py"]
     with open(document, encoding="utf-8") as handle:
@@ -223,7 +223,7 @@ def cheatsheet_current_problems() -> list:
         rendered = module.render()
     except SystemExit as failure:
         return [f"the cheat sheet names commands that no longer exist: {failure}"]
-    document = os.path.join(ROOT, "GHYDRA_CHEATSHEET.md")
+    document = os.path.join(ROOT, "docs", "GHYDRA_CHEATSHEET.md")
     if not os.path.exists(document):
         return ["GHYDRA_CHEATSHEET.md is missing: run scripts/gen_cheatsheet.py"]
     with open(document, encoding="utf-8") as handle:
@@ -248,7 +248,7 @@ def errors_current_problems() -> list:
         rendered = module.render()
     except Exception as failure:  # noqa: BLE001
         return [f"the error reference cannot be generated: {failure}"]
-    document = os.path.join(ROOT, "GHYDRA_ERRORS.md")
+    document = os.path.join(ROOT, "docs", "GHYDRA_ERRORS.md")
     if not os.path.exists(document):
         return ["GHYDRA_ERRORS.md is missing: run scripts/gen_errors_doc.py"]
     with open(document, encoding="utf-8") as handle:
@@ -288,26 +288,63 @@ def index_current_problems() -> list:
 
 
 #: The documents the guards read: the generated ones and the big references.
-INDEXED_DOCUMENTS = ("GHIDRA_HTTP_API.md", "GHYDRA_CLI.md", "DOCUMENTATION.md",
-                     "GHYDRA_CONCEPTS.md", "GHYDRA_RECIPES.md",
-                     "GHYDRA_TROUBLESHOOTING.md", "ARCHITECTURE.md",
-                     "GHYDRA_TOOLS.md", "GHYDRA_GETTING_STARTED.md",
-                     "TESTING.md", "CHANGELOG.md")
+INDEXED_DOCUMENTS = ("docs/GHIDRA_HTTP_API.md", "docs/GHYDRA_CLI.md",
+                     "docs/DOCUMENTATION.md", "docs/GHYDRA_CONCEPTS.md",
+                     "docs/GHYDRA_RECIPES.md", "docs/GHYDRA_TROUBLESHOOTING.md",
+                     "docs/ARCHITECTURE.md", "docs/GHYDRA_TOOLS.md",
+                     "docs/GHYDRA_GETTING_STARTED.md", "docs/TESTING.md",
+                     "CHANGELOG.md")
 
 # ------------------------------------------------------------------- links
 def index_link_problems() -> list:
     """Every local document linked from the index must exist."""
-    index = os.path.join(ROOT, "DOCUMENTATION.md")
+    index = os.path.join(ROOT, "docs", "DOCUMENTATION.md")
     if not os.path.exists(index):
         return ["DOCUMENTATION.md is missing: the documentation has no map"]
     with open(index, encoding="utf-8") as handle:
         text = handle.read()
     problems = []
+    # Links are relative to the document that holds them, not to the repository.
+    base = os.path.dirname(index)
     for target in sorted(set(re.findall(r"\]\(([^)#]+\.md)\)", text))):
         if target.startswith(("http://", "https://")):
             continue
-        if not os.path.exists(os.path.join(ROOT, target)):
+        if not os.path.exists(os.path.join(base, target)):
             problems.append(f"DOCUMENTATION.md links {target}, which does not exist")
+    return problems
+
+
+# -------------------------------------------------------------------- links
+def broken_link_problems() -> list:
+    """Every local link in every document must resolve, from where the file is.
+
+    A relative link means "next to me", so the base is the document's directory.
+    A link to a heading (`#section`) or to the web is not checked here.
+    """
+    problems = []
+    # Only the documents the repository ships: `docs/` also holds gitignored notes
+    # that are not maintained as part of it (and are written from the root).
+    try:
+        listed = subprocess.run(["git", "ls-files", "*.md"], cwd=ROOT,
+                                capture_output=True, text=True, check=True)
+        documents = [os.path.join(ROOT, line.strip())
+                     for line in listed.stdout.splitlines() if line.strip()]
+    except Exception:  # noqa: BLE001 - no git: fall back to the tree
+        documents = sorted(glob.glob(os.path.join(ROOT, "*.md")))
+        documents.extend(sorted(glob.glob(os.path.join(ROOT, "docs", "**", "*.md"),
+                                         recursive=True)))
+    for document in documents:
+        relative = os.path.relpath(document, ROOT).replace(os.sep, "/")
+        with open(document, encoding="utf-8") as handle:
+            text = handle.read()
+        for target in sorted(set(re.findall(r"\]\(([^)\s]+)\)", text))):
+            if target.startswith(("http://", "https://", "#", "mailto:")):
+                continue
+            local = target.split("#")[0]
+            if not local:
+                continue
+            if not os.path.exists(os.path.join(os.path.dirname(document), local)):
+                problems.append(f"{relative} links {target}, which does not exist")
     return problems
 
 
@@ -330,6 +367,7 @@ def main() -> int:
     problems.extend(catalogue_problems())
     problems.extend(index_link_problems())
     problems.extend(duplicate_heading_problems())
+    problems.extend(broken_link_problems())
     problems.extend(index_current_problems())
     problems.extend(errors_current_problems())
     problems.extend(documented_commands_problems())

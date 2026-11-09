@@ -80,7 +80,7 @@ ghydra assert -f examples/asserts.json --format junit -o analysis.xml
 
 Exit codes: `0` pass, `1` a property was violated, `2` the check could not run.
 Upload the SARIF to code scanning and keep the JUnit report as the artifact — see
-[`examples/ci/analyze.yml`](examples/ci/analyze.yml) for the whole workflow.
+[`examples/ci/analyze.yml`](../examples/ci/analyze.yml) for the whole workflow.
 
 **Trap:** `no_import` can only pass when the listing was read to its end. A
 truncated listing yields `inconclusive`, never `pass` — raise `--page-limit` or

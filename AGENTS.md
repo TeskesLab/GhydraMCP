@@ -301,7 +301,7 @@ answer was lost, so it was not repeated) and as `X64DBG_MISSING` when it did not
 Target selection is inconsistent and worth knowing:
 - `tests/test_javalin_port.py` honors `GHYDRAMCP_TEST_HOST` **and** `GHYDRAMCP_TEST_PORT`.
 - `tests/test_http_api.py` honors only `GHYDRAMCP_TEST_HOST`; its port is hardcoded to 8192.
-- `TESTING.md` documents the flags and the headless Java integration tests.
+- `docs/TESTING.md` documents the flags and the headless Java integration tests.
 
 `mvn test` (26 JUnit tests) covers only pure logic — anything needing a live `Program` can't
 run there, because the plugin's Ghidra deps are system-scoped jars in `lib/` and Ghidra ships
@@ -461,7 +461,7 @@ tools work with any Ghidra version.
   says it came from this binary, with the mtime it has now — another binary, or the same path
   rebuilt, is analysed again instead of answered with stale artifacts.
 - **The performance numbers are measured, not remembered.** `scripts/bench_kuna.py` produces the
-  table in `GHYDRA_KUNA.md` and is committed with it. A Kuna upgrade changes the numbers, so they
+  table in `docs/GHYDRA_KUNA.md` and is committed with it. A Kuna upgrade changes the numbers, so they
   are re-measured rather than quoted.
 - **The export is addressed by its digest, not by the job.** The digest is 12 hex characters,
   survives a restart of the bridge, and is what `kuna_export_read(directory=...)`, the
@@ -566,7 +566,7 @@ plugin API, so it changes neither `API_VERSION` nor the Java side.
 
 The same API, served by a headless Ghidra run: the binary is imported, analysed, and the API
 answers for that analysis, with nobody watching. `ghydra headless start|status|stop`, and
-`ghydra report build` for the report. See `GHYDRA_HEADLESS.md`.
+`ghydra report build` for the report. See `docs/GHYDRA_HEADLESS.md`.
 
 - **The bootstrap lives in `server/GhydraServerFactory`**, not in the plugin. Both paths - the
   CodeBrowser plugin and the headless run - go through it, so the same twenty-one resources are
@@ -788,11 +788,11 @@ Python side is where the platform shows:
 
 ## Key documentation
 
-`README.md` (install, MCP client setup), `GHIDRA_HTTP_API.md` (REST reference, API_VERSION 3000),
-`GHYDRA_CLI.md` (CLI reference), `GHYDRA_KUNA.md` (the Kuna integration: opt-in, tools, export
-layout), `GHYDRA_X64DBG.md` (the x64dbg integration: the contract, the address model, the tools),
+`README.md` (install, MCP client setup), `docs/GHIDRA_HTTP_API.md` (REST reference, API_VERSION 3000),
+`docs/GHYDRA_CLI.md` (CLI reference), `docs/GHYDRA_KUNA.md` (the Kuna integration: opt-in, tools, export
+layout), `docs/GHYDRA_X64DBG.md` (the x64dbg integration: the contract, the address model, the tools),
 `CONTRIBUTING.md` (PR/release process),
-`TESTING.md` (stale on flags), `CHANGELOG.md` (release history — also the release-notes source).
+`docs/TESTING.md` (stale on flags), `CHANGELOG.md` (release history — also the release-notes source).
 
 ## Read-only mode, audit trail and CI assertions
 
@@ -840,7 +840,7 @@ the CLI are **generated** into it instead of retyped.
   is `def safe_get(` on purpose.
 ## Known drift, the REA gaps and the composed calls
 
-**Moved to [GHYDRA_INTERNALS.md](GHYDRA_INTERNALS.md)**, which is a reference to
+**Moved to [GHYDRA_INTERNALS.md](docs/GHYDRA_INTERNALS.md)**, which is a reference to
 open when a symptom points at it — not an instruction that has to be loaded with
 every task. It covers the verified rough edges (Ghidra 12.2's JDK, the `lib/`
 jars, a `500` with no body), the four gaps closed against the REA and the four

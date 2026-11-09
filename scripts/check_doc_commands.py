@@ -139,6 +139,7 @@ def problems_in(relative: str, text: str) -> list:
 def _documents() -> list:
     """The files whose `ghydra …` lines are a promise: docs and example scripts."""
     paths = sorted(glob.glob(os.path.join(ROOT, "*.md")))
+    paths.extend(sorted(glob.glob(os.path.join(ROOT, "docs", "*.md"))))
     paths.extend(sorted(glob.glob(os.path.join(ROOT, "examples", "**", "*.sh"),
                                   recursive=True)))
     return paths

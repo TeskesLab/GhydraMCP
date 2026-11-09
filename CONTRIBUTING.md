@@ -208,7 +208,7 @@ Closes #123
 ## Release Process
 
 Releases are driven by a single tag, `vX.Y.Z`, pushed to both remotes. The full
-runbook is in [RELEASING.md](RELEASING.md); the short version:
+runbook is in [RELEASING.md](docs/RELEASING.md); the short version:
 
 1. **Preparation**:
    - Ensure all tests pass
