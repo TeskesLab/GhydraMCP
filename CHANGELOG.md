@@ -7,6 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **I1 complete: eleven modules of pure logic in one core, generated into the
+  bridge**: `digest`, `runbook`, `hints`, `cache`, `diff`, `fleet`,
+  `capabilities`, `contextpack`, `telemetry`, `taint` and `mission` now have
+  **one definition** under `ghydra/core/`, and the bridge carries a copy
+  produced by `scripts/gen_core.py` (guarded by `--check` in both CI pipelines).
+  What this buys is a single place to fix a rule: the digest, the cache key, the
+  capability ranking, the token budget, the fleet merge, the taint confidence
+  count and the mission dossier are no longer written twice.
+  **It does not shrink the bridge**, and the tests say so honestly: the
+  generated copy *is* the module's body plus one delegating wrapper, so each
+  slice adds a few lines. The claims the suites enforce are the ones that
+  matter — the region is byte-identical to a fresh generation, a core name has
+  no definition outside its region, a wrapper with a public name must delegate,
+  and every suite of the migrated module passes **unedited**.
+  Found and fixed on the way: the generator stripped imports, so a core module
+  calling an imported function left a bare name in the region (now refused, with
+  the fix in the error); a splice anchored at "the next def" swallowed the
+  runbook tools (caught immediately by `test_runbook.py`); and a
+  `Measure-Object`-style line count hid 2 000 blank lines, which made an earlier
+  "the bridge is smaller" claim wrong — the real numbers are in this entry.
 - **The pure half of source-to-sink reasoning into the single core (I1,
   slice 9)**: `ghydra/core/taint.py` now owns what a *call site* is (the call
   whose target is the address, or whose target name contains the function), how

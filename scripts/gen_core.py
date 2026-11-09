@@ -43,6 +43,7 @@ CORE_MODULES = (
     "ghydra/core/contextpack.py",
     "ghydra/core/telemetry.py",
     "ghydra/core/taint.py",
+    "ghydra/core/mission.py",
 )
 
 #: Per module, the public name -> the private name the bridge uses.
@@ -120,6 +121,23 @@ CORE_RENAMES = {
         "site_for": "_core_taint_site_for",
         "address_key": "_core_taint_address_key",
         "summarize": "_core_taint_summarize",
+    },
+    "ghydra/core/mission.py": {
+        "MISSION_VERSION": "_CORE_MISSION_VERSION",
+        "DEFAULT_CALLS": "_CORE_MISSION_DEFAULT_CALLS",
+        "DEFAULT_TOKENS": "_CORE_MISSION_DEFAULT_TOKENS",
+        "DEFAULT_SECONDS": "_CORE_MISSION_DEFAULT_SECONDS",
+        "ERROR_NO_PROGRAM": "_CORE_MISSION_ERROR_NO_PROGRAM",
+        "ERROR_BUDGET": "_CORE_MISSION_ERROR_BUDGET",
+        "ERROR_BAD_FILE": "_CORE_MISSION_ERROR_BAD_FILE",
+        "STATUS_OPEN": "_CORE_MISSION_STATUS_OPEN",
+        "STATUS_VERIFIED": "_CORE_MISSION_STATUS_VERIFIED",
+        "STATUS_UNVERIFIED": "_CORE_MISSION_STATUS_UNVERIFIED",
+        "STATUS_UNKNOWN": "_CORE_MISSION_STATUS_UNKNOWN",
+        "tokens_of": "_core_mission_tokens_of",
+        "budget_exhausted": "_core_mission_budget_exhausted",
+        "budget_row": "_core_mission_budget_row",
+        "dossier": "_core_mission_dossier",
     },
     "ghydra/core/hints.py": {
         "HINT_PATTERNS": "_CORE_HINT_PATTERNS",

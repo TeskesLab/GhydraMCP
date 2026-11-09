@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.19.0"
+BRIDGE_VERSION = "v3.20.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1622,6 +1622,125 @@ def _core_taint_summarize(report):
         by_confidence[key] = by_confidence.get(key, 0) + 1
     return {'total': len(hypotheses), 'direct': by_confidence.get(_CORE_TAINT_CONFIDENCE_DIRECT, 0), 'reachable': by_confidence.get(_CORE_TAINT_CONFIDENCE_REACHABLE, 0), 'weak': by_confidence.get('weak', 0), 'found': bool(by_confidence.get(_CORE_TAINT_CONFIDENCE_DIRECT) or by_confidence.get(_CORE_TAINT_CONFIDENCE_REACHABLE))}
 # <<< end generated from ghydra/core/taint.py
+
+
+# >>> generated from ghydra/core/mission.py (297179fac030c1a5) — edit the core, then run scripts/gen_core.py
+_CORE_MISSION_VERSION = 1
+
+_CORE_MISSION_DEFAULT_CALLS = 60
+
+_CORE_MISSION_DEFAULT_TOKENS = 200000
+
+_CORE_MISSION_DEFAULT_SECONDS = 900
+
+_CORE_MISSION_ERROR_NO_PROGRAM = 'MISSION_NO_PROGRAM'
+
+_CORE_MISSION_ERROR_BUDGET = 'MISSION_BUDGET'
+
+_CORE_MISSION_ERROR_BAD_FILE = 'MISSION_BAD_FILE'
+
+_CORE_MISSION_STATUS_OPEN = 'open'
+
+_CORE_MISSION_STATUS_VERIFIED = 'verified'
+
+_CORE_MISSION_STATUS_UNVERIFIED = 'unverified'
+
+_CORE_MISSION_STATUS_UNKNOWN = 'unknown'
+
+def _core_mission_tokens_of(payload):
+    """The token estimate of one answer: about four characters per token.
+
+    Never zero: a call that answered nothing still cost a call, and a budget
+    that counts it as free would let an empty loop run forever.
+    """
+    text = json.dumps(payload, default=str) if payload is not None else ''
+    return max(1, len(text) // 4)
+
+def _core_mission_budget_exhausted(calls, max_calls, tokens, max_tokens, elapsed, max_seconds=None):
+    """Which budget is spent, in the order that matters, or ``None``.
+
+    Args:
+        calls: Calls already spent.
+        max_calls: The call limit.
+        tokens: Tokens already spent.
+        max_tokens: The token limit.
+        elapsed: Seconds since the mission started.
+        max_seconds: The wall-clock limit, when the surface enforces one.
+
+    Returns:
+        str | None: The reason the mission must stop, in the words the report
+                    uses, or ``None`` when there is room left.
+    """
+    if calls >= max_calls:
+        return f'the call budget ({max_calls}) is spent'
+    if tokens >= max_tokens:
+        return f'the token budget ({max_tokens}) is spent'
+    if max_seconds is not None and elapsed >= max_seconds:
+        return f'the time budget ({max_seconds}s) is spent'
+    return None
+
+def _core_mission_budget_row(calls, max_calls, tokens, max_tokens, seconds, max_seconds=None):
+    """The budget as the report shows it.
+
+    ``max_seconds`` is included only when the caller enforces one, so a surface
+    that has no wall clock does not advertise a limit it never checks.
+    """
+    row: Dict[str, Any] = {'calls': calls, 'max_calls': max_calls, 'tokens': tokens, 'max_tokens': max_tokens, 'seconds': round(float(seconds), 1)}
+    if max_seconds is not None:
+        row['max_seconds'] = max_seconds
+    return row
+
+def _core_mission_dossier(goal, mission_id, program, hints, budget, failed, skipped, findings, verification=None):
+    """The dossier a human reads, and the artifact a CI job keeps.
+
+    Args:
+        goal: The objective, in the words the user gave.
+        mission_id: The id the mission is stored under.
+        program: The program fingerprint (``name``, ``executable_path``).
+        hints: The hints read from the goal.
+        budget: The row from :func:`budget_row`.
+        failed: Why the mission stopped early, when it did.
+        skipped: The steps that were not run, with the reason in their name.
+        findings: The findings, each with id/title/kind/confidence/status and
+                  the evidence digests behind it.
+        verification: The re-read result, when the mission verified itself.
+
+    Returns:
+        str: The Markdown document.
+    """
+    lines = [f'# Mission: {goal}', '', f'- id: `{mission_id}`', f"- program: `{program.get('name') or '?'}` ({program.get('executable_path') or 'no path'})", f'- hints: {json.dumps(hints, ensure_ascii=False)}', f"- budget: {budget['calls']}/{budget['max_calls']} calls, ~{budget['tokens']} tokens, {budget['seconds']}s", '']
+    if failed:
+        lines.extend([f'**The mission stopped: {failed}**', ''])
+    if skipped:
+        lines.extend([f"Skipped steps: {', '.join(skipped)}", ''])
+    lines.extend(['## Findings', ''])
+    if not findings:
+        lines.append('_No finding was recorded._')
+    for finding in findings:
+        lines.append(f"### {finding['id']} — {finding['title']}")
+        lines.append('')
+        lines.append(f"- kind: `{finding.get('kind')}`  confidence: `{finding.get('confidence')}`  status: `{finding.get('status')}`")
+        if finding.get('detail'):
+            lines.extend(['', '```', str(finding['detail'])[:2000], '```'])
+        for item in finding.get('evidence') or []:
+            lines.append(f"- evidence: `{item.get('endpoint')}` (digest `{(item.get('digest') or '')[:16]}`)")
+        lines.append('')
+    if verification is not None:
+        lines.extend(['## Verification', '', f"- evidence items re-read: {verification['checked']}", f"- findings verified: {verification['verified']}"])
+        if verification.get('unverified'):
+            lines.append(f"- **unverified: {', '.join(verification['unverified'])}** (their evidence moved or could not be re-read)")
+        else:
+            lines.append('- every conclusion still holds against its evidence')
+        lines.append('')
+    unknowns = [item for item in findings if item.get('status') == _CORE_MISSION_STATUS_UNKNOWN]
+    lines.extend(['## Not determined', ''])
+    if not unknowns:
+        lines.append('_Nothing was left undetermined._')
+    for item in unknowns:
+        lines.append(f"- {item['id']}: {item['title']} — {item.get('detail') or ''}".rstrip())
+    lines.append('')
+    return '\n'.join(lines)
+# <<< end generated from ghydra/core/mission.py
 
 
 def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
@@ -12086,21 +12205,20 @@ class _MissionBudget:
         self.started = time.time()
 
     def exhausted(self):
-        if self.calls >= self.max_calls:
-            return f"the call budget ({self.max_calls}) is spent"
-        if self.tokens >= self.max_tokens:
-            return f"the token budget ({self.max_tokens}) is spent"
-        return None
+        """Delegates the order of the limits to the generated core (I1)."""
+        return _core_mission_budget_exhausted(
+            self.calls, self.max_calls, self.tokens, self.max_tokens,
+            time.time() - self.started)
 
     def spend(self, payload) -> None:
+        """The count is the core's; the clock and the calls stay here."""
         self.calls += 1
-        text = json.dumps(payload, default=str) if payload is not None else ""
-        self.tokens += max(1, len(text) // 4)
+        self.tokens += _core_mission_tokens_of(payload)
 
     def as_dict(self) -> dict:
-        return {"calls": self.calls, "max_calls": self.max_calls,
-                "tokens": self.tokens, "max_tokens": self.max_tokens,
-                "seconds": round(time.time() - self.started, 1)}
+        return _core_mission_budget_row(
+            self.calls, self.max_calls, self.tokens, self.max_tokens,
+            time.time() - self.started)
 
 
 class _Mission:
@@ -12305,52 +12423,11 @@ def _mission_verify(mission: _Mission) -> dict:
 
 
 def _mission_markdown(mission: _Mission, verification) -> str:
-    lines = [f"# Mission: {mission.goal}", "",
-             f"- id: `{mission.id}`",
-             f"- program: `{mission.program.get('name') or '?'}` "
-             f"({mission.program.get('executable_path') or 'no path'})",
-             f"- hints: {json.dumps(mission.hints, ensure_ascii=False)}",
-             f"- budget: {mission.budget.calls}/{mission.budget.max_calls} calls, "
-             f"~{mission.budget.tokens} tokens, "
-             f"{mission.budget.as_dict()['seconds']}s", ""]
-    if mission.failed:
-        lines.extend([f"**The mission stopped: {mission.failed}**", ""])
-    if mission.skipped:
-        lines.extend([f"Skipped steps: {', '.join(mission.skipped)}", ""])
-    lines.extend(["## Findings", ""])
-    if not mission.findings:
-        lines.append("_No finding was recorded._")
-    for finding in mission.findings:
-        lines.append(f"### {finding['id']} — {finding['title']}")
-        lines.append("")
-        lines.append(f"- kind: `{finding.get('kind')}`  "
-                     f"confidence: `{finding.get('confidence')}`  "
-                     f"status: `{finding.get('status')}`")
-        if finding.get("detail"):
-            lines.extend(["", "```", str(finding["detail"])[:2000], "```"])
-        for item in finding.get("evidence") or []:
-            lines.append(f"- evidence: `{item.get('endpoint')}` "
-                         f"(digest `{(item.get('digest') or '')[:16]}`)")
-        lines.append("")
-    if verification is not None:
-        lines.extend(["## Verification", "",
-                      f"- evidence items re-read: {verification['checked']}",
-                      f"- findings verified: {verification['verified']}"])
-        if verification["unverified"]:
-            lines.append(f"- **unverified: {', '.join(verification['unverified'])}** "
-                         f"(their evidence moved or could not be re-read)")
-        else:
-            lines.append("- every conclusion still holds against its evidence")
-        lines.append("")
-    unknowns = [f for f in mission.findings if f.get("status") == "unknown"]
-    lines.extend(["## Not determined", ""])
-    if not unknowns:
-        lines.append("_Nothing was left undetermined._")
-    for item in unknowns:
-        lines.append(f"- {item['id']}: {item['title']} — "
-                     f"{item.get('detail') or ''}".rstrip())
-    lines.append("")
-    return "\n".join(lines)
+    """Delegates the rendering to the generated core (I1)."""
+    return _core_mission_dossier(
+        mission.goal, mission.id, mission.program, mission.hints,
+        mission.budget.as_dict(), mission.failed, mission.skipped,
+        mission.findings, verification)
 
 
 @mcp.tool()

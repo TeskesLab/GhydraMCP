@@ -33,23 +33,22 @@ from typing import Any, Dict, List, Optional
 from . import diff as diff_helper
 from . import runbook as runbook_helper
 from . import taint as taint_helper
+from .core import mission as core_mission
 from .core.hints import HINT_PATTERNS as CORE_HINT_PATTERNS
 from .core.hints import parse_goal as core_parse_goal
 
-MISSION_VERSION = 1
-
-DEFAULT_CALLS = 60
-DEFAULT_TOKENS = 200_000
-DEFAULT_SECONDS = 900
-
-ERROR_NO_PROGRAM = "MISSION_NO_PROGRAM"
-ERROR_BUDGET = "MISSION_BUDGET"
-ERROR_BAD_FILE = "MISSION_BAD_FILE"
-
-STATUS_OPEN = "open"
-STATUS_VERIFIED = "verified"
-STATUS_UNVERIFIED = "unverified"
-STATUS_UNKNOWN = "unknown"
+#: All of these are defined once, in the core (I1).
+MISSION_VERSION = core_mission.MISSION_VERSION
+DEFAULT_CALLS = core_mission.DEFAULT_CALLS
+DEFAULT_TOKENS = core_mission.DEFAULT_TOKENS
+DEFAULT_SECONDS = core_mission.DEFAULT_SECONDS
+ERROR_NO_PROGRAM = core_mission.ERROR_NO_PROGRAM
+ERROR_BUDGET = core_mission.ERROR_BUDGET
+ERROR_BAD_FILE = core_mission.ERROR_BAD_FILE
+STATUS_OPEN = core_mission.STATUS_OPEN
+STATUS_VERIFIED = core_mission.STATUS_VERIFIED
+STATUS_UNVERIFIED = core_mission.STATUS_UNVERIFIED
+STATUS_UNKNOWN = core_mission.STATUS_UNKNOWN
 
 #: The hints a goal can carry. Defined once, in the core (I1).
 HINT_PATTERNS = CORE_HINT_PATTERNS
@@ -90,25 +89,20 @@ class Budget:
         self.started = time.time()
 
     def exhausted(self) -> Optional[str]:
-        if self.calls >= self.max_calls:
-            return f"the call budget ({self.max_calls}) is spent"
-        if self.tokens >= self.max_tokens:
-            return f"the token budget ({self.max_tokens}) is spent"
-        if time.time() - self.started >= self.max_seconds:
-            return f"the time budget ({self.max_seconds}s) is spent"
-        return None
+        """Delegates the order of the limits to the core (I1)."""
+        return core_mission.budget_exhausted(
+            self.calls, self.max_calls, self.tokens, self.max_tokens,
+            time.time() - self.started, self.max_seconds)
 
     def spend(self, endpoint: str, payload: Any) -> None:
+        """The count is the core's; the clock and the calls stay here."""
         self.calls += 1
-        text = json.dumps(payload, default=str) if payload is not None else ""
-        # A cheap, honest estimate: a token is about four characters.
-        self.tokens += max(1, len(text) // 4)
+        self.tokens += core_mission.tokens_of(payload)
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"calls": self.calls, "max_calls": self.max_calls,
-                "tokens": self.tokens, "max_tokens": self.max_tokens,
-                "seconds": round(time.time() - self.started, 1),
-                "max_seconds": self.max_seconds}
+        return core_mission.budget_row(
+            self.calls, self.max_calls, self.tokens, self.max_tokens,
+            time.time() - self.started, self.max_seconds)
 
 
 class Mission:
@@ -406,66 +400,17 @@ def verify(client, mission: Mission) -> Dict[str, Any]:
             "ok": not unverified}
 
 
-def to_markdown(mission: Mission, verification: Optional[Dict[str, Any]] = None) -> str:
-    """The dossier a human reads, and the artifact a CI job keeps."""
-    lines = [f"# Mission: {mission.goal}", "",
-             f"- id: `{mission.id}`",
-             f"- program: `{mission.program.get('name') or '?'}` "
-             f"({mission.program.get('executable_path') or 'no path'})",
-             f"- hints: {json.dumps(mission.hints, ensure_ascii=False)}",
-             f"- budget: {mission.budget.calls}/{mission.budget.max_calls} calls, "
-             f"~{mission.budget.tokens} tokens, "
-             f"{mission.budget.as_dict()['seconds']}s", ""]
-    if mission.failed:
-        lines.append(f"**The mission stopped: {mission.failed}**")
-        lines.append("")
-    if mission.skipped:
-        lines.append(f"Skipped steps: {', '.join(mission.skipped)}")
-        lines.append("")
+def to_markdown(mission: Mission,
+                verification: Optional[Dict[str, Any]] = None) -> str:
+    """The dossier a human reads, and the artifact a CI job keeps.
 
-    lines.append("## Findings")
-    lines.append("")
-    if not mission.findings:
-        lines.append("_No finding was recorded._")
-    for finding in mission.findings:
-        lines.append(f"### {finding['id']} — {finding['title']}")
-        lines.append("")
-        lines.append(f"- kind: `{finding.get('kind')}`  "
-                     f"confidence: `{finding.get('confidence')}`  "
-                     f"status: `{finding.get('status')}`")
-        if finding.get("detail"):
-            lines.append("")
-            lines.append("```")
-            lines.append(str(finding["detail"])[:2000])
-            lines.append("```")
-        for item in finding.get("evidence") or []:
-            endpoint = item.get("endpoint")
-            digest = (item.get("digest") or "")[:16]
-            lines.append(f"- evidence: `{endpoint}` (digest `{digest}`)")
-        lines.append("")
-
-    if verification is not None:
-        lines.append("## Verification")
-        lines.append("")
-        lines.append(f"- evidence items re-read: {verification['checked']}")
-        lines.append(f"- findings verified: {verification['verified']}")
-        if verification["unverified"]:
-            lines.append(f"- **unverified: {', '.join(verification['unverified'])}** "
-                         f"(their evidence moved or could not be re-read)")
-        else:
-            lines.append("- every conclusion still holds against its evidence")
-        lines.append("")
-
-    unknowns = [f for f in mission.findings if f.get("status") == STATUS_UNKNOWN]
-    lines.append("## Not determined")
-    lines.append("")
-    if not unknowns:
-        lines.append("_Nothing was left undetermined._")
-    for item in unknowns:
-        lines.append(f"- {item['id']}: {item['title']} — {item.get('detail') or ''}".rstrip())
-    lines.append("")
-    return "\n".join(lines)
-
+    Delegates the rendering to the core (I1): one document, so the CLI and the
+    bridge cannot produce different artifacts for the same mission.
+    """
+    return core_mission.dossier(
+        mission.goal, mission.id, mission.program, mission.hints,
+        mission.budget.as_dict(), mission.failed, mission.skipped,
+        mission.findings, verification)
 
 def save_dossier(mission: Mission, verification: Optional[Dict[str, Any]],
                  path: Optional[str] = None) -> str:

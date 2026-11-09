@@ -25,6 +25,7 @@ import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra.core import digest as core  # noqa: E402
 from ghydra import capabilities  # noqa: E402
 from ghydra import contextpack  # noqa: E402
+from ghydra import mission  # noqa: E402
 from ghydra import taint as taint_helper  # noqa: E402
 from ghydra import telemetry  # noqa: E402
 from ghydra.core import cache as cache_core  # noqa: E402
@@ -32,6 +33,7 @@ from ghydra.core import capabilities as cap_core  # noqa: E402
 from ghydra.core import contextpack as ctx_core  # noqa: E402
 from ghydra.core import diff as diff_core  # noqa: E402
 from ghydra.core import fleet as fleet_core  # noqa: E402
+from ghydra.core import mission as mission_core  # noqa: E402
 from ghydra.core import taint as taint_core  # noqa: E402
 from ghydra.core import telemetry as tel_core  # noqa: E402
 from ghydra.core import hints as hints_core  # noqa: E402
@@ -44,6 +46,43 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 def _bridge_text():
     with open(os.path.join(ROOT, "bridge_mcp_hydra.py"), encoding="utf-8") as handle:
         return handle.read()
+
+
+def _definitions_outside_regions(text):
+    """The top-level defs/assigns of the bridge that sit outside every region."""
+    import ast as _ast
+    spans = []
+    for module in gen_core.CORE_MODULES:
+        begin = text.index(f"# >>> generated from {module}")
+        marker = f"# <<< end generated from {module}"
+        finish = text.index(marker) + len(marker)
+        spans.append((begin, finish))
+    kept = []
+    offset = 0
+    outside = text
+    for begin, finish in reversed(spans):
+        outside = outside[:begin] + "\n" * 0 + outside[finish:]
+    tree = _ast.parse(outside)
+    for node in tree.body:
+        if isinstance(node, (_ast.FunctionDef, _ast.ClassDef)):
+            kept.append((node.name, node))
+        elif isinstance(node, _ast.Assign):
+            for target in node.targets:
+                if isinstance(target, _ast.Name):
+                    kept.append((target.id, node))
+    return kept
+
+
+def _delegates(node):
+    """Does this definition's body hand off to the generated copy?"""
+    import ast as _ast
+    if isinstance(node, _ast.Assign):
+        value = node.value
+        return (isinstance(value, _ast.Name)
+                and (value.id.startswith("_CORE_") or value.id.startswith("_core_")))
+    return any(isinstance(item, _ast.Name)
+               and (item.id.startswith("_core_") or item.id.startswith("_CORE_"))
+               for item in _ast.walk(node))
 
 
 class GenerationTests(unittest.TestCase):
@@ -925,6 +964,181 @@ class TaintCoreTests(unittest.TestCase):
         self.assertIsNone(taint_core.result_of("nope"))
         self.assertEqual(taint_core.result_of({"success": True, "result": []}),
                          bridge._core_taint_result_of({"success": True, "result": []}))
+
+class MissionCoreTests(unittest.TestCase):
+    """The budget rules and the dossier live once, in the core."""
+
+    def test_the_budget_trips_calls_then_tokens_then_time(self):
+        exhausted = mission_core.budget_exhausted
+        self.assertEqual("the call budget (2) is spent",
+                         exhausted(2, 2, 0, 100, 0.0, 900))
+        self.assertEqual("the token budget (10) is spent",
+                         exhausted(0, 2, 10, 10, 0.0, 900))
+        self.assertEqual("the time budget (5s) is spent",
+                         exhausted(0, 2, 0, 10, 5.0, 5))
+        self.assertIsNone(exhausted(0, 2, 0, 10, 0.0, 5))
+
+    def test_a_surface_without_a_clock_never_trips_time(self):
+        self.assertIsNone(mission_core.budget_exhausted(0, 60, 0, 1000, 10 ** 9))
+
+    def test_a_call_always_costs_at_least_one_token(self):
+        self.assertEqual(1, mission_core.tokens_of(None))
+        self.assertEqual(1, mission_core.tokens_of({}))
+        self.assertGreater(mission_core.tokens_of({"a": "x" * 400}), 1)
+
+    def test_the_budget_row_is_the_same_on_both_surfaces(self):
+        cli = mission_core.budget_row(3, 60, 100, 200000, 1.24, 900)
+        self.assertEqual(1.2, cli["seconds"])
+        self.assertEqual(900, cli["max_seconds"])
+        builtin = mission_core.budget_row(3, 60, 100, 200000, 1.24)
+        self.assertNotIn("max_seconds", builtin)
+
+    def _findings(self):
+        return [
+            {"id": "F1", "title": "a lead", "kind": "capability",
+             "confidence": "high", "status": "verified", "detail": "detail",
+             "evidence": [{"endpoint": "capabilities", "digest": "a" * 32}]},
+            {"id": "F2", "title": "a doubt", "kind": "taint",
+             "confidence": "low", "status": "unknown", "detail": ""},
+        ]
+
+    def _dossier(self, **overrides):
+        payload = dict(
+            goal="does data from recv reach system?", mission_id="m1",
+            program={"name": "a.exe", "executable_path": "/tmp/a.exe"},
+            hints={"source": "recv", "sink": "system"},
+            budget=mission_core.budget_row(3, 60, 100, 200000, 1.2, 900),
+            failed=None, skipped=[],
+            findings=self._findings(),
+            verification={"checked": 2, "verified": 1, "unverified": ["F1"]})
+        payload.update(overrides)
+        return mission_core.dossier(**payload)
+
+    def test_the_dossier_has_the_sections_a_reader_expects(self):
+        text = self._dossier()
+        for expected in ("# Mission: does data from recv reach system?",
+                         "- id: `m1`", "- program: `a.exe`",
+                         "## Findings", "### F1 — a lead",
+                         "## Verification", "## Not determined"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, text)
+
+    def test_a_finding_whose_evidence_moved_is_marked_unverified(self):
+        self.assertIn("**unverified: F1**", self._dossier())
+
+    def test_every_verification_passing_says_so(self):
+        text = self._dossier(verification={"checked": 1, "verified": 1,
+                                           "unverified": []})
+        self.assertIn("every conclusion still holds", text)
+
+    def test_an_unknown_finding_is_in_not_determined(self):
+        text = self._dossier()
+        not_determined = text.split("## Not determined")[1]
+        self.assertIn("F2", not_determined)
+
+    def test_an_empty_mission_says_so_instead_of_showing_nothing(self):
+        text = self._dossier(findings=[], verification=None)
+        self.assertIn("_No finding was recorded._", text)
+        self.assertIn("_Nothing was left undetermined._", text)
+        self.assertNotIn("## Verification", text)
+
+    def test_a_stopped_mission_says_why_and_what_was_skipped(self):
+        text = self._dossier(failed="the call budget (3) is spent",
+                             skipped=["taint: no sink in the goal"])
+        self.assertIn("**The mission stopped: the call budget (3) is spent**", text)
+        self.assertIn("Skipped steps: taint: no sink in the goal", text)
+
+    def test_the_constants_come_from_the_core(self):
+        self.assertEqual(mission_core.MISSION_VERSION, mission.MISSION_VERSION)
+        self.assertEqual(mission_core.DEFAULT_CALLS, mission.DEFAULT_CALLS)
+        self.assertEqual(mission_core.DEFAULT_SECONDS, mission.DEFAULT_SECONDS)
+        self.assertEqual(mission_core.STATUS_UNKNOWN, mission.STATUS_UNKNOWN)
+        self.assertEqual(mission_core.ERROR_BUDGET, mission.ERROR_BUDGET)
+
+    def test_the_two_surfaces_render_the_same_document(self):
+        """The artifact is the evidence: it cannot differ by surface."""
+        findings = self._findings()
+        cli = mission.Mission.__new__(mission.Mission)
+        cli.goal = "goal"
+        cli.id = "m1"
+        cli.program = {"name": "a.exe", "executable_path": "/a"}
+        cli.hints = {"source": "recv"}
+        cli.failed = None
+        cli.skipped = []
+        cli.findings = findings
+        cli.budget = mission.Budget(60, 200000, 900)
+        cli.budget.calls = 2
+        cli.budget.tokens = 50
+        cli.budget.started = cli.budget.started  # fixed: same start
+
+        bridge_mission = bridge._Mission.__new__(bridge._Mission)
+        bridge_mission.goal = cli.goal
+        bridge_mission.id = cli.id
+        bridge_mission.program = cli.program
+        bridge_mission.hints = cli.hints
+        bridge_mission.failed = None
+        bridge_mission.skipped = []
+        bridge_mission.findings = findings
+        bridge_mission.budget = bridge._MissionBudget(60, 200000)
+        bridge_mission.budget.calls = 2
+        bridge_mission.budget.tokens = 50
+        bridge_mission.budget.started = cli.budget.started
+
+        verification = {"checked": 2, "verified": 1, "unverified": ["F1"]}
+        self.assertEqual(mission.to_markdown(cli, verification),
+                         bridge._mission_markdown(bridge_mission, verification))
+
+
+class I1InventoryTests(unittest.TestCase):
+    """The close-out: what the mechanism now owns, and what it must never lose."""
+
+    EXPECTED = {
+        "ghydra/core/digest.py", "ghydra/core/runbook.py",
+        "ghydra/core/hints.py", "ghydra/core/cache.py",
+        "ghydra/core/diff.py", "ghydra/core/fleet.py",
+        "ghydra/core/capabilities.py", "ghydra/core/contextpack.py",
+        "ghydra/core/telemetry.py", "ghydra/core/taint.py",
+        "ghydra/core/mission.py",
+    }
+
+    def test_every_module_is_registered_and_generated(self):
+        self.assertEqual(self.EXPECTED, set(gen_core.CORE_MODULES))
+        text = _bridge_text()
+        for module in self.EXPECTED:
+            with self.subTest(module=module):
+                self.assertIn(f"# >>> generated from {module}", text)
+                self.assertIn(f"# <<< end generated from {module}", text)
+                self.assertEqual(1, text.count(f"# >>> generated from {module}"))
+
+    def test_every_module_has_its_own_rename_map(self):
+        for module in self.EXPECTED:
+            with self.subTest(module=module):
+                self.assertTrue(gen_core.CORE_RENAMES.get(module),
+                                f"{module} has no rename map")
+
+    def test_a_core_name_appears_only_inside_its_own_region(self):
+        """The claim is "one definition", not "fewer lines".
+
+        The bridge keeps a generated copy — it ships as one file — so the file
+        does not shrink. What must hold is that no core name has a definition
+        *outside* its region: that would be the duplication coming back.
+        """
+        definitions = _definitions_outside_regions(_bridge_text())
+        for module in gen_core.CORE_MODULES:
+            for public in gen_core.CORE_RENAMES[module]:
+                for name, node in definitions:
+                    if name != public:
+                        continue
+                    with self.subTest(module=module, name=public):
+                        self.assertTrue(
+                            _delegates(node),
+                            f"{public} is defined outside its region with a body of its own")
+
+    def test_the_regions_are_contiguous_and_ordered(self):
+        text = _bridge_text()
+        positions = [text.index(f"# >>> generated from {module}")
+                     for module in gen_core.CORE_MODULES]
+        self.assertEqual(sorted(positions), positions)
 
 
 if __name__ == "__main__":
