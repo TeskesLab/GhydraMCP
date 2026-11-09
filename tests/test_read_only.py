@@ -6,7 +6,7 @@ guard is registered, the capabilities advertise it, the mutating methods are
 the four expected ones); the client side is exercised for real — a dry run
 must describe a mutation and never touch the session.
 
-Run with:  python test_read_only.py
+Run with:  python tests/test_read_only.py
 """
 
 import json
@@ -16,12 +16,13 @@ import tempfile
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ghydra.cli.audit import audit_cmd, read_entries  # noqa: E402
 from ghydra.client.http_client import GhidraHTTPClient  # noqa: E402
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _read(path):

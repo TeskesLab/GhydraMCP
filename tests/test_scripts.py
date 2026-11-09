@@ -6,7 +6,7 @@ isolated subprocesses. It models the script service's captured output and
 nested execution outcome, not Ghidra's Python provider or program bindings.
 MCP calls and CLI commands use their real HTTP transports and formatters.
 
-Run with: python test_scripts.py
+Run with: python tests/test_scripts.py
 """
 
 import asyncio
@@ -25,7 +25,8 @@ from unittest import mock
 
 from click.testing import CliRunner
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge
 from ghydra.cli.main import cli

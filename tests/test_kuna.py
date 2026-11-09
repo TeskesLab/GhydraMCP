@@ -5,7 +5,7 @@ These tests need neither a running Ghidra nor the Kuna binary: they cover
 the opt-in precedence, the bridge/CLI contract and the export readers, which
 are the parts that can break silently.
 
-Run with:  python test_kuna.py
+Run with:  python tests/test_kuna.py
 """
 
 import json
@@ -19,7 +19,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge
 from ghydra import kuna as kuna_helper
@@ -810,7 +811,7 @@ class KunaErrorTaxonomyTests(unittest.TestCase):
 class KunaDocumentationTests(unittest.TestCase):
     """The reference must describe the code that actually exists."""
 
-    DOC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GHYDRA_KUNA.md")
+    DOC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "GHYDRA_KUNA.md")
 
     def setUp(self):
         with open(self.DOC, "r", encoding="utf-8") as handle:

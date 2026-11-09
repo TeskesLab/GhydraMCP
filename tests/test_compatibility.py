@@ -6,18 +6,19 @@ the sources, and the bridge half is pure Python. The Java sources are also
 compiled by javac in the round's verification, and there is a JUnit test in
 src/test/java that exercises CompatibilityService.report() for real.
 
-Run with:  python test_compatibility.py
+Run with:  python tests/test_compatibility.py
 """
 
 import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JAVA = "src/main/java/eu/starsong/ghidra"
 
 

@@ -20,14 +20,15 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from click.testing import CliRunner  # noqa: E402
 
 from ghydra import twin  # noqa: E402
 from ghydra.cli.main import cli  # noqa: E402
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXAMPLES = os.path.join(ROOT, "examples")
 SNAPSHOT = os.path.join(EXAMPLES, "twin", "example-snapshot.json")
 

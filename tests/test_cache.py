@@ -7,7 +7,7 @@ pin down is that the cache cannot lie about which program an answer belongs to,
 cannot serve a stale answer past its age, and cannot break a call when the disk
 is unavailable.
 
-Run with:  python test_cache.py
+Run with:  python tests/test_cache.py
 """
 
 import json
@@ -18,7 +18,8 @@ import time
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra import cache as C  # noqa: E402

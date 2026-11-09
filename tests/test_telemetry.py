@@ -5,7 +5,7 @@ No Ghidra, no network: the recorder writes into a temporary state dir, the
 summarizer is exercised over synthetic entries, and the CLI command is built
 against that file. The bridge and CLI summarizers are asserted to agree.
 
-Run with:  python test_telemetry.py
+Run with:  python tests/test_telemetry.py
 """
 
 import json
@@ -15,7 +15,8 @@ import tempfile
 import time
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra import telemetry as cli_telemetry  # noqa: E402

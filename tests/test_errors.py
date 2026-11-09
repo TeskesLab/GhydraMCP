@@ -5,7 +5,7 @@ No Ghidra, no network. The Java half is a static scan: every Response.error
 call site must pass a non-empty, code-shaped string as its first literal
 argument, so no handler can ship an error an agent cannot branch on.
 
-Run with:  python test_errors.py
+Run with:  python tests/test_errors.py
 """
 
 import os
@@ -15,7 +15,7 @@ import sys
 import unittest
 from unittest import mock
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import bridge_mcp_hydra as bridge  # noqa: E402

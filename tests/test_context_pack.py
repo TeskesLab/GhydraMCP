@@ -4,7 +4,7 @@
 No Ghidra, no network: the pack builder is exercised with synthetic sections
 and mocked envelopes, and the link translation with fixture envelopes.
 
-Run with:  python test_context_pack.py
+Run with:  python tests/test_context_pack.py
 """
 
 import inspect
@@ -13,7 +13,8 @@ import sys
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra import contextpack  # noqa: E402

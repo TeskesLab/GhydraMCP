@@ -9,6 +9,15 @@ import sys
 import unittest
 import time
 
+# The suites live in tests/, next to the runner's entry point.
+TESTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tests")
+
+
+def suite_script(name):
+    """The command that runs one suite, wherever the repository is."""
+    return [sys.executable, os.path.join(TESTS_DIR, name)]
+
+
 def print_header(text):
     """Print a header with the given text"""
     print("\n" + "=" * 80)
@@ -18,6 +27,10 @@ def print_header(text):
 def run_http_api_tests():
     """Run the HTTP API tests"""
     print_header("Running HTTP API Tests")
+    # The suite lives in tests/; it is imported rather than spawned because it
+    # builds a unittest suite in this process.
+    if TESTS_DIR not in sys.path:
+        sys.path.insert(0, TESTS_DIR)
     
     # Import and run the tests
     try:
@@ -48,7 +61,7 @@ def run_mcp_bridge_tests():
         
         print("Running MCP client test script...")
         result = subprocess.run(
-            [sys.executable, "test_mcp_client.py"],
+            suite_script("test_mcp_client.py"),
             capture_output=True,
             text=True
         )
@@ -74,7 +87,7 @@ def run_data_tests():
     
     try:
         result = subprocess.run(
-            [sys.executable, "test_data_operations.py"],
+            suite_script("test_data_operations.py"),
             capture_output=True,
             text=True
         )
@@ -97,7 +110,7 @@ def run_port_tests():
     print_header("Running Javalin Port Edge-Case Tests")
     try:
         result = subprocess.run(
-            [sys.executable, "test_javalin_port.py"],
+            suite_script("test_javalin_port.py"),
             capture_output=True,
             text=True
         )
@@ -118,7 +131,7 @@ def run_comment_tests():
     
     try:
         result = subprocess.run(
-            [sys.executable, "test_comments.py"],
+            suite_script("test_comments.py"),
             capture_output=True,
             text=True
         )
@@ -142,7 +155,7 @@ def run_kuna_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_kuna.py"],
+            suite_script("test_kuna.py"),
             capture_output=True,
             text=True
         )
@@ -166,7 +179,7 @@ def run_x64dbg_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_x64dbg.py"],
+            suite_script("test_x64dbg.py"),
             capture_output=True,
             text=True
         )
@@ -191,7 +204,7 @@ def run_headless_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_headless.py"],
+            suite_script("test_headless.py"),
             capture_output=True,
             text=True
         )
@@ -216,7 +229,7 @@ def run_evidence_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_evidence.py"],
+            suite_script("test_evidence.py"),
             capture_output=True,
             text=True
         )
@@ -241,7 +254,7 @@ def run_triage_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_triage.py"],
+            suite_script("test_triage.py"),
             capture_output=True,
             text=True
         )
@@ -266,7 +279,7 @@ def run_rea_parity_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_rea_parity.py"],
+            suite_script("test_rea_parity.py"),
             capture_output=True,
             text=True
         )
@@ -291,7 +304,7 @@ def run_surface_parity_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_surface_parity.py"],
+            suite_script("test_surface_parity.py"),
             capture_output=True,
             text=True
         )
@@ -316,7 +329,7 @@ def run_capabilities_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_capabilities.py"],
+            suite_script("test_capabilities.py"),
             capture_output=True,
             text=True
         )
@@ -341,7 +354,7 @@ def run_compatibility_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_compatibility.py"],
+            suite_script("test_compatibility.py"),
             capture_output=True,
             text=True
         )
@@ -366,7 +379,7 @@ def run_scripts_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_scripts.py"],
+            suite_script("test_scripts.py"),
             capture_output=True,
             text=True
         )
@@ -391,7 +404,7 @@ def run_runner_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_runner.py"],
+            suite_script("test_runner.py"),
             capture_output=True,
             text=True
         )
@@ -416,7 +429,7 @@ def run_docs_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_docs.py"],
+            suite_script("test_docs.py"),
             capture_output=True,
             text=True
         )
@@ -441,7 +454,7 @@ def run_capability_summary_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_capabilities_summary.py"],
+            suite_script("test_capabilities_summary.py"),
             capture_output=True,
             text=True
         )
@@ -466,7 +479,7 @@ def run_tasks_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_tasks.py"],
+            suite_script("test_tasks.py"),
             capture_output=True,
             text=True
         )
@@ -491,7 +504,7 @@ def run_errors_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_errors.py"],
+            suite_script("test_errors.py"),
             capture_output=True,
             text=True
         )
@@ -516,7 +529,7 @@ def run_context_pack_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_context_pack.py"],
+            suite_script("test_context_pack.py"),
             capture_output=True,
             text=True
         )
@@ -541,7 +554,7 @@ def run_tool_groups_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_tool_groups.py"],
+            suite_script("test_tool_groups.py"),
             capture_output=True,
             text=True
         )
@@ -566,7 +579,7 @@ def run_telemetry_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_telemetry.py"],
+            suite_script("test_telemetry.py"),
             capture_output=True,
             text=True
         )
@@ -669,7 +682,7 @@ def run_assertions_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_assertions.py"],
+            suite_script("test_assertions.py"),
             capture_output=True,
             text=True
         )
@@ -694,7 +707,7 @@ def run_read_only_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_read_only.py"],
+            suite_script("test_read_only.py"),
             capture_output=True,
             text=True
         )
@@ -719,7 +732,7 @@ def run_runbook_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_runbook.py"],
+            suite_script("test_runbook.py"),
             capture_output=True,
             text=True
         )
@@ -744,7 +757,7 @@ def run_taint_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_taint.py"],
+            suite_script("test_taint.py"),
             capture_output=True,
             text=True
         )
@@ -769,7 +782,7 @@ def run_mission_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_mission.py"],
+            suite_script("test_mission.py"),
             capture_output=True,
             text=True
         )
@@ -794,7 +807,7 @@ def run_cache_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_cache.py"],
+            suite_script("test_cache.py"),
             capture_output=True,
             text=True
         )
@@ -819,7 +832,7 @@ def run_fleet_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_fleet.py"],
+            suite_script("test_fleet.py"),
             capture_output=True,
             text=True
         )
@@ -844,7 +857,7 @@ def run_core_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_core.py"],
+            suite_script("test_core.py"),
             capture_output=True,
             text=True
         )
@@ -869,7 +882,7 @@ def run_twin_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_twin.py"],
+            suite_script("test_twin.py"),
             capture_output=True,
             text=True
         )
@@ -894,7 +907,7 @@ def run_examples_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_examples.py"],
+            suite_script("test_examples.py"),
             capture_output=True,
             text=True
         )

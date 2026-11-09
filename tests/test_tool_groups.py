@@ -5,14 +5,15 @@ No Ghidra, no network: the group map, the catalogue, the profile switch and
 the four meta-tools are exercised directly. The live tool manager is restored
 after every test that mutates it.
 
-Run with:  python test_tool_groups.py
+Run with:  python tests/test_tool_groups.py
 """
 
 import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 

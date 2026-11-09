@@ -6,7 +6,7 @@ composes (a function by name, the xrefs to a name, a function's pcode and the
 call path). The bridge duplicates the logic by necessity, so the parity of the
 report is asserted here as well.
 
-Run with:  python test_taint.py
+Run with:  python tests/test_taint.py
 """
 
 import os
@@ -14,7 +14,8 @@ import sys
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra import taint  # noqa: E402

@@ -20,7 +20,8 @@ import unittest
 
 import requests
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge
 from ghydra.cli.main import cli
@@ -632,7 +633,7 @@ class ReaParityApiTests(unittest.TestCase):
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
-        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                               "bridge_mcp_hydra.py")
 
         async def call():

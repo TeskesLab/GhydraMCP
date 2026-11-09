@@ -4,6 +4,7 @@
 <!-- toc -->
 
 - [Prerequisites](#prerequisites)
+- [Where the suites live](#where-the-suites-live)
 - [Running All Tests](#running-all-tests)
 - [HTTP API Tests](#http-api-tests)
 - [MCP Bridge Tests](#mcp-bridge-tests)
@@ -22,6 +23,13 @@ This document describes how to test the GhydraMCP plugin and bridge.
 - Python 3.11 or higher
 - Ghidra with the GhydraMCP plugin installed and running
 - The `requests` Python package (`pip install requests`)
+
+## Where the suites live
+
+The suites are the `test_*.py` files in [`tests/`](tests/). The runner stays at
+the repository root because CI and the documentation call `python run_tests.py`
+there; it builds every suite command from one helper, so a suite only has to
+exist in `tests/` to be runnable.
 
 ## Running All Tests
 

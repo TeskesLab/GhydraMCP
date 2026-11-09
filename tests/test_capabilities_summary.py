@@ -4,7 +4,7 @@
 No Ghidra, no network: the pure report builder is exercised with synthetic
 HATEOAS envelopes, and the bridge/CLI copies are checked for parity.
 
-Run with:  python test_capabilities_summary.py
+Run with:  python tests/test_capabilities_summary.py
 """
 
 import inspect
@@ -13,7 +13,7 @@ import sys
 import unittest
 from unittest import mock
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import bridge_mcp_hydra as bridge  # noqa: E402

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the documentation drift guard (I13).
 
-Needs neither Ghidra nor a network. Run with:  python test_docs.py
+Needs neither Ghidra nor a network. Run with:  python tests/test_docs.py
 """
 
 import os
@@ -9,7 +9,7 @@ import subprocess
 import sys
 import unittest
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 import check_docs  # noqa: E402

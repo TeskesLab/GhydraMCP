@@ -10,7 +10,7 @@ down is the property that makes that safe:
 * the generated code is **identical** to the core's behaviour;
 * the bridge's named helpers are **delegations**, not second copies.
 
-Run with:  python test_core.py
+Run with:  python tests/test_core.py
 """
 
 import os
@@ -19,7 +19,8 @@ import sys
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra.core import digest as core  # noqa: E402
@@ -40,7 +41,7 @@ from ghydra.core import hints as hints_core  # noqa: E402
 from ghydra.core import runbook as runbook_core  # noqa: E402
 from scripts import gen_core  # noqa: E402
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _bridge_text():

@@ -5,7 +5,7 @@ Needs neither Ghidra nor an MCP client: the negotiation helper is pure, and
 the REST/CLI/bridge contract is checked from the source files. This is what
 makes the endpoint testable in CI without a live CodeBrowser.
 
-Run with:  python test_capabilities.py
+Run with:  python tests/test_capabilities.py
 """
 
 import os
@@ -13,11 +13,12 @@ import sys
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _read(path):

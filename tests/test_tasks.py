@@ -5,7 +5,7 @@ No Ghidra, no network: the registry is exercised with synthetic bodies and
 mocked HTTP, covering the lifecycle, the cancel semantics, the synchronous
 fallback and the tool contract.
 
-Run with:  python test_tasks.py
+Run with:  python tests/test_tasks.py
 """
 
 import inspect
@@ -15,7 +15,8 @@ import time
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 

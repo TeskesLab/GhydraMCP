@@ -52,7 +52,7 @@ Verified rough edges — check before trusting anything downstream:
   `HEAVY_HEAD` box, whose frame characters are outside cp1252; piped on a Western Windows
   (`sys.stdout.encoding == 'cp1252'`) `click.echo` raised `UnicodeEncodeError`. Fixed: the CLI
   entrypoint now reconfigures stdout/stderr to UTF-8 with `errors="replace"` before any output
-  (covered by `test_errors.py`, which runs the CLI under `PYTHONIOENCODING=cp1252`). The Kuna
+  (covered by `tests/test_errors.py`, which runs the CLI under `PYTHONIOENCODING=cp1252`). The Kuna
   tables keep `box=box.ASCII` as defense in depth.
 
 
@@ -60,7 +60,7 @@ Verified rough edges — check before trusting anything downstream:
 
 `REA_PARITY.md` compared this project with the REA (139 tools in `rea-agents` 6.0.0) and named four
 gaps that were native and cheap. All four are closed, on the three surfaces at once, and
-`test_rea_parity.py` is what proves they agree:
+`tests/test_rea_parity.py` is what proves they agree:
 
 | REA | REST API | Bridge tool | CLI |
 | --- | --- | --- | --- |

@@ -5,7 +5,7 @@ No Ghidra, no network: a fake client answers the REST calls, and the pure
 evaluator/renderers are exercised directly. The honesty rules matter as much
 as the happy path: a truncated listing must never read as a pass.
 
-Run with:  python test_assertions.py
+Run with:  python tests/test_assertions.py
 """
 
 import json
@@ -15,7 +15,8 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ghydra import assertions as A  # noqa: E402
 from ghydra.cli.assertions_cmd import assert_cmd  # noqa: E402
@@ -331,7 +332,7 @@ class MissingNameTests(unittest.TestCase):
 class ExampleTests(unittest.TestCase):
     """`examples/` must keep working: it is the thing people copy."""
 
-    ROOT = os.path.dirname(os.path.abspath(__file__))
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     def test_the_example_assertions_load_and_cover_the_kinds(self):
         items = A.load_assertions(os.path.join(self.ROOT, "examples", "asserts.json"))

@@ -7,7 +7,7 @@ the budget stops the mission instead of running past it, a doubt becomes an
 `unknown` finding instead of a question, and a conclusion whose evidence moved
 is reported as `unverified` rather than kept.
 
-Run with:  python test_mission.py
+Run with:  python tests/test_mission.py
 """
 
 import json
@@ -17,7 +17,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra import mission as M  # noqa: E402

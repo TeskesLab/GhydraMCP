@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The test suites moved to `tests/`, with a guard against the clutter coming
+  back**: the repository root held 67 files, **33 of them suites** — half of what a
+  newcomer sees was test machinery. All 33 moved to [`tests/`](tests/), and the
+  three things that depended on where a test file lives moved with them:
+  `sys.path` now goes one level up (27 files), `ROOT` points at the repository (11
+  files), and the runner builds every command through one `suite_script()` helper
+  instead of 32 literal paths — plus the one suite it imports rather than spawns
+  gets `tests/` on the path. Three files built a repository path **inline** rather
+  than through `ROOT` (`tests/test_kuna.py` reading `GHYDRA_KUNA.md`,
+  `tests/test_headless.py`, `tests/test_rea_parity.py`); the move broke each one,
+  which is how they were found.
+  `tests/test_runner.py` now fails if a suite appears at the root again, if the
+  runner names a suite that does not exist, or if `tests/` stops holding them. Its
+  flag-combination test runs two **cheap** suites rather than two heavy ones: it
+  runs inside the runner, so the weight there measured the machine (one 120 s
+  timeout observed under load), not the contract. The root is 34 files: 25
+  documents, the bridge, the runner and the build files.
 - **The four review findings that were left open, fixed — with the tests that pin
   them**: the independent review's remaining items are closed.
   **The property read is method-first** (`util/ReflectiveRead`): the BSim ingest read

@@ -170,7 +170,7 @@ Services own transactions; resources never call DB mutators directly. Reads use 
 3. Register the resource in `GhydraPlugin.java`'s `server.register(...)` list — **required for a new
    resource class**; adding a route to an already-registered resource needs no extra step.
 4. Build responses with `hateoas/Response` (`Response.ok(ctx, port, data).self(...)`). Every
-   response envelope carries `success`, `id`, `instance`, `result`, `_links` — `test_http_api.py`
+   response envelope carries `success`, `id`, `instance`, `result`, `_links` — `tests/test_http_api.py`
    asserts this.
 5. Use `GhidraUtil` for type resolution and address parsing.
 6. For non-GET action links use `Response.linkWithMethod(rel, href, "POST", args)`. Do **not**
@@ -204,7 +204,7 @@ callable; a link that does not map to a registered tool is left out rather than 
 protocol uses for a tool's parameters, so a client that re-encodes the container loses the value
 — the call goes through with no arguments and the tool does something else instead of failing. It
 happened to `x64dbg_call`, and the unit tests did not catch it because they called the function
-instead of the protocol: `test_x64dbg.py` now drives a tool through `mcp.call_tool(...)`, and a
+instead of the protocol: `tests/test_x64dbg.py` now drives a tool through `mcp.call_tool(...)`, and a
 guard asserts that no bridge tool declares a parameter the protocol reserves.
 
 **The tool list is groupable** (I15): 120 tools in one list degrade selection, so the bridge groups
@@ -273,17 +273,17 @@ python run_tests.py --rea                # the four gaps closed against the REA
 A green run against no Ghidra means nothing — confirm tests actually executed before trusting it.
 Tests need Ghidra with a binary open, and a loaded binary with functions (`skipTest` otherwise).
 
-**The exception is `--kuna`**: `test_kuna.py` needs neither Ghidra nor the Kuna binary, so it always
+**The exception is `--kuna`**: `tests/test_kuna.py` needs neither Ghidra nor the Kuna binary, so it always
 runs and always gives a signal. It covers the Kuna opt-in precedence, the bridge/CLI contract
 (every `kuna_*` tool has a `FORMATTERS` entry and is registered in MCP; none takes a `port`) and
 the export readers.
 
-**`--x64dbg` is the other one that always runs**: `test_x64dbg.py` needs neither Ghidra nor
+**`--x64dbg` is the other one that always runs**: `tests/test_x64dbg.py` needs neither Ghidra nor
 x64dbg, because it starts a fake plugin that answers like the real one (JSON-RPC over HTTP, a
 bearer token, the tool catalogue with `annotations.readOnlyHint`). It covers the client, the
 config precedence, the address model, the bridge tools and the error taxonomy.
 
-**`--rea` is half of each**: `test_rea_parity.py` splits the contract (the tools are registered, each
+**`--rea` is half of each**: `tests/test_rea_parity.py` splits the contract (the tools are registered, each
 one has a formatter, the CLI has the command, the list of targets is read in every shape — none of
 which needs a Ghidra) from the live half (the API and the bridge over the wire — which does). A skip
 there is usually a stale premise rather than an absence: the suite looks for a caller/callee pair by
@@ -299,8 +299,8 @@ repeating is safe. When a test fails there, look at the transport before the log
 answer was lost, so it was not repeated) and as `X64DBG_MISSING` when it did not leave.
 
 Target selection is inconsistent and worth knowing:
-- `test_javalin_port.py` honors `GHYDRAMCP_TEST_HOST` **and** `GHYDRAMCP_TEST_PORT`.
-- `test_http_api.py` honors only `GHYDRAMCP_TEST_HOST`; its port is hardcoded to 8192.
+- `tests/test_javalin_port.py` honors `GHYDRAMCP_TEST_HOST` **and** `GHYDRAMCP_TEST_PORT`.
+- `tests/test_http_api.py` honors only `GHYDRAMCP_TEST_HOST`; its port is hardcoded to 8192.
 - `TESTING.md` documents the flags and the headless Java integration tests.
 
 `mvn test` (26 JUnit tests) covers only pure logic — anything needing a live `Program` can't
@@ -478,7 +478,7 @@ tools work with any Ghidra version.
 - **One error taxonomy on both sides.** The bridge and the CLI carry the same 14 codes
   (`KUNA_DISABLED`, `KUNA_MISSING`, `KUNA_TIMEOUT`, `KUNA_LAUNCH`, `KUNA_FAILED`, `KUNA_NO_JSON`,
   `KUNA_TOO_LARGE`, `KUNA_NO_FILE`, `KUNA_IO`, `KUNA_NO_DIR`, `KUNA_NO_INDEX`, `KUNA_BAD_ARTIFACT`,
-  `KUNA_NO_FUNCTION`, `KUNA_ERROR`). `test_kuna.py` asserts the two lists are identical, so adding
+  `KUNA_NO_FUNCTION`, `KUNA_ERROR`). `tests/test_kuna.py` asserts the two lists are identical, so adding
   a code to one side without the other fails the suite.
 - **The `kuna_*` tools take no `port`.** They are not part of the plugin API, so they take no
   instance either.
@@ -828,7 +828,7 @@ the CLI are **generated** into it instead of retyped.
   the core and regenerate.
 - **`--check` is the guard**, and both CI pipelines run it before compiling. A core change
   that was not regenerated fails instead of leaving the two surfaces disagreeing — the
-  failure mode this mechanism exists to remove. `test_core.py` (`--core`) asserts the region
+  failure mode this mechanism exists to remove. `tests/test_core.py` (`--core`) asserts the region
   is current, byte-identical to a fresh generation, and that a tampered region is caught.
 - **What has moved so far:** `ghydra/core/digest.py` (canonical form, SHA-256, the stable
   view of an answer), `ghydra/core/runbook.py` (step validation, with `BadSteps`/`BadEntry`

@@ -14,7 +14,8 @@ import time
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ghydra import headless
 from ghydra import report as report_module
@@ -402,7 +403,7 @@ class HeadlessSaveTests(unittest.TestCase):
         being saved was lost.
         """
         script = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "src", "main", "resources", "ghidra_scripts",
             "GhidraHeadlessServer.java")
         with open(script, "r", encoding="utf-8") as handle:

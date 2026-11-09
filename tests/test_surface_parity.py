@@ -10,7 +10,7 @@ visibly the script catalogue and the captured output of ``scripts_run``).
 This suite checks the whole registered catalogue. It needs neither Ghidra nor
 any external binary, so it always gives a signal.
 
-Run with:  python test_surface_parity.py
+Run with:  python tests/test_surface_parity.py
 """
 
 import inspect
@@ -18,7 +18,8 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge
 

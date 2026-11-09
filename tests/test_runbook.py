@@ -6,7 +6,7 @@ the bridge half is driven through its own helpers. The two sides duplicate this
 logic by necessity (the bridge ships as one file and must not import ghydra),
 so the parity of the digest, the comparison and the diff is asserted here.
 
-Run with:  python test_runbook.py
+Run with:  python tests/test_runbook.py
 """
 
 import json
@@ -16,7 +16,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# The tests live in tests/; the code and the repository are one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra import diff as diff_helper  # noqa: E402
