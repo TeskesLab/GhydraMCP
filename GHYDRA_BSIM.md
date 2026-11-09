@@ -1,5 +1,20 @@
 # BSim — signature similarity across a corpus (R1)
 
+
+<!-- toc -->
+
+- [1. What it is (and what it is not)](#1-what-it-is-and-what-it-is-not)
+- [2. Setup](#2-setup)
+- [3. Build a corpus: `ingest`](#3-build-a-corpus-ingest)
+- [4. Ask it: `query`](#4-ask-it-query)
+- [5. Act on it: `apply-names`](#5-act-on-it-apply-names)
+- [6. Compare two versions: `diff`](#6-compare-two-versions-diff)
+- [7. The traps (all measured, all now encoded)](#7-the-traps-all-measured-all-now-encoded)
+- [8. Reference](#8-reference)
+- [9. Reproducing the numbers](#9-reproducing-the-numbers)
+
+<!-- /toc -->
+
 Ghidra ships a signature system, **BSim**, that turns a function into a vector and
 lets you ask "which functions in this corpus look like this one?". That is the one
 question a decompiler cannot answer well, and it is what this integration exposes

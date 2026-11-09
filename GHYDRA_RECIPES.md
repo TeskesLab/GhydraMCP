@@ -1,5 +1,24 @@
 # Recipes
 
+
+<!-- toc -->
+
+- [1. Triage a file you know nothing about](#1-triage-a-file-you-know-nothing-about)
+- [2. Understand one function, with the evidence](#2-understand-one-function-with-the-evidence)
+- [3. Ask "does input reach a dangerous call?"](#3-ask-does-input-reach-a-dangerous-call)
+- [4. Gate a build in CI](#4-gate-a-build-in-ci)
+- [5. Reproduce a session, and notice when it changes](#5-reproduce-a-session-and-notice-when-it-changes)
+- [6. Put a goal against a budget](#6-put-a-goal-against-a-budget)
+- [7. One question, several binaries](#7-one-question-several-binaries)
+- [8. Build a corpus, then find a function by its shape](#8-build-a-corpus-then-find-a-function-by-its-shape)
+- [9. Answer again with Ghidra closed](#9-answer-again-with-ghidra-closed)
+- [10. Run without a window, and keep the report](#10-run-without-a-window-and-keep-the-report)
+- [11. Attach a live debugger to a static address](#11-attach-a-live-debugger-to-a-static-address)
+- [12. Run it where you do not trust the binary](#12-run-it-where-you-do-not-trust-the-binary)
+- [The shape every recipe follows](#the-shape-every-recipe-follows)
+
+<!-- /toc -->
+
 Each recipe is a job, the commands that do it, and the trap that makes people
 think it is broken. Every command was run against Ghidra 12.2.
 

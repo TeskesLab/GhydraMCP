@@ -20,6 +20,7 @@ are trying to do**, not by where the code lives.
 | translate an answer that looks wrong | [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md) | error codes → cause → fix |
 | parse an answer, or wire it into CI | [GHYDRA_OUTPUT.md](GHYDRA_OUTPUT.md) | formats, the envelope, exit codes |
 | look up a tool | [GHYDRA_TOOLS.md](GHYDRA_TOOLS.md) | the generated catalogue (134 tools) |
+| look up an error code | [GHYDRA_ERRORS.md](GHYDRA_ERRORS.md) | every code, its status and the line that raises it |
 | use the CLI | [GHYDRA_CLI.md](GHYDRA_CLI.md) | every command |
 | call the REST API | [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) | every route, `API_VERSION` 3000 |
 | work with signatures | [GHYDRA_BSIM.md](GHYDRA_BSIM.md) | BSim: corpus, queries, comparisons, traps |

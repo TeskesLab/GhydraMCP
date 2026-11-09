@@ -1,5 +1,20 @@
 # Testing GhydraMCP
 
+
+<!-- toc -->
+
+- [Prerequisites](#prerequisites)
+- [Running All Tests](#running-all-tests)
+- [HTTP API Tests](#http-api-tests)
+- [MCP Bridge Tests](#mcp-bridge-tests)
+- [Kuna Integration Tests](#kuna-integration-tests)
+- [Troubleshooting](#troubleshooting)
+- [Adding New Tests](#adding-new-tests)
+- [Java Unit Tests](#java-unit-tests)
+- [Java Integration Tests (GhidraScript)](#java-integration-tests-ghidrascript)
+
+<!-- /toc -->
+
 This document describes how to test the GhydraMCP plugin and bridge.
 
 ## Prerequisites

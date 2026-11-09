@@ -1,5 +1,19 @@
 # Getting started
 
+
+<!-- toc -->
+
+- [1. Is there an instance to talk to?](#1-is-there-an-instance-to-talk-to)
+- [2. What is loaded?](#2-what-is-loaded)
+- [3. Read one function](#3-read-one-function)
+- [4. Ask a question instead of asking for an endpoint](#4-ask-a-question-instead-of-asking-for-an-endpoint)
+- [5. Turn a guess into an evidenced lead](#5-turn-a-guess-into-an-evidenced-lead)
+- [6. Put the analysis in a pipeline](#6-put-the-analysis-in-a-pipeline)
+- [7. Answer a question you cannot finish](#7-answer-a-question-you-cannot-finish)
+- [Where to go next](#where-to-go-next)
+
+<!-- /toc -->
+
 From an installed extension to a first answer. Every command and output below was
 run; the values are from a real `where.exe` analysis on Ghidra 12.2.
 

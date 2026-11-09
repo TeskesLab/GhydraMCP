@@ -1,9 +1,27 @@
 # Concepts
 
+
+<!-- toc -->
+
+- [1. Three surfaces, one API](#1-three-surfaces-one-api)
+- [2. An instance is a port](#2-an-instance-is-a-port)
+- [3. The envelope](#3-the-envelope)
+- [4. Absence, incompleteness and inconclusiveness are different](#4-absence-incompleteness-and-inconclusiveness-are-different)
+- [5. Evidence has identity](#5-evidence-has-identity)
+- [6. Budgets are hard stops](#6-budgets-are-hard-stops)
+- [7. Tools are grouped, and the group is a profile](#7-tools-are-grouped-and-the-group-is-a-profile)
+- [8. Local integrations are local, and say so](#8-local-integrations-are-local-and-say-so)
+- [9. Read-only, dry run, audit](#9-read-only-dry-run-audit)
+- [10. What this is not](#10-what-this-is-not)
+
+<!-- /toc -->
+
 The mental model. Once these ten ideas are clear, the 134 tools stop being a list
 and become a surface you can navigate.
 
 ---
+
+## 1. Three surfaces, one API
 
 ```
 MCP client ──► bridge_mcp_hydra.py ─┐
@@ -170,4 +188,3 @@ paths or binary content. `GHYDRA_TELEMETRY=0` turns it off.
 | local | `kuna_*`, `x64dbg_*`, `ghydra twin`, `ghydra bsim` |
 | protections | read-only middleware, `--dry-run`, dry-run defaults |
 | honesty | the disclaimers in `taint`, `bsim`, and the twin's provenance |
-## 1. Three surfaces, one API

@@ -1,5 +1,18 @@
 # Architecture
 
+
+<!-- toc -->
+
+- [The three tiers](#the-three-tiers)
+- [The single core, and the generator](#the-single-core-and-the-generator)
+- [The Java side](#the-java-side)
+- [Three surfaces, one answer](#three-surfaces-one-answer)
+- [Where the data lives](#where-the-data-lives)
+- [Testing as architecture](#testing-as-architecture)
+- [The decisions worth knowing](#the-decisions-worth-knowing)
+
+<!-- /toc -->
+
 How the pieces fit, and why they are shaped this way. Read this before changing
 something structural; [AGENTS.md](AGENTS.md) has the day-to-day rules.
 

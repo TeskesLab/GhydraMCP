@@ -187,6 +187,31 @@ def duplicate_heading_problems() -> list:
     return problems
 
 
+def errors_current_problems() -> list:
+    """The generated error reference must be current."""
+    sys.path.insert(0, ROOT)
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "gen_errors_doc", os.path.join(ROOT, "scripts", "gen_errors_doc.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load scripts/gen_errors_doc.py: {failure}"]
+    try:
+        rendered = module.render()
+    except Exception as failure:  # noqa: BLE001
+        return [f"the error reference cannot be generated: {failure}"]
+    document = os.path.join(ROOT, "GHYDRA_ERRORS.md")
+    if not os.path.exists(document):
+        return ["GHYDRA_ERRORS.md is missing: run scripts/gen_errors_doc.py"]
+    with open(document, encoding="utf-8") as handle:
+        current = handle.read()
+    if rendered != current:
+        return ["GHYDRA_ERRORS.md is stale: run scripts/gen_errors_doc.py"]
+    return []
+
+
 def index_current_problems() -> list:
     """The big references must carry a current generated index."""
     sys.path.insert(0, ROOT)
@@ -260,6 +285,7 @@ def main() -> int:
     problems.extend(index_link_problems())
     problems.extend(duplicate_heading_problems())
     problems.extend(index_current_problems())
+    problems.extend(errors_current_problems())
     if not version_copy_ok():
         problems.append(
             "ghydra/x64dbg.py must use __version__ (scripts/version.py's sixth copy)")

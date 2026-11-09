@@ -1,5 +1,19 @@
 # Output formats and exit codes
 
+
+<!-- toc -->
+
+- [The four shapes](#the-four-shapes)
+- [The envelope (JSON)](#the-envelope-json)
+- [The CLI's two modes](#the-clis-two-modes)
+- [The MCP bridge](#the-mcp-bridge)
+- [The assertion report: JUnit and SARIF](#the-assertion-report-junit-and-sarif)
+- [Exit codes](#exit-codes)
+- [Sizes, and why the answers are not pretty-printed](#sizes-and-why-the-answers-are-not-pretty-printed)
+- [Where a number comes from](#where-a-number-comes-from)
+
+<!-- /toc -->
+
 The same answer reaches you in different shapes depending on where you asked from.
 This page is the contract for those shapes — what each format is for, and what the
 process exit code means.

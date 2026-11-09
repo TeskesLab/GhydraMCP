@@ -1,5 +1,26 @@
 # Troubleshooting
 
+
+<!-- toc -->
+
+- ["No instances found" / the CLI sees nothing](#no-instances-found-the-cli-sees-nothing)
+- [The extension does not load](#the-extension-does-not-load)
+- [Version mismatch](#version-mismatch)
+- ["It says ready but the query fails"](#it-says-ready-but-the-query-fails)
+- [An assertion fails when the binary looks fine](#an-assertion-fails-when-the-binary-looks-fine)
+- [The mission exits 1 but "found" things](#the-mission-exits-1-but-found-things)
+- [A command mutates the program when it should not](#a-command-mutates-the-program-when-it-should-not)
+- [The twin does not know a function](#the-twin-does-not-know-a-function)
+- [Kuna does not run](#kuna-does-not-run)
+- [x64dbg is "not there" when it is running](#x64dbg-is-not-there-when-it-is-running)
+- [A route answers 403](#a-route-answers-403)
+- [A route answers 409](#a-route-answers-409)
+- [A route answers 503](#a-route-answers-503)
+- [The same call is slower than the numbers in the docs](#the-same-call-is-slower-than-the-numbers-in-the-docs)
+- [Where to look next](#where-to-look-next)
+
+<!-- /toc -->
+
 Organised by **symptom**, because that is what you have when you go looking. Every
 entry says what the message means and what to do — a check that fails is never a
 dead end.
