@@ -246,3 +246,68 @@ def apply_names_cmd(ctx, address, name, min_similarity, dry_run):
         click.echo("  applied: no (dry run) — pass --apply to rename")
     if result.get('reason') and not result.get('applied'):
         click.echo(f"  {result['reason']}")
+
+
+@bsim.command('diff')
+@click.argument('other_executable')
+@click.option('--max-functions', type=int, default=0,
+              help='How many functions to compare (0 = 25, cap 500)')
+@click.option('--min-similarity', type=float, default=0.0,
+              help='The floor for calling two functions a pair (0 = 0.8)')
+@click.pass_context
+def diff_cmd(ctx, other_executable, max_functions, min_similarity):
+    """What changed between two versions, paired by signature (R1).
+
+    Both versions must have been ingested into the database. A function with no
+    pair is listed, not dropped; a thunk that was never ingested shows as
+    not_found, and a function without a body as no_signature.
+
+    \b
+    Example:
+        ghydra bsim diff app-1.2.exe --max-functions 50
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+
+    params = {'other_executable': other_executable}
+    if max_functions:
+        params['max_functions'] = max_functions
+    if min_similarity:
+        params['min_similarity'] = min_similarity
+    try:
+        response = client.get('bsim/diff', params=params)
+    except GhidraError as exc:
+        click.echo(formatter.format_error(exc), err=True)
+        ctx.exit(1)
+
+    result = response.get('result') if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        click.echo(str(response), err=True)
+        ctx.exit(1)
+
+    if ctx.obj.get('output_json'):
+        click.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    click.echo(f"BSim diff: {result.get('program')} against"
+               f" {result.get('other_executable')}")
+    click.echo(f"  database has {result.get('discovered_functions', 0)} functions"
+               f" in this program; compared {result.get('compared_functions', 0)}"
+               f" ({result.get('not_compared', 0)} not compared)")
+    click.echo(f"  same: {result.get('same', 0)}, moved: {result.get('moved', 0)},"
+               f" not found: {result.get('not_found', 0)},"
+               f" no signature: {result.get('no_signature', 0)}")
+    click.echo(f"  threshold: similarity >= {result.get('min_similarity')}")
+    for pair in result.get('pairs') or []:
+        kind = pair.get('class')
+        if kind in ('same', 'moved'):
+            other = pair.get('other') or {}
+            click.echo(f"  [{kind}] {pair.get('function')} @"
+                       f" {pair.get('address')} ->"
+                       f" {other.get('function')} @ {other.get('address')}"
+                       f" ({other.get('similarity')} similar)")
+        else:
+            click.echo(f"  [{kind}] {pair.get('function')} @ {pair.get('address')}")
+    for gap in result.get('query_failures') or []:
+        click.echo(f"  [query failed] {gap.get('function')}: {gap.get('code')}"
+                   f" — {gap.get('reason')}")

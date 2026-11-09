@@ -403,6 +403,87 @@ class BSimApplyNamesTests(unittest.TestCase):
         self.assertIn("dry_run", options)
         self.assertTrue(options["dry_run"].default)
 
+class BSimDiffTests(unittest.TestCase):
+    """BSim diff (R1, slice 4b): the tool, the formatter and the CLI.
+
+    Validated live against Ghidra 12.2 with the database ingest created: a
+    self-compare of where.exe paired 6 of 8 functions as `same` (2.0-2.4 s) and
+    reported two imported thunks as `not_found` — which is the honest answer,
+    because ingest only stores functions with a body. A comparison against a
+    name that is not in the database answered every function as `not_found`
+    instead of inventing pairs.
+    """
+
+    RESULT = {"success": True, "result": {
+        "program": "a.exe", "other_executable": "b.exe",
+        "discovered_functions": 104, "compared_functions": 3, "not_compared": 101,
+        "same": 1, "moved": 1, "not_found": 1, "no_signature": 0,
+        "min_similarity": 0.8, "seconds": 1.4,
+        "pairs": [
+            {"function": "FUN_1", "address": "140001000", "class": "same",
+             "other": {"function": "FUN_1", "address": "0x140001000",
+                       "similarity": 1.0}},
+            {"function": "FUN_2", "address": "140002000", "class": "moved",
+             "other": {"function": "FUN_2b", "address": "0x140009000",
+                       "similarity": 0.93}},
+            {"function": "wcstok", "address": "140003000",
+             "class": "not_found", "reason": "no function of b.exe is similar"},
+        ],
+        "query_failures": []}}
+
+    def test_the_tool_is_registered_with_a_formatter(self):
+        tools = set(getattr(bridge.mcp._tool_manager, "_tools", {}))
+        self.assertIn("bsim_diff_versions", tools)
+        self.assertIn("bsim_diff_versions", bridge.FORMATTERS)
+
+    def test_it_is_part_of_the_analysis_workflow(self):
+        self.assertEqual("functions", bridge._tool_group("bsim_diff_versions"))
+
+    def test_the_formatter_reports_the_counts_and_every_pair(self):
+        text = bridge.format_bsim_diff(self.RESULT)
+        for expected in ("BSim diff: a.exe against b.exe",
+                         "compared 3 (101 not compared)",
+                         "same: 1, moved: 1, not found: 1, no signature: 0",
+                         "threshold: similarity >= 0.8",
+                         "[same] FUN_1 @ 140001000 -> FUN_1 @ 0x140001000 (1.0 similar)",
+                         "[moved] FUN_2 @ 140002000 -> FUN_2b @ 0x140009000 (0.93 similar)",
+                         "[not_found] wcstok @ 140003000"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, text)
+
+    def test_a_query_failure_is_shown_not_hidden(self):
+        payload = {"success": True, "result": dict(
+            self.RESULT["result"],
+            query_failures=[{"function": "f", "address": "0x1",
+                             "code": "BSIM_QUERY_FAILED",
+                             "reason": "the database refused the query"}])}
+        text = bridge.format_bsim_diff(payload)
+        self.assertIn("[query failed] f: BSIM_QUERY_FAILED", text)
+
+    def test_a_missing_target_is_refused_with_the_reason(self):
+        refused = {"success": False, "error": {
+            "code": "BSIM_NO_TARGET",
+            "message": "name the executable to compare against"}}
+        self.assertIn("name the executable", bridge.format_bsim_diff(refused))
+
+    def test_the_tool_declares_its_parameters(self):
+        tool = next(item for item in bridge.mcp._tool_manager.list_tools()
+                    if item.name == "bsim_diff_versions")
+        properties = (getattr(tool, "parameters", None) or {}).get("properties", {})
+        for expected in ("other_executable", "max_functions", "min_similarity"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, properties)
+        self.assertIn("other_executable",
+                      (getattr(tool, "parameters", None) or {}).get("required", []))
+        self.assertNotIn("arguments", properties)
+
+    def test_the_cli_command_takes_the_other_executable(self):
+        from ghydra.cli.main import cli
+        command = cli.commands["bsim"].commands["diff"]
+        options = {param.name for param in command.params}
+        self.assertIn("other_executable", options)
+        self.assertIn("max_functions", options)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

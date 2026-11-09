@@ -5,6 +5,7 @@ import eu.starsong.ghidra.server.GhidraContext;
 import eu.starsong.ghidra.server.Resource;
 import eu.starsong.ghidra.service.BSimIngestService;
 import eu.starsong.ghidra.service.BSimApplyService;
+import eu.starsong.ghidra.service.BSimDiffService;
 import eu.starsong.ghidra.service.BSimQueryService;
 import eu.starsong.ghidra.service.BSimService;
 import io.javalin.Javalin;
@@ -30,6 +31,7 @@ public class BSimResource implements Resource {
         app.get("/bsim/query", ctx -> query(contextFactory.apply(ctx)));
         app.post("/bsim/apply-names",
             ctx -> applyNames(contextFactory.apply(ctx)));
+        app.get("/bsim/diff", ctx -> diff(contextFactory.apply(ctx)));
     }
 
     /**
@@ -107,6 +109,27 @@ public class BSimResource implements Resource {
             ctx.ctx().queryParam("name"), minSimilarity, dryRun);
         ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
             .self("/bsim/apply-names")
+            .link("query", "/bsim/query")
+            .link("ingest", "/bsim/ingest")
+            .build());
+    }
+
+    /**
+     * Pair the open program's functions against another version in the database.
+     *
+     * <p>The complement of `analysis_diff`: this pairs by signature, so a
+     * function that moved address (or lost its name) is reported as the same
+     * function relocated instead of one removal plus one addition.
+     */
+    private void diff(GhidraContext ctx) {
+        double minSimilarity = parseDouble(ctx, "min_similarity", 0.8);
+        int maxFunctions = parseInt(ctx, "max_functions",
+            BSimDiffService.DEFAULT_MAX_FUNCTIONS);
+        java.util.Map<String, Object> data = BSimDiffService.diff(
+            ctx.program(), ctx.ctx().queryParam("other_executable"),
+            maxFunctions, minSimilarity);
+        ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
+            .self("/bsim/diff")
             .link("query", "/bsim/query")
             .link("ingest", "/bsim/ingest")
             .build());

@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **BSim diff (R1, slice 4b), validated against a live Ghidra 12.2**:
+  `GET /bsim/diff`, `bsim_diff_versions` and `ghydra bsim diff` compare the open
+  program with another version **paired by signature** instead of by address —
+  the complement of `analysis_diff`, and the thing a signature database is
+  uniquely able to do: a function that moved address (or whose name was lost in
+  the rebuild) is reported as the same function relocated, not as one removal
+  plus one addition. Measured on `where.exe` against itself: 6 of 8 compared
+  functions paired as `same` in 2.4 s; the two imported thunks came back
+  `not_found`, which is honest — ingest stores only functions with a body.
+  Against a name that is not in the database, every function answered
+  `not_found` rather than an invented pair. The cost is one BSim query per
+  function (0.2-0.8 s each), so the walk is bounded (`max_functions`, default 25,
+  cap 500) and the answer reports how many functions were **not** compared. Two
+  classes were added from what the live run showed: `no_signature` (a function
+  with no body — a thunk, an external — cannot be in the database at all) is
+  separate from `query_failures` (the query itself failed), because "not in the
+  other version" would be a lie about the first.
 - **The x64dbg suite stops failing on a dropped loopback connection**: measured
   in full local runs, a bridge-level x64dbg test failed every now and then —
   twice in a row, on two different tests — with a transport reset underneath.

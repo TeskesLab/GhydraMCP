@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.23.0"
+BRIDGE_VERSION = "v3.24.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -4054,6 +4054,41 @@ def format_bsim_apply_names(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_bsim_diff(response: dict, **kwargs) -> str:
+    """What changed between two versions, paired by signature."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [f"BSim diff: {result.get('program')} against"
+             f" {result.get('other_executable')}",
+             f"  database has {result.get('discovered_functions', 0)} functions"
+             f" in this program; compared {result.get('compared_functions', 0)}"
+             f" ({result.get('not_compared', 0)} not compared)",
+             f"  same: {result.get('same', 0)}, moved: {result.get('moved', 0)},"
+             f" not found: {result.get('not_found', 0)},"
+             f" no signature: {result.get('no_signature', 0)}",
+             f"  threshold: similarity >= {result.get('min_similarity')}"]
+    for pair in result.get("pairs") or []:
+        kind = pair.get("class")
+        if kind in ("same", "moved"):
+            other = pair.get("other") or {}
+            lines.append(f"  [{kind}] {pair.get('function')} @"
+                         f" {pair.get('address')} ->"
+                         f" {other.get('function')} @ {other.get('address')}"
+                         f" ({other.get('similarity')} similar)")
+        else:
+            lines.append(f"  [{kind}] {pair.get('function')} @"
+                         f" {pair.get('address')}")
+    for gap in result.get("query_failures") or []:
+        lines.append(f"  [query failed] {gap.get('function')}:"
+                     f" {gap.get('code')} — {gap.get('reason')}")
+    if not result.get("pairs"):
+        lines.append("  no function was compared")
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -4193,6 +4228,7 @@ FORMATTERS = {
     "bsim_ingest": format_bsim_ingest,
     "bsim_query": format_bsim_query,
     "bsim_apply_names": format_bsim_apply_names,
+    "bsim_diff_versions": format_bsim_diff,
 }
 
 
@@ -13124,6 +13160,47 @@ def bsim_apply_names(address: str = "", name: str = "", min_similarity: float = 
         params["min_similarity"] = min_similarity
     return simplify_response(
         safe_post(port, "bsim/apply-names", params=params))
+
+
+
+@mcp.tool()
+@text_output
+def bsim_diff_versions(other_executable: str, max_functions: int = 0,
+                       min_similarity: float = 0.0,
+                       port: int | None = None) -> dict:
+    """What changed between two versions, paired by BSim signature
+
+    The complement of `analysis_diff`: that one compares by address and name,
+    this one **pairs by shape**, so a function that moved address — or lost its
+    name in the rebuild — is reported as the same function relocated instead of
+    as one removal plus one addition. Both versions must have been ingested into
+    the configured database first.
+
+    One BSim query runs per function, measured at about 0.2-0.8 s each, so the
+    walk is bounded by `max_functions` and the answer says how many functions
+    were not compared. A function with no pair is listed, never dropped: a thunk
+    that was never ingested appears as `not_found`, and a function without a body
+    as `no_signature`.
+
+    Args:
+        other_executable: The executable name the database recorded for the other
+            version (the file name, e.g. `app-1.2.exe`)
+        max_functions: How many functions of this program to compare (0 = 25,
+            cap 500)
+        min_similarity: The floor for calling two functions a pair (0 = 0.8)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: one row per function compared with its class (`same`, `moved`,
+              `not_found`, `no_signature`), the counts, and the query failures
+    """
+    port = _get_instance_port(port)
+    params = {"other_executable": other_executable}
+    if max_functions:
+        params["max_functions"] = int(max_functions)
+    if min_similarity:
+        params["min_similarity"] = min_similarity
+    return simplify_response(safe_get(port, "bsim/diff", params=params))
 
 
 
