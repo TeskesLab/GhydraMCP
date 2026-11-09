@@ -49,11 +49,38 @@ def twin_dir() -> str:
     return os.path.join(root, "twins")
 
 
-def twin_path(name: str) -> str:
-    """The file a twin is saved to, from its name."""
+#: Names Windows refuses as a file name, whatever the extension.
+_RESERVED_NAMES = {"con", "prn", "aux", "nul", "conin$", "conout$"} | {
+    f"{prefix}{number}" for prefix in ("com", "lpt") for number in range(1, 10)}
+
+
+def _safe_name(name: str) -> str:
+    """A readable file stem for a name: no separators, no device names."""
     safe = "".join(character if character.isalnum() or character in "._-"
-                   else "_" for character in name)
+                   else "_" for character in str(name))
+    safe = safe.strip("._- ") or "twin"
+    # A device name is refused with or without an extension, and in any case.
+    if safe.split(".")[0].lower() in _RESERVED_NAMES:
+        safe = "_" + safe
+    return safe
+
+
+def _legacy_twin_path(name: str) -> str:
+    """Where a snapshot made before the digest suffix lives."""
+    safe = "".join(character if character.isalnum() or character in "._-"
+                   else "_" for character in str(name))
     return os.path.join(twin_dir(), f"{safe}.json")
+
+
+def twin_path(name: str) -> str:
+    """The file a twin is saved to, from its name.
+
+    The digest is of the **original** name, so two names that sanitize to the same
+    stem are two files: `a/b` and `a_b` used to share one, and the second snapshot
+    overwrote the first.
+    """
+    digest = hashlib.sha256(str(name).encode("utf-8")).hexdigest()[:8]
+    return os.path.join(twin_dir(), f"{_safe_name(name)}-{digest}.json")
 
 
 def _bare_address(value: Any) -> str:
@@ -190,9 +217,10 @@ def resolve_path(path_or_name: str) -> str:
     """
     if os.path.exists(path_or_name):
         return path_or_name
-    candidate = twin_path(str(path_or_name))
-    if os.path.exists(candidate):
-        return candidate
+    for candidate in (twin_path(str(path_or_name)),
+                      _legacy_twin_path(str(path_or_name))):
+        if os.path.exists(candidate):
+            return candidate
     return path_or_name
 
 

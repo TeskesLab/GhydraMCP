@@ -141,7 +141,7 @@ Everything is under `GHYDRA_STATE_DIR` (default `~/.ghydra`):
 | `cache/v1/<key>.json` | decompile cache (opt-in; keyed on program identity + request) |
 | `missions/<id>.json` | mission checkpoints, and the dossiers next to them |
 | `evidence/<name>.json` | the evidence ledger (IDs that are never reused) |
-| `twins/<name>.json` | digital-twin snapshots |
+| `twins/<name>-<digest>.json` | digital-twin snapshots (the digest keeps two names that sanitize alike apart; a snapshot made before it is still read) |
 | `kuna/<digest>/` | Kuna exports (reused, with a provenance sidecar) |
 | `telemetry.jsonl` | tool-name/latency/error log (local only; 1 MB cap) |
 | `audit.jsonl` | the mutating calls the server accepted |

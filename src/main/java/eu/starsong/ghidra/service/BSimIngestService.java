@@ -53,6 +53,33 @@ public final class BSimIngestService {
     /** A program bigger than this is not a signature job, it is a mistake. */
     public static final int MAX_FUNCTIONS_LIMIT = 200_000;
 
+    /**
+     * What an ingest without a limit does: 5 000 functions.
+     *
+     * <p>The work is a decompilation per function, so "all of them" on a large
+     * binary is hours inside one request — the client gives up at its timeout, the
+     * Jetty thread stays busy, and the answer is lost. The caller who wants
+     * everything asks for it with {@code max_functions=0}.
+     */
+    public static final int DEFAULT_MAX_FUNCTIONS = 5_000;
+
+    /**
+     * The number of functions an ingest of {@code requested} will scan.
+     *
+     * <p>Negative (absent) is the default, {@code 0} is everything, and anything
+     * above {@link #MAX_FUNCTIONS_LIMIT} is clamped to it. Static and pure: it is
+     * what {@code BSimIngestServiceTest} pins.
+     */
+    static int capFor(int requested) {
+        if (requested < 0) {
+            return DEFAULT_MAX_FUNCTIONS;
+        }
+        if (requested == 0) {
+            return Integer.MAX_VALUE;
+        }
+        return Math.min(requested, MAX_FUNCTIONS_LIMIT);
+    }
+
     private BSimIngestService() {
     }
 
@@ -99,8 +126,7 @@ public final class BSimIngestService {
                 "no program is open in this instance");
         }
 
-        int limit = maxFunctions <= 0 ? Integer.MAX_VALUE
-            : Math.min(maxFunctions, MAX_FUNCTIONS_LIMIT);
+        int limit = capFor(maxFunctions);
         data.put("database", database);
         data.put("program", program.getName());
         data.put("track_call_graph", Boolean.valueOf(trackCallGraph));
@@ -128,6 +154,11 @@ public final class BSimIngestService {
         });
         int discovered = discoveredHolder[0];
         data.put("discovered_functions", discovered);
+        data.put("functions_cap", limit == Integer.MAX_VALUE ? null
+            : Integer.valueOf(limit));
+        // A scan that stopped at the cap is not the whole program: say so, or a
+        // later query will read "not in the corpus" from a partial ingest.
+        data.put("capped", Boolean.valueOf(discovered > limit));
         data.put("scanned_functions", selected.size());
         data.put("skipped_functions", Math.max(0, discovered - selected.size()));
 
@@ -177,6 +208,7 @@ public final class BSimIngestService {
             String[] location = BSimDatabase.projectLocation(program);
             data.put("repository", location[0]);
             data.put("path", location[1]);
+            data.put("location_reason", location[2]);
             generatorClass.getMethod("openProgram", Program.class, String.class,
                     String.class, String.class, String.class, String.class)
                 .invoke(signatureGenerator, program, null, null, null,
@@ -193,10 +225,7 @@ public final class BSimIngestService {
             // javap against Ghidra 12.2, and how the official script calls it).
             // Reading it as a field returned 0 and made every ingest fail with
             // BSIM_SCAN_FAILED.
-            Object describedCount = description == null ? null
-                : BSimDatabase.call(description, "numFunctions");
-            int described = describedCount instanceof Number
-                ? ((Number) describedCount).intValue() : 0;
+            int described = BSimDatabase.intValue(description, "numFunctions");
             if (described == 0) {
                 return BSimDatabase.failure(data, "BSIM_SCAN_FAILED",
                     "no function with a body could be decompiled, so there was "
@@ -238,8 +267,8 @@ public final class BSimIngestService {
             }
 
             data.put("success", Boolean.TRUE);
-            data.put("inserted_functions", BSimDatabase.intField(response, "numfunc"));
-            data.put("inserted_executables", BSimDatabase.intField(response, "numexe"));
+            data.put("inserted_functions", BSimDatabase.intValue(response, "numfunc"));
+            data.put("inserted_executables", BSimDatabase.intValue(response, "numexe"));
             data.put("seconds", BSimDatabase.secondsSince(started));
             return data;
         } catch (Throwable failed) {

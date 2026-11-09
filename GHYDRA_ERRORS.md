@@ -41,23 +41,23 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `BSIM_BELOW_THRESHOLD` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:205` |
-| `BSIM_CREATE_FAILED` | Java | 409 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:217` |
-| `BSIM_DISABLED` | Java | 503 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:157` |
-| `BSIM_INGEST_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:253` |
-| `BSIM_INIT_FAILED` | Java | 409 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:223` |
-| `BSIM_INSERT_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:229` |
-| `BSIM_NO_BODY` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:181` |
-| `BSIM_NO_DATABASE` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:163` |
-| `BSIM_NO_FUNCTION` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:175` |
-| `BSIM_NO_MATCH` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:193` |
-| `BSIM_NO_NAME` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:199` |
-| `BSIM_NO_PROGRAM` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:169` |
-| `BSIM_NO_TARGET` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:187` |
-| `BSIM_QUERY_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:241` |
-| `BSIM_RENAME_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:247` |
-| `BSIM_RENAME_REFUSED` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:211` |
-| `BSIM_SCAN_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:235` |
+| `BSIM_BELOW_THRESHOLD` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:213` |
+| `BSIM_CREATE_FAILED` | Java | 409 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:225` |
+| `BSIM_DISABLED` | Java | 503 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:165` |
+| `BSIM_INGEST_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:261` |
+| `BSIM_INIT_FAILED` | Java | 409 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:231` |
+| `BSIM_INSERT_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:237` |
+| `BSIM_NO_BODY` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:189` |
+| `BSIM_NO_DATABASE` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:171` |
+| `BSIM_NO_FUNCTION` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:183` |
+| `BSIM_NO_MATCH` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:201` |
+| `BSIM_NO_NAME` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:207` |
+| `BSIM_NO_PROGRAM` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:177` |
+| `BSIM_NO_TARGET` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:195` |
+| `BSIM_QUERY_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:249` |
+| `BSIM_RENAME_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:255` |
+| `BSIM_RENAME_REFUSED` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:219` |
+| `BSIM_SCAN_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:243` |
 
 ## DIFF
 

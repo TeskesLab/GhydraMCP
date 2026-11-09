@@ -43,7 +43,10 @@ public class BSimResource implements Resource {
      * what BSim itself says it inserted, and why it stopped when it did.
      */
     private void ingest(GhidraContext ctx) {
-        int maxFunctions = 0;
+        // Absent means "the caller did not say", and the service applies its
+        // default (5 000). `max_functions=0` is an explicit "everything", which is
+        // a decision the caller makes rather than one the default makes for them.
+        int maxFunctions = -1;
         String requested = ctx.ctx().queryParam("max_functions");
         if (requested != null && !requested.isBlank()) {
             try {
@@ -51,6 +54,11 @@ public class BSimResource implements Resource {
             } catch (NumberFormatException bad) {
                 throw new IllegalArgumentException(
                     "max_functions must be a number, got: " + requested);
+            }
+            if (maxFunctions < 0) {
+                throw new IllegalArgumentException(
+                    "max_functions must be 0 (everything) or a positive number, got: "
+                        + requested);
             }
         }
         boolean trackCallGraph = flag(ctx, "track_call_graph", false);

@@ -7,6 +7,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The four review findings that were left open, fixed — with the tests that pin
+  them**: the independent review's remaining items are closed.
+  **The property read is method-first** (`util/ReflectiveRead`): the BSim ingest read
+  `DescriptionManager.numFunctions` as a field, and it is a method — that is what broke
+  every ingest. The reader now tries the method, falls back to the field, and treats an
+  absent property as absent; `ReflectiveReadTest` (7 cases) fails if it ever goes back,
+  including a method that throws.
+  **The ingest is capped at 5 000 functions by default** (was: all of them, up to
+  200 000, with a decompilation per function — hours inside one request on a large
+  binary, and the Jetty thread stays busy after the client gives up). `0` means
+  everything when the caller asks, and the answer reports `functions_cap` and `capped`,
+  because a partial ingest must not be read later as "not in the corpus";
+  `BSimIngestServiceTest` pins the four cases.
+  **An unsaved program explains itself**: `repository`/`path` used to be two nulls with
+  no reason, and the answer now carries `location_reason`.
+  **A twin name is one file, and a writable one**: `twin_path` adds a short digest of
+  the original name (so `a/b` and `a_b` no longer share a snapshot), prefixes Windows
+  device names (`CON`, `COM1`, …), and `resolve_path` still finds a snapshot made
+  before the change. Six tests in `test_twin.py`.
+  **`AGENTS.md` fits its budget**: 68 646 bytes was truncated to 65 143 when loaded as
+  instructions, so the last sections were simply not read. "Known drift", "The four
+  gaps closed against the REA" and "The composed calls" moved to
+  [GHYDRA_INTERNALS.md](GHYDRA_INTERNALS.md) — 60 120 bytes now, with headroom — and
+  `AGENTS.md` points at it. `CLAUDE.md` is still the symlink.
 - **Four examples, one of them runnable with nothing installed — and the suite that
   proves it**: `examples/` was one CI workflow and a JSON file; it is now an index
   of four jobs, each with what it needs and what to look for in the output.

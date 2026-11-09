@@ -29,6 +29,7 @@ are trying to do**, not by where the code lives.
 | use Kuna | [GHYDRA_KUNA.md](GHYDRA_KUNA.md) | the decompiler integration, and its costs |
 | use x64dbg | [GHYDRA_X64DBG.md](GHYDRA_X64DBG.md) | the debugger integration, the address model |
 | contribute code | [AGENTS.md](AGENTS.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [ARCHITECTURE.md](ARCHITECTURE.md) | conventions, workflow, internals |
+| look up a verified rough edge | [GHYDRA_INTERNALS.md](GHYDRA_INTERNALS.md) | known drift, the REA gaps, the composed calls |
 | run or add tests | [TESTING.md](TESTING.md) | the 23 suites and what each proves |
 | cut a release | [RELEASING.md](RELEASING.md) | the one-tag procedure |
 

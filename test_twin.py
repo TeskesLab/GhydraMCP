@@ -308,6 +308,48 @@ class BuildFromClientTests(unittest.TestCase):
         self.assertEqual(3, document["functions"][0]["parameter_count"])
         self.assertEqual(["CreateFileW"], document["imports"])
 
+class TwinPathTests(unittest.TestCase):
+    """A snapshot name has to be one file, and a writable one on Windows."""
+
+    def test_two_names_that_sanitize_alike_are_two_files(self):
+        """`a/b` and `a_b` used to share a path: the second overwrote the first."""
+        first = twin.twin_path("a/b")
+        second = twin.twin_path("a_b")
+        self.assertNotEqual(first, second)
+
+    def test_the_same_name_is_the_same_path(self):
+        self.assertEqual(twin.twin_path("app-1.2"), twin.twin_path("app-1.2"))
+
+    def test_a_device_name_is_not_used_as_a_file_name(self):
+        """`CON.json` is a device on Windows: the file cannot be written."""
+        for name in ("CON", "con", "PRN", "nul", "COM1", "lpt9"):
+            with self.subTest(name=name):
+                stem = os.path.basename(twin.twin_path(name)).split(".")[0]
+                self.assertNotIn(stem.lower(), {"con", "prn", "nul", "aux"})
+                self.assertFalse(
+                    stem.lower().startswith(("com", "lpt")),
+                    f"{name} became {stem}, which Windows reserves")
+
+    def test_a_name_cannot_escape_the_directory(self):
+        for name in ("../../etc/passwd", "..\\..\\windows", "/absolute"):
+            with self.subTest(name=name):
+                directory = os.path.dirname(twin.twin_path(name))
+                self.assertEqual(os.path.abspath(twin.twin_dir()),
+                                 os.path.abspath(directory))
+
+    def test_an_empty_name_still_has_a_file(self):
+        self.assertTrue(os.path.basename(twin.twin_path("")).endswith(".json"))
+
+    def test_a_snapshot_written_before_the_digest_is_still_found(self):
+        """The older layout is read, so a twin made yesterday is not lost."""
+        name = "legacy-example"
+        legacy = twin._legacy_twin_path(name)
+        twin.save(snapshot(name=name), legacy)
+        try:
+            self.assertEqual(legacy, twin.resolve_path(name))
+        finally:
+            os.unlink(legacy)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -161,8 +161,16 @@ final class BSimDatabase {
      * program that was never saved has neither, and BSim is told so instead of
      * being handed a made-up path.
      */
+    /**
+     * The repository and path BSim records for this program, plus a reason when
+     * they are unknown.
+     *
+     * <p>The third element is null on success and explains the absence otherwise:
+     * an ingest of a program that was never saved used to report two nulls and
+     * leave the reader to guess why.
+     */
     static String[] projectLocation(Program program) {
-        String[] location = new String[] { null, null };
+        String[] location = new String[] { null, null, null };
         try {
             Object domainFile = program.getClass().getMethod("getDomainFile")
                 .invoke(program);
@@ -182,6 +190,8 @@ final class BSimDatabase {
                 }
             }
             if (fileUrl == null) {
+                location[2] = "the program has not been saved to a project, so "
+                    + "BSim cannot record a repository and a path for it";
                 return location;
             }
             Class<?> ghidraUrl = Class.forName(GHIDRA_URL);
@@ -302,14 +312,15 @@ final class BSimDatabase {
         return message == null || message.isBlank() ? type : type + ": " + message;
     }
 
-    static int intField(Object bean, String name) {
-        try {
-            Field field = bean.getClass().getField(name);
-            Object value = field.get(bean);
-            return value instanceof Number ? ((Number) value).intValue() : 0;
-        } catch (Throwable missing) {
-            return 0;
-        }
+    /**
+     * A numeric property, whether the API exposes it as a field or as a method.
+     *
+     * <p>Named `intValue` rather than `intField` on purpose: the old name invited
+     * exactly the bug that broke every ingest, where `numFunctions` was read as a
+     * field and is a method.
+     */
+    static int intValue(Object bean, String name) {
+        return eu.starsong.ghidra.util.ReflectiveRead.integer(bean, name, 0);
     }
 
     static boolean booleanField(Object bean, String name) {

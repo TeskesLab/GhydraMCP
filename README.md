@@ -122,6 +122,7 @@ for which job, and the reading paths by audience.
 | [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md) | Symptom → cause → fix |
 | [GHYDRA_OUTPUT.md](GHYDRA_OUTPUT.md) | Text vs JSON vs table vs report, the envelope, exit codes |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The tiers, the single core, the rules that hold them |
+| [GHYDRA_INTERNALS.md](GHYDRA_INTERNALS.md) | Known drift, the REA gaps, the composed calls |
 | [GHYDRA_CLI.md](GHYDRA_CLI.md) | The whole command-line surface, command by command |
 | [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) | The REST reference — 106 routes, `API_VERSION` 3000 |
 | [GHYDRA_BSIM.md](GHYDRA_BSIM.md) | Signature similarity: setup, building a corpus, querying, applying a match, comparing versions, and the traps measured on Ghidra 12.2 |

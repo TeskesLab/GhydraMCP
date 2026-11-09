@@ -1079,12 +1079,15 @@ database, creating it when it does not exist.
 
 | Query parameter | Meaning |
 | --- | --- |
-| `max_functions` | How many functions to scan at most (0 or absent = all, cap 200 000) |
+| `max_functions` | How many functions to scan at most. **Absent = 5 000** (the default), `0` = everything, and anything above 200 000 is clamped to it. The answer reports `functions_cap` and `capped`. |
 | `track_call_graph` | `true` records the call graph. **Default `false`**; with it, `where.exe` ingested 189 functions. |
 
 The answer reports `discovered_functions`, `scanned_functions`,
 `skipped_functions`, `described_functions`, `inserted_functions`,
-`inserted_executables`, `created` and `seconds`. Measured on Ghidra 12.2:
+`inserted_executables`, `created`, `seconds`, `functions_cap` (null when the
+caller asked for everything) and `capped` (true when the cap stopped the scan —
+a partial ingest is not the whole program). `repository` and `path` carry
+`location_reason` when the program has not been saved to a project. Measured on Ghidra 12.2:
 `where.exe` → **94 functions inserted in 3.1 s** into a 120 KB database.
 
 Re-ingesting a program that is already there is **not a failure**: BSim

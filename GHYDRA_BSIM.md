@@ -77,7 +77,6 @@ Two flags to know:
 Ingest takes the **open program** — one binary per call:
 
 ```bash
-ghydra bsim ingest                       # every function with a body
 ghydra bsim ingest --max-functions 500   # a bounded first look
 ```
 
@@ -91,6 +90,13 @@ inserted: 94 functions into 1 executable(s)
 took: 3.1s
 database: C:\...\where.bsim (created)     # 120 KB .mv.db
 ```
+
+**The scan is capped at 5 000 functions by default.** Every function is a
+decompilation, so "all of them" on a large binary is hours inside one request:
+the client gives up at its timeout and the Jetty thread stays busy. Ask for more
+with `--max-functions 20000`, or for everything with `--max-functions 0`. The
+answer reports the cap (`functions_cap`) and whether it bit (`capped`) — a
+partial ingest must not be read later as "not in the corpus".
 
 - **`described` < `discovered`** is normal: functions without a body (thunks,
   externals) cannot carry a signature. They are not in the database, and the
