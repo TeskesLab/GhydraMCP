@@ -7,7 +7,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Source-to-sink hypotheses (R5)**: `analysis_taint(source, sink)`
+- **The `--scripts` suite no longer flakes on its own fixture**: the fixture
+  handed its port to a test before `serve_forever()` was accepting connections,
+  and every immediate retry landed in that same closed window - which read as an
+  unretryable `CONNECTION_ERROR` in roughly two runs out of five on this
+  machine. It now waits until the port actually answers, listens with a backlog
+  of 128 (the bridge opens a connection per call), and retries with exponential
+  backoff on both the bridge and the CLI paths. Six consecutive suite runs and
+  two full `--no-ghidra` runs are clean.- **Mission mode (R8)**: `ghydra mission start -g "<objective>"` runs a plan
+  (program fingerprint, capability leads, source-to-sink hypotheses, address
+  context) against a **hard budget** of calls, tokens and wall-clock, and writes
+  an auditable dossier. It asks the user nothing: a doubt becomes an `unknown`
+  finding with its reason. Before keeping a conclusion it **re-reads its own
+  evidence** and compares the digests — a finding whose evidence moved is
+  reported as `unverified` (and the command exits 1), never silently kept. The
+  state is checkpointed after every step (`~/.ghydra/missions/<id>.json`), so
+  `ghydra mission resume` continues without re-paying the calls already made and
+  may raise the budget; `ghydra mission show` reads a dossier without calling
+  anything. Hints (source, sink, address, function) are parsed from the goal
+  text — nothing is inferred beyond the words. `test_mission.py` covers the hint
+  parser, the budget stop, a plan with no source/sink (an unknown, not a clean
+  bill), a moved-evidence `unverified`, checkpoint round-trip and resume, the
+  dossier, and the CLI. The bridge keeps exposing the primitives the plan
+  composes; a `mission_start` bridge tool is the remaining follow-up.- **Source-to-sink hypotheses (R5)**: `analysis_taint(source, sink)`
   (`ghydra analysis taint -s recv -t system`) composes the references to each
   name, the pcode of the functions that call them and the call graph into
   candidate data flows, each with its confidence (`direct` when the sink call

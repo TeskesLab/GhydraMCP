@@ -46,6 +46,14 @@ SCRIPT_SOURCES = {OUTPUT_SOURCE, ARGS_SOURCE, ERROR_SOURCE}
 class _ScriptHTTPServer(ThreadingHTTPServer):
     allow_scripts = True
 
+    # The bridge opens a connection per call (one session per thread, and a
+    # fresh event loop for every call_tool), so a burst can arrive faster
+    # than the server accepts it. With the default backlog of 5 Windows
+    # refuses the excess outright, and every retry lands in the same closed
+    # window - which reached the tests as an unretryable CONNECTION_ERROR.
+    request_queue_size = 128
+    allow_reuse_address = True
+
 
 class _ScriptHandler(BaseHTTPRequestHandler):
     def setup(self):
@@ -131,7 +139,24 @@ class ScriptServer:
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+        # serve_forever() starts accepting on its own thread; a connection
+        # attempted in that gap reads as the same CONNECTION_ERROR as a
+        # reset, so wait until the port actually answers.
+        self._wait_until_ready()
         return self
+
+    def _wait_until_ready(self, timeout: float = 5.0) -> None:
+        import socket
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", self.port),
+                                              timeout=0.25):
+                    return
+            except OSError:
+                time.sleep(0.01)
+        raise RuntimeError(
+            f"the fixture on port {self.port} never accepted a connection")
 
     def __exit__(self, *_exc):
         self.server.shutdown()
@@ -153,7 +178,7 @@ class ScriptProtocolTests(unittest.TestCase):
         # fixture is always safe to repeat, so retry the transport failure
         # instead of letting a random test fail on the machine's timing.
         last = ""
-        for attempt in range(3):
+        for attempt in range(5):
             content = asyncio.run(bridge.mcp.call_tool(tool, {
                 "port": self.fixture.port, **arguments,
             }))
@@ -164,8 +189,10 @@ class ScriptProtocolTests(unittest.TestCase):
             )
             if "CONNECTION_ERROR" not in last:
                 return last
-            if attempt < 2:
-                time.sleep(0.05)
+            if attempt < 4:
+                # 0.05, 0.1, 0.2, 0.4: a closed window on this machine
+                # lasts longer than one immediate retry.
+                time.sleep(0.05 * (2 ** attempt))
         return last
 
     def test_python_output_survives_mcp_text_formatting(self):
@@ -228,9 +255,18 @@ class ScriptCliTests(unittest.TestCase):
 
     def invoke(self, *arguments):
         options = ["--host", "127.0.0.1", "--port", str(self.fixture.port), "--no-color"]
-        return self.runner.invoke(cli, [*options, "scripts", "run", *arguments], env={
-            "HOME": self.home, "XDG_CONFIG_HOME": self.home, "NO_COLOR": "1",
-        })
+        env = {"HOME": self.home, "XDG_CONFIG_HOME": self.home, "NO_COLOR": "1"}
+        # The CLI is a fresh process per attempt, so a connection that never
+        # reached the fixture leaves nothing behind to repeat.
+        result = None
+        for attempt in range(5):
+            result = self.runner.invoke(
+                cli, [*options, "scripts", "run", *arguments], env=env)
+            if "CONNECTION_ERROR" not in (result.output or ""):
+                return result
+            if attempt < 4:
+                time.sleep(0.05 * (2 ** attempt))
+        return result
 
     def test_python_file_selects_runtime_and_prints_captured_output(self):
         with tempfile.TemporaryDirectory() as directory:

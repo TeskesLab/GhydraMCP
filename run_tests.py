@@ -763,11 +763,36 @@ def run_taint_tests():
         return False
 
 
+def run_mission_tests():
+    """Run the mission mode (R8) tests."""
+    print_header("Running Mission Mode Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_mission.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running mission tests: {e}")
+        return False
+
+
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
     "--capability-summary", "--tasks", "--errors", "--context-pack", "--tool-groups", "--telemetry",
-    "--assertions", "--read-only", "--runbook", "--taint",
+    "--assertions", "--read-only", "--runbook", "--taint", "--mission",
 )
 
 SUITES = {
@@ -798,6 +823,7 @@ SUITES = {
     "--read-only": run_read_only_tests,
     "--runbook": run_runbook_tests,
     "--taint": run_taint_tests,
+    "--mission": run_mission_tests,
 }
 
 USAGE = (

@@ -1401,3 +1401,29 @@ search gave up). Every hypothesis carries its evidence addresses.
 This is a **lead generator, not a verdict**: branches are not modelled and a
 "nothing found" answer is not evidence of safety. The text answer says both
 things.
+
+## Mission mode (R8)
+
+```bash
+ghydra mission start -g "does data from recv reach system?"
+ghydra mission start -g "what does this binary do" --max-calls 20 -o dossier.md
+ghydra mission resume ~/.ghydra/missions/m1234.json --max-calls 200
+ghydra mission show ~/.ghydra/missions/m1234.json     # reads, calls nothing
+```
+
+A mission runs a plan — program fingerprint, capability leads, source-to-sink
+hypotheses, address context — against a **hard budget** (calls, tokens,
+wall-clock) and produces a dossier where every finding has an ID (`EV-0001`),
+the evidence behind it and a status.
+
+Three promises the tests enforce:
+
+- **It asks nothing.** A doubt becomes an `unknown` finding with its reason.
+- **The budget wins.** When it runs out the mission stops, records which steps
+  were skipped, and keeps what it already learned.
+- **The evidence is re-read.** Before a conclusion is kept, each evidence
+  request is repeated and its digest compared; a finding whose evidence moved
+  is `unverified` and the command exits 1.
+
+The state is checkpointed after every step, and `resume` keeps what was spent
+while allowing the limits to be raised.
