@@ -22,6 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra.core import digest as core  # noqa: E402
+from ghydra.core import hints as hints_core  # noqa: E402
+from ghydra.core import runbook as runbook_core  # noqa: E402
 from scripts import gen_core  # noqa: E402
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -170,6 +172,109 @@ class DelegationTests(unittest.TestCase):
         self.assertEqual({"name": "f"},
                          bridge._runbook_stable_result(envelope))
         self.assertIn("_RUNBOOK_VOLATILE_KEYS", bridge._runbook_stable_result.__code__.co_names)
+
+class RunbookCoreTests(unittest.TestCase):
+    """The step rules live once, in the core, and both surfaces obey them."""
+
+    def test_the_validation_agrees(self):
+        documents = (
+            [{"endpoint": "program"}],
+            [{"endpoint": " functions/0x1 ", "method": "patch",
+              "params": {"a": 1}, "payload": {"b": 2}}],
+            {"steps": [{"endpoint": "program", "method": "GET"}]},
+        )
+        for document in documents:
+            with self.subTest(document=document):
+                self.assertEqual(runbook_core.validate_steps(document),
+                                 bridge._core_validate_steps(document))
+
+    def test_the_same_documents_are_refused(self):
+        for document in ([], {}, "not a list", [{"method": "GET"}],
+                         [{"endpoint": "x", "method": "BREW"}], ["nope"]):
+            with self.subTest(document=document):
+                with self.assertRaises(ValueError):
+                    runbook_core.validate_steps(document)
+                with self.assertRaises(ValueError):
+                    bridge._core_validate_steps(document)
+
+    def test_the_failure_names_the_step(self):
+        with self.assertRaises(runbook_core.BadEntry) as caught:
+            runbook_core.validate_steps([{"endpoint": "a"},
+                                         {"endpoint": "b", "method": "BREW"}])
+        self.assertIn("step #2", str(caught.exception))
+        self.assertIn("BREW", str(caught.exception))
+
+    def test_the_exceptions_subclass_value_error(self):
+        """The bridge's callers catch ValueError; the core's types must satisfy it."""
+        self.assertTrue(issubclass(runbook_core.BadSteps, ValueError))
+        self.assertTrue(issubclass(runbook_core.BadEntry, ValueError))
+        self.assertTrue(issubclass(bridge._CoreBadSteps, ValueError))
+        self.assertTrue(issubclass(bridge._CoreBadEntry, ValueError))
+
+    def test_the_bridge_reads_text_and_paths_through_the_same_rule(self):
+        text = bridge._runbook_load_steps('[{"endpoint": "program"}]')
+        self.assertEqual([{"endpoint": "program", "method": "GET",
+                           "params": None, "payload": None}], text)
+        import json as _json
+        import tempfile
+        handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                             encoding="utf-8")
+        try:
+            _json.dump({"steps": [{"endpoint": "functions"}]}, handle)
+            handle.close()
+            from_path = bridge._runbook_load_steps(handle.name)
+        finally:
+            import os as _os
+            _os.unlink(handle.name)
+        self.assertEqual("functions", from_path[0]["endpoint"])
+
+    def test_the_bridge_keeps_no_second_copy_of_the_rules(self):
+        text = _bridge_text()
+        self.assertIn("return _core_validate_steps(data)", text)
+        self.assertEqual(1, text.count("expected a non-empty list of steps"))
+        self.assertEqual(1, text.count("unknown method"))
+
+
+class HintsCoreTests(unittest.TestCase):
+    """The goal hints live once, in the core."""
+
+    GOALS = (
+        "does data from recv reach system?",
+        "does data from ReadFile reach WinExec",
+        "o que faz esta funcao main",
+        "what is at 0x401000",
+        "what does this binary do",
+        "",
+        None,
+    )
+
+    def test_the_hints_agree(self):
+        for goal in self.GOALS:
+            with self.subTest(goal=goal):
+                self.assertEqual(hints_core.parse_goal(goal),
+                                 bridge._core_parse_goal(goal))
+
+    def test_the_bridge_delegates_to_the_core(self):
+        for goal in self.GOALS:
+            with self.subTest(goal=goal):
+                self.assertEqual(bridge._core_parse_goal(goal),
+                                 bridge._mission_parse_goal(goal))
+
+    def test_the_patterns_are_the_core_ones(self):
+        self.assertEqual(set(hints_core.HINT_PATTERNS),
+                         set(bridge._CORE_HINT_PATTERNS))
+        self.assertEqual(hints_core.HINT_PATTERNS,
+                         bridge._CORE_HINT_PATTERNS)
+        self.assertIs(bridge._MISSION_HINT_PATTERNS, bridge._CORE_HINT_PATTERNS)
+
+    def test_a_goal_without_hints_yields_nothing(self):
+        self.assertEqual({}, hints_core.parse_goal("what does this binary do"))
+
+    def test_source_and_sink_are_read_in_both_languages(self):
+        self.assertEqual({"source": "recv", "sink": "system"},
+                         hints_core.parse_goal("does data from recv reach system?"))
+        self.assertEqual({"source": "ReadFile", "sink": "WinExec"},
+                         hints_core.parse_goal("de ReadFile até WinExec"))
 
 
 if __name__ == "__main__":

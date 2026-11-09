@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.10.0"
+BRIDGE_VERSION = "v3.11.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1035,6 +1035,96 @@ def _make_request(method: str, port: int, endpoint: str, params: dict | None = N
             "exception": e.__class__.__name__,
             "timestamp": int(time.time() * 1000)
         }
+
+# >>> generated from ghydra/core/digest.py (945a74f28ae18371) — edit the core, then run scripts/gen_core.py
+_CORE_VOLATILE_KEYS = ('id', 'timestamp', 'instance', '_links', 'api_links')
+
+def _core_canonical(value):
+    """The text a digest is taken over: sorted keys, no separator noise."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)
+
+def _core_digest(value):
+    """The SHA-256 of the canonical form of a value."""
+    return hashlib.sha256(_core_canonical(value).encode('utf-8')).hexdigest()
+
+def _core_stable_result(value, volatile=_CORE_VOLATILE_KEYS):
+    """The part of an answer that two identical calls share.
+
+    A dict loses the volatile keys; anything else is returned as it is. The
+    list of volatile keys is a parameter so a caller can widen it, never so it
+    can silently narrow it in one place and not the other.
+    """
+    if isinstance(value, dict):
+        payload = value.get('result', value)
+        if isinstance(payload, dict):
+            dropped = set(volatile)
+            return {key: item for key, item in payload.items() if key not in dropped}
+        return payload
+    return value
+# <<< end generated from ghydra/core/digest.py
+
+
+# >>> generated from ghydra/core/runbook.py (33df1f2b71fa9252) — edit the core, then run scripts/gen_core.py
+_CORE_RUNBOOK_METHODS = ('GET', 'POST', 'PATCH', 'PUT', 'DELETE')
+
+class _CoreBadSteps(ValueError):
+    """The document is not a usable list of steps."""
+
+class _CoreBadEntry(ValueError):
+    """One step is not something the runbook could call."""
+
+def _core_validate_steps(data):
+    """The steps of a parsed document, validated and normalised.
+
+    Args:
+        data: The parsed JSON — a list of steps or ``{"steps": [...]}``.
+
+    Returns:
+        list[dict]: One dict per step, with endpoint, method, params, payload.
+
+    Raises:
+        BadSteps: when the document holds no usable list.
+        BadEntry: when a step is not an object, has no endpoint or a bad method.
+    """
+    items = data.get('steps') if isinstance(data, dict) else data
+    if not isinstance(items, list) or not items:
+        raise _CoreBadSteps("expected a non-empty list of steps or {'steps': [...]}")
+    steps: List[Dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise _CoreBadEntry(f'step #{index + 1} is not an object')
+        endpoint = item.get('endpoint')
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise _CoreBadEntry(f"step #{index + 1}: 'endpoint' is required")
+        method = str(item.get('method') or 'GET').upper()
+        if method not in _CORE_RUNBOOK_METHODS:
+            raise _CoreBadEntry(f'step #{index + 1}: unknown method {method!r}')
+        steps.append({'endpoint': endpoint.strip(), 'method': method, 'params': item.get('params') or None, 'payload': item.get('payload') or None})
+    return steps
+# <<< end generated from ghydra/core/runbook.py
+
+
+# >>> generated from ghydra/core/hints.py (f86a5a58967f95b1) — edit the core, then run scripts/gen_core.py
+_CORE_HINT_PATTERNS = {'source': '\\b(?:de|from|entrada|enters?|input)\\s+[`\\"\']?([A-Za-z_][\\w.]*)', 'sink': '\\b(?:para|to|ate|até|into|sink|reach(?:es)?|alcanc[ae]|alcança|chega(?:r)?)\\s+[`\\"\']?([A-Za-z_][\\w.]*)', 'address': '\\b(0x[0-9A-Fa-f]+)\\b', 'function': '\\b(?:funcao|função|function)\\s+[`\\"\']?([A-Za-z_]\\w*)'}
+
+def _core_parse_goal(goal):
+    """The hints a goal carries, keyed by kind.
+
+    Args:
+        goal: The objective, as the user wrote it (any language in the patterns).
+
+    Returns:
+        dict: The hints that matched; empty when the goal names none of them.
+    """
+    text = str(goal or '')
+    hints: Dict[str, str] = {}
+    for key, pattern in _CORE_HINT_PATTERNS.items():
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            hints[key] = match.group(1)
+    return hints
+# <<< end generated from ghydra/core/hints.py
+
 
 def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
     """Make GET request to Ghidra instance"""
@@ -11221,23 +11311,10 @@ def _runbook_load_steps(steps: str) -> list:
         data = json.loads(text)
     except ValueError as exc:
         raise ValueError(f"steps is not valid JSON: {exc}") from exc
-    items = data.get("steps") if isinstance(data, dict) else data
-    if not isinstance(items, list) or not items:
-        raise ValueError("expected a non-empty list of steps or {'steps': [...]}")
-    validated = []
-    for index, item in enumerate(items):
-        if not isinstance(item, dict):
-            raise ValueError(f"step #{index + 1} is not an object")
-        endpoint = item.get("endpoint")
-        if not isinstance(endpoint, str) or not endpoint.strip():
-            raise ValueError(f"step #{index + 1}: 'endpoint' is required")
-        method = str(item.get("method") or "GET").upper()
-        if method not in ("GET", "POST", "PATCH", "PUT", "DELETE"):
-            raise ValueError(f"step #{index + 1}: unknown method {method!r}")
-        validated.append({"endpoint": endpoint.strip(), "method": method,
-                          "params": item.get("params") or None,
-                          "payload": item.get("payload") or None})
-    return validated
+    # The rules live in the generated core (I1): one definition, two surfaces.
+    # _CoreBadSteps/_CoreBadEntry subclass ValueError, which is what this
+    # function's callers already catch.
+    return _core_validate_steps(data)
 
 
 def _runbook_program(port: int) -> dict:
@@ -11772,22 +11849,13 @@ def analysis_taint(source: str, sink: str, max_depth: int = 8,
 # the hints, the findings and the budget.
 
 _MISSION_VERSION = 1
-_MISSION_HINT_PATTERNS = {
-    "source": r"\b(?:de|from|entrada|enters?|input)\s+[`\"']?([A-Za-z_][\w.]*)",
-    "sink": (r"\b(?:para|to|ate|até|into|sink|reach(?:es)?|alcanc[ae]|alcança|"
-             r"chega(?:r)?)\s+[`\"']?([A-Za-z_][\w.]*)"),
-    "address": r"\b(0x[0-9A-Fa-f]+)\b",
-    "function": r"\b(?:funcao|função|function)\s+[`\"']?([A-Za-z_]\w*)",
-}
+#: The hint patterns are generated from ghydra/core/hints.py (I1).
+_MISSION_HINT_PATTERNS = _CORE_HINT_PATTERNS
 
 
 def _mission_parse_goal(goal: str) -> dict:
-    hints = {}
-    for key, pattern in _MISSION_HINT_PATTERNS.items():
-        match = re.search(pattern, str(goal or ""), re.IGNORECASE)
-        if match:
-            hints[key] = match.group(1)
-    return hints
+    """Delegates to the generated core (I1)."""
+    return _core_parse_goal(goal)
 
 
 def _mission_dir() -> str:
@@ -12598,32 +12666,10 @@ def bsim_status(port: int | None = None) -> dict:
     return simplify_response(safe_get(port, "bsim/status"))
 
 
-# >>> generated from ghydra/core/digest.py (945a74f28ae18371) — edit the core, then run scripts/gen_core.py
-_CORE_VOLATILE_KEYS = ('id', 'timestamp', 'instance', '_links', 'api_links')
 
-def _core_canonical(value):
-    """The text a digest is taken over: sorted keys, no separator noise."""
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)
 
-def _core_digest(value):
-    """The SHA-256 of the canonical form of a value."""
-    return hashlib.sha256(_core_canonical(value).encode('utf-8')).hexdigest()
 
-def _core_stable_result(value, volatile=_CORE_VOLATILE_KEYS):
-    """The part of an answer that two identical calls share.
 
-    A dict loses the volatile keys; anything else is returned as it is. The
-    list of volatile keys is a parameter so a caller can widen it, never so it
-    can silently narrow it in one place and not the other.
-    """
-    if isinstance(value, dict):
-        payload = value.get('result', value)
-        if isinstance(payload, dict):
-            dropped = set(volatile)
-            return {key: item for key, item in payload.items() if key not in dropped}
-        return payload
-    return value
-# <<< end generated from ghydra/core/digest.py
 
 
 _TOOL_GROUPS = {

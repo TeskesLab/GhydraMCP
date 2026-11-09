@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional
 from . import diff as diff_helper
 from . import runbook as runbook_helper
 from . import taint as taint_helper
+from .core.hints import HINT_PATTERNS as CORE_HINT_PATTERNS
+from .core.hints import parse_goal as core_parse_goal
 
 MISSION_VERSION = 1
 
@@ -49,14 +51,8 @@ STATUS_VERIFIED = "verified"
 STATUS_UNVERIFIED = "unverified"
 STATUS_UNKNOWN = "unknown"
 
-#: The hints a goal can carry. Extracted, never asked for.
-HINT_PATTERNS = {
-    "source": r"\b(?:de|from|entrada|enters?|input)\s+[`\"']?([A-Za-z_][\w.]*)",
-    "sink": (r"\b(?:para|to|ate|até|into|sink|reach(?:es)?|alcanc[ae]|alcança|"
-             r"chega(?:r)?)\s+[`\"']?([A-Za-z_][\w.]*)"),
-    "address": r"\b(0x[0-9A-Fa-f]+)\b",
-    "function": r"\b(?:funcao|função|function)\s+[`\"']?([A-Za-z_]\w*)",
-}
+#: The hints a goal can carry. Defined once, in the core (I1).
+HINT_PATTERNS = CORE_HINT_PATTERNS
 
 
 def mission_dir() -> str:
@@ -74,16 +70,10 @@ def mission_path(mission_id: str) -> str:
 def parse_goal(goal: str) -> Dict[str, Any]:
     """The hints a goal carries, read from the text.
 
-    Nothing is inferred beyond what the words say: a goal that names no source
-    and no sink simply gets no taint step, and the dossier records that.
+    Delegates to the core (I1), so the CLI and the bridge can never form
+    different hypotheses from the same sentence.
     """
-    text = str(goal or "")
-    hints: Dict[str, Any] = {}
-    for key, pattern in HINT_PATTERNS.items():
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            hints[key] = match.group(1)
-    return hints
+    return core_parse_goal(goal)
 
 
 class Budget:

@@ -24,11 +24,16 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 
+from .core.runbook import BadEntry, BadSteps, validate_steps
+
 RUNBOOK_VERSION = 1
 
 ERROR_BAD_FILE = "RUNBOOK_BAD_FILE"
 ERROR_BAD_STEPS = "RUNBOOK_BAD_STEPS"
 ERROR_BAD_ENTRY = "RUNBOOK_BAD_ENTRY"
+
+#: The methods a step may use (defined once, in the core).
+RUNBOOK_METHODS = ("GET", "POST", "PATCH", "PUT", "DELETE")
 
 #: The fields of an answer that are allowed to change between two runs.
 VOLATILE_KEYS = ("id", "timestamp", "instance", "_links", "api_links")
@@ -73,29 +78,25 @@ def load_steps(path: str) -> List[Dict[str, Any]]:
     except ValueError as exc:
         raise RunbookError(f"{path} is not valid JSON: {exc}", ERROR_BAD_FILE) from exc
 
-    items = data.get("steps") if isinstance(data, dict) else data
-    if not isinstance(items, list) or not items:
-        raise RunbookError("expected a non-empty list of steps or {'steps': [...]}",
-                           ERROR_BAD_STEPS)
-    steps: List[Dict[str, Any]] = []
-    for index, item in enumerate(items):
-        if not isinstance(item, dict):
-            raise RunbookError(f"step #{index + 1} is not an object")
-        endpoint = item.get("endpoint")
-        if not isinstance(endpoint, str) or not endpoint.strip():
-            raise RunbookError(f"step #{index + 1}: 'endpoint' is required",
-                               ERROR_BAD_ENTRY)
-        method = str(item.get("method") or "GET").upper()
-        if method not in ("GET", "POST", "PATCH", "PUT", "DELETE"):
-            raise RunbookError(f"step #{index + 1}: unknown method {method!r}",
-                               ERROR_BAD_ENTRY)
-        steps.append({
-            "endpoint": endpoint.strip(),
-            "method": method,
-            "params": item.get("params") or None,
-            "payload": item.get("payload") or None,
-        })
-    return steps
+    # The rules live in the core (I1); this only maps their failure to the
+    # error codes this surface answers with.
+    return checked_steps(data)
+
+
+def checked_steps(data: Any) -> List[Dict[str, Any]]:
+    """The validated steps, with the exceptions this module raises.
+
+    Validation is generated from ``ghydra/core/runbook.py``; a document that is
+    not a list raises ``RUNBOOK_BAD_STEPS`` and a bad entry raises
+    ``RUNBOOK_BAD_ENTRY``, so the caller can tell "the file is wrong" from
+    "step 3 is wrong".
+    """
+    try:
+        return validate_steps(data)
+    except BadSteps as exc:
+        raise RunbookError(str(exc), ERROR_BAD_STEPS) from exc
+    except BadEntry as exc:
+        raise RunbookError(str(exc), ERROR_BAD_ENTRY) from exc
 
 
 def program_fingerprint(client) -> Dict[str, Any]:

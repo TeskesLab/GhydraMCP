@@ -942,4 +942,10 @@ the CLI are **generated** into it instead of retyped.
   failure mode this mechanism exists to remove. `test_core.py` (`--core`) asserts the region
   is current, byte-identical to a fresh generation, and that a tampered region is caught.
 - **What has moved so far:** `ghydra/core/digest.py` (canonical form, SHA-256, the stable
-  view of an answer) — the bridge's `_runbook_digest` / `_cache_digest` are now delegations.
+  view of an answer), `ghydra/core/runbook.py` (step validation, with `BadSteps`/`BadEntry`
+  so each surface keeps its own error codes) and `ghydra/core/hints.py` (the mission goal
+  hints). The bridge's `_runbook_digest`, `_cache_digest`, `_runbook_load_steps` and
+  `_mission_parse_goal` are delegations.
+- **A region goes right after the imports.** Inserting one further down puts the generated
+  names after the helpers that use them, which is a `NameError` at import time. The anchor
+  is `def safe_get(` on purpose.

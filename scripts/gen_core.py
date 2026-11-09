@@ -1,11 +1,10 @@
-#!/usr/bin/env python3
 """Generate the bridge's copy of the core modules (I1).
 
 The bridge ships as **one file** and must not import the ``ghydra`` package, so
 the pure helpers it shares with the CLI are duplicated. This script removes the
 duplication for the modules listed in ``CORE_MODULES``: it reads each one,
-renames its public names into the bridge's private namespace (``_core_*``), and
-writes them into ``bridge_mcp_hydra.py`` between markers.
+renames its public names into the bridge's private namespace, and writes them
+into ``bridge_mcp_hydra.py`` between markers.
 
     python scripts/gen_core.py            # write the regions
     python scripts/gen_core.py --check    # fail when a region is stale
@@ -33,31 +32,47 @@ BEGIN = "# >>> generated from {source} ({digest}) — edit the core, then run sc
 END = "# <<< end generated from {source}"
 
 #: The core modules that are generated into the bridge, in order.
-CORE_MODULES = ("ghydra/core/digest.py",)
+CORE_MODULES = (
+    "ghydra/core/digest.py",
+    "ghydra/core/runbook.py",
+    "ghydra/core/hints.py",
+)
 
-#: Public name -> the private name the bridge uses.
-RENAMES = {
-    "VOLATILE_KEYS": "_CORE_VOLATILE_KEYS",
-    "canonical": "_core_canonical",
-    "digest": "_core_digest",
-    "stable_result": "_core_stable_result",
+#: Per module, the public name -> the private name the bridge uses.
+CORE_RENAMES = {
+    "ghydra/core/digest.py": {
+        "VOLATILE_KEYS": "_CORE_VOLATILE_KEYS",
+        "canonical": "_core_canonical",
+        "digest": "_core_digest",
+        "stable_result": "_core_stable_result",
+    },
+    "ghydra/core/runbook.py": {
+        "RUNBOOK_METHODS": "_CORE_RUNBOOK_METHODS",
+        "BadSteps": "_CoreBadSteps",
+        "BadEntry": "_CoreBadEntry",
+        "validate_steps": "_core_validate_steps",
+    },
+    "ghydra/core/hints.py": {
+        "HINT_PATTERNS": "_CORE_HINT_PATTERNS",
+        "parse_goal": "_core_parse_goal",
+    },
 }
 
-#: Names the generated code may reference from the bridge's own imports.
-ALLOWED_EXTERNALS = {"json", "hashlib", "Any", "Iterable", "str", "dict", "set",
-                     "isinstance", "value", "volatile", "payload", "dropped",
-                     "key", "item", "encode", "sha256", "dumps", "(", ")"}
 
-
-def _rename(node: ast.AST) -> None:
-    """Rename the core's public names in place, and drop the annotations.
+def _rename(node: ast.AST, renames: dict[str, str]) -> None:
+    """Rename the module's public names in place, and drop the annotations.
 
     The annotations are dropped so the generated block needs no extra imports;
-    they are documentation, and the core module keeps them.
+    they are documentation, and the core modules keep them.
     """
     for child in ast.walk(node):
-        if isinstance(child, ast.FunctionDef):
-            child.name = RENAMES.get(child.name, child.name)
+        if isinstance(child, ast.ClassDef):
+            child.name = renames.get(child.name, child.name)
+            child.bases = [ast.Name(id=renames[base.id], ctx=ast.Load())
+                           if isinstance(base, ast.Name) and base.id in renames
+                           else base for base in child.bases]
+        elif isinstance(child, ast.FunctionDef):
+            child.name = renames.get(child.name, child.name)
             child.returns = None
             for argument in list(child.args.args) + list(child.args.kwonlyargs):
                 argument.annotation = None
@@ -67,31 +82,36 @@ def _rename(node: ast.AST) -> None:
                 child.args.kwarg.annotation = None
         elif isinstance(child, ast.Assign):
             for target in child.targets:
-                if isinstance(target, ast.Name) and target.id in RENAMES:
-                    target.id = RENAMES[target.id]
-        elif isinstance(child, ast.Name) and child.id in RENAMES:
-            child.id = RENAMES[child.id]
+                if isinstance(target, ast.Name) and target.id in renames:
+                    target.id = renames[target.id]
+        elif isinstance(child, ast.Name) and child.id in renames:
+            child.id = renames[child.id]
 
 
 def _source_of(module_path: str) -> str:
-    """The body of a core module, renamed and unparsed."""
-    with open(module_path, encoding="utf-8") as handle:
+    """The body of a core module, renamed and unparsed.
+
+    ``module_path`` is the workspace-relative path, which is also the key of
+    ``CORE_RENAMES``; the join happens here so the two can never disagree.
+    """
+    with open(os.path.join(ROOT, module_path), encoding="utf-8") as handle:
         text = handle.read()
     tree = ast.parse(text)
+    renames = CORE_RENAMES.get(module_path, {})
     body = []
     for node in tree.body:
         # Imports and the module docstring stay in the core module: the bridge
         # already imports json and hashlib, and its docstring is its own.
         if isinstance(node, (ast.Import, ast.ImportFrom, ast.Expr)):
             continue
-        _rename(node)
+        _rename(node, renames)
         body.append(node)
     return "\n\n".join(ast.unparse(node) for node in body)
 
 
 def _region(module_path: str) -> str:
     relative = module_path
-    function_source = _source_of(os.path.join(ROOT, module_path))
+    function_source = _source_of(module_path)
     module_digest = hashlib.sha256(
         function_source.encode("utf-8")).hexdigest()[:16]
     return "\n".join([
@@ -112,9 +132,11 @@ def _splice(bridge: str, module_path: str, region: str) -> str:
     end = END.format(source=module_path)
     start = bridge.find(begin)
     if start < 0:
-        # First generation: the block goes just before the tool groups, after
-        # every helper it could reference.
-        anchor = "_TOOL_GROUPS = {"
+        # First generation: the block goes right after the imports, so every
+        # helper that uses a generated name is defined later. (Inserting it near
+        # the tool groups put the names after their users, which is a
+        # NameError at import time.)
+        anchor = "def safe_get("
         if anchor not in bridge:
             raise SystemExit(f"cannot find the insertion point in {BRIDGE}")
         return bridge.replace(anchor, region + "\n\n\n" + anchor, 1)
