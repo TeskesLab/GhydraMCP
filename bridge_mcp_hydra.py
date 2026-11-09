@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.18.0"
+BRIDGE_VERSION = "v3.19.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1551,6 +1551,77 @@ def _core_telemetry_summarize(entries, days=7, path=''):
         report['message'] = 'no telemetry recorded in this window'
     return report
 # <<< end generated from ghydra/core/telemetry.py
+
+
+# >>> generated from ghydra/core/taint.py (8602ed1a558df9b7) — edit the core, then run scripts/gen_core.py
+_CORE_TAINT_PROGRAM_FIELDS = ('name', 'executable_path', 'image_base')
+
+_CORE_TAINT_PAGE_LIMIT = 1000
+
+_CORE_TAINT_MAX_PAGES = 5
+
+_CORE_TAINT_CALL_OPCODES = {57, 58}
+
+_CORE_TAINT_CONFIDENCE_DIRECT = 'direct'
+
+_CORE_TAINT_CONFIDENCE_REACHABLE = 'reachable'
+
+_CORE_TAINT_DISCLAIMER = "These are hypotheses from pcode and the call graph, not proof of exploitability. Branches are not modelled; a 'direct' finding means the sink call appears after the source call in the same function."
+
+def _core_taint_result_of(envelope):
+    """The payload of a successful envelope, or ``None``.
+
+    A failed answer is not an empty result: it is no result, which the callers
+    report as a gap rather than as an absence of evidence.
+    """
+    if isinstance(envelope, dict) and envelope.get('success', False):
+        return envelope.get('result')
+    return None
+
+def _core_taint_site_for(calls, wanted, wanted_name):
+    """The call site whose target is the wanted address or name.
+
+    Args:
+        calls: The calls of a function, each with ``target`` and ``at``.
+        wanted: The address (or symbol) the sink resolved to.
+        wanted_name: The name of the function the sink resolved to.
+
+    Returns:
+        str | None: The address of the first matching call, or ``None``.
+    """
+    wanted_lower = (wanted or '').lower()
+    for call in calls:
+        target = (call.get('target') or '').lower()
+        if not target:
+            continue
+        if target == wanted_lower or (wanted_name or '').lower() in target:
+            return call['at']
+    return None
+
+def _core_taint_address_key(address):
+    """Sort key for an address: numeric order, unparseable values last.
+
+    Returned as a tuple so ``sorted`` never compares an int with a string — a
+    single odd address would otherwise raise and lose the whole report.
+    """
+    try:
+        return (0, int(str(address), 16))
+    except (TypeError, ValueError):
+        return (1, 0)
+
+def _core_taint_summarize(report):
+    """The counts a report carries, shared by both surfaces.
+
+    ``found`` is true only for a ``direct`` or ``reachable`` hypothesis: a pile
+    of ``weak`` ones is not a finding.
+    """
+    hypotheses = report.get('hypotheses') or []
+    by_confidence: Dict[str, int] = {}
+    for item in hypotheses:
+        key = item.get('confidence') or 'unknown'
+        by_confidence[key] = by_confidence.get(key, 0) + 1
+    return {'total': len(hypotheses), 'direct': by_confidence.get(_CORE_TAINT_CONFIDENCE_DIRECT, 0), 'reachable': by_confidence.get(_CORE_TAINT_CONFIDENCE_REACHABLE, 0), 'weak': by_confidence.get('weak', 0), 'found': bool(by_confidence.get(_CORE_TAINT_CONFIDENCE_DIRECT) or by_confidence.get(_CORE_TAINT_CONFIDENCE_REACHABLE))}
+# <<< end generated from ghydra/core/taint.py
 
 
 def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
@@ -11784,11 +11855,9 @@ def analysis_diff(b_port: int, include_strings: bool = True,
 # Duplicated from ghydra/taint.py: the bridge is a standalone script and must
 # not import the ghydra package. test_taint.py asserts the two sides agree.
 
-_TAINT_CALL_OPCODES = {57, 58}
-_TAINT_DISCLAIMER = (
-    "These are hypotheses from pcode and the call graph, not proof of "
-    "exploitability. Branches are not modelled; a 'direct' finding means the "
-    "sink call appears after the source call in the same function.")
+#: All of these are defined once, in the generated core (I1).
+_TAINT_CALL_OPCODES = _CORE_TAINT_CALL_OPCODES
+_TAINT_DISCLAIMER = _CORE_TAINT_DISCLAIMER
 
 
 def _taint_result(envelope: Any) -> Any:
@@ -11843,14 +11912,8 @@ def _taint_calls_in_function(port: int, function_address: str) -> list:
 
 
 def _taint_site_for(calls: list, wanted: str, wanted_name: str):
-    wanted_lower = (wanted or "").lower()
-    for call in calls:
-        target = (call.get("target") or "").lower()
-        if not target:
-            continue
-        if target == wanted_lower or wanted_name.lower() in target:
-            return call["at"]
-    return None
+    """Delegates to the generated core (I1)."""
+    return _core_taint_site_for(calls, wanted, wanted_name)
 
 
 def _taint_function_of(port: int, address: str) -> dict:
@@ -11870,10 +11933,8 @@ def _taint_call_path(port: int, source_function: str, sink_function: str,
 
 
 def _taint_address_key(address: str) -> tuple:
-    try:
-        return (0, int(str(address), 16))
-    except (TypeError, ValueError):
-        return (1, 0)
+    """Delegates to the generated core (I1)."""
+    return _core_taint_address_key(address)
 
 
 def _taint_functions_referencing(port: int, info: dict,
@@ -11964,15 +12025,8 @@ def _taint_find_hypotheses(port: int, source: str, sink: str,
 
 
 def _taint_summarize(report: dict) -> dict:
-    hypotheses = report.get("hypotheses") or []
-    counts = {}
-    for item in hypotheses:
-        key = item.get("confidence") or "unknown"
-        counts[key] = counts.get(key, 0) + 1
-    return {"total": len(hypotheses), "direct": counts.get("direct", 0),
-            "reachable": counts.get("reachable", 0),
-            "weak": counts.get("weak", 0),
-            "found": bool(counts.get("direct") or counts.get("reachable"))}
+    """Delegates to the generated core (I1)."""
+    return _core_taint_summarize(report)
 
 
 @mcp.tool()

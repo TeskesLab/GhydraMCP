@@ -27,21 +27,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-PROGRAM_FIELDS = ("name", "executable_path", "image_base")
-PAGE_LIMIT = 1000
-MAX_PAGES = 5
+from .core import taint as core_taint
 
-#: Ghidra's CALL-family pcode opcodes (CALL=57, CALLIND=58 in PcodeOp).
-CALL_OPCODES = {57, 58}
-
-CONFIDENCE_DIRECT = "direct"
-CONFIDENCE_REACHABLE = "reachable"
-
-DISCLAIMER = (
-    "These are hypotheses from pcode and the call graph, not proof of "
-    "exploitability. Branches are not modelled; a 'direct' finding means the "
-    "sink call appears after the source call in the same function."
-)
+#: All of these are defined once, in the core (I1).
+PROGRAM_FIELDS = core_taint.PROGRAM_FIELDS
+PAGE_LIMIT = core_taint.PAGE_LIMIT
+MAX_PAGES = core_taint.MAX_PAGES
+CALL_OPCODES = core_taint.CALL_OPCODES
+CONFIDENCE_DIRECT = core_taint.CONFIDENCE_DIRECT
+CONFIDENCE_REACHABLE = core_taint.CONFIDENCE_REACHABLE
+DISCLAIMER = core_taint.DISCLAIMER
 
 
 def _get(client, endpoint: str, params: dict | None = None) -> Any:
@@ -52,9 +47,8 @@ def _get(client, endpoint: str, params: dict | None = None) -> Any:
 
 
 def _result(envelope: Any) -> Any:
-    if isinstance(envelope, dict) and envelope.get("success", False):
-        return envelope.get("result")
-    return None
+    """Delegates to the core (I1)."""
+    return core_taint.result_of(envelope)
 
 
 def _quote(value: str) -> str:
@@ -121,15 +115,8 @@ def calls_in_function(client, function_address: str) -> List[Dict[str, Any]]:
 
 def _site_for(calls: List[Dict[str, Any]], wanted: str,
               wanted_name: str) -> Optional[str]:
-    """The call site whose target is the wanted address or name."""
-    wanted_lower = (wanted or "").lower()
-    for call in calls:
-        target = (call.get("target") or "").lower()
-        if not target:
-            continue
-        if target == wanted_lower or wanted_name.lower() in target:
-            return call["at"]
-    return None
+    """Delegates to the core (I1)."""
+    return core_taint.site_for(calls, wanted, wanted_name)
 
 
 def _function_of(client, address: str) -> Dict[str, Any]:
@@ -148,10 +135,8 @@ def _call_path(client, source_function: str, sink_function: str,
 
 
 def _address_key(address: str) -> tuple:
-    try:
-        return (0, int(str(address), 16))
-    except (TypeError, ValueError):
-        return (1, 0)
+    """Delegates to the core (I1)."""
+    return core_taint.address_key(address)
 
 
 def find_hypotheses(client, source: str, sink: str,
@@ -256,20 +241,8 @@ def _functions_referencing(client, info: Dict[str, Any],
 
 
 def summarize(report: Dict[str, Any]) -> Dict[str, Any]:
-    """The counts a report carries, shared by both surfaces."""
-    hypotheses = report.get("hypotheses") or []
-    by_confidence: Dict[str, int] = {}
-    for item in hypotheses:
-        key = item.get("confidence") or "unknown"
-        by_confidence[key] = by_confidence.get(key, 0) + 1
-    return {
-        "total": len(hypotheses),
-        "direct": by_confidence.get(CONFIDENCE_DIRECT, 0),
-        "reachable": by_confidence.get(CONFIDENCE_REACHABLE, 0),
-        "weak": by_confidence.get("weak", 0),
-        "found": bool(by_confidence.get(CONFIDENCE_DIRECT)
-                      or by_confidence.get(CONFIDENCE_REACHABLE)),
-    }
+    """Delegates to the core (I1): one count, two surfaces."""
+    return core_taint.summarize(report)
 
 
 def to_text(report: Dict[str, Any]) -> str:

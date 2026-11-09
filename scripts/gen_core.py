@@ -42,6 +42,7 @@ CORE_MODULES = (
     "ghydra/core/capabilities.py",
     "ghydra/core/contextpack.py",
     "ghydra/core/telemetry.py",
+    "ghydra/core/taint.py",
 )
 
 #: Per module, the public name -> the private name the bridge uses.
@@ -106,6 +107,19 @@ CORE_RENAMES = {
         "filter_recent": "_core_telemetry_recent",
         "recommendations": "_core_telemetry_recommendations",
         "summarize": "_core_telemetry_summarize",
+    },
+    "ghydra/core/taint.py": {
+        "PROGRAM_FIELDS": "_CORE_TAINT_PROGRAM_FIELDS",
+        "PAGE_LIMIT": "_CORE_TAINT_PAGE_LIMIT",
+        "MAX_PAGES": "_CORE_TAINT_MAX_PAGES",
+        "CALL_OPCODES": "_CORE_TAINT_CALL_OPCODES",
+        "CONFIDENCE_DIRECT": "_CORE_TAINT_CONFIDENCE_DIRECT",
+        "CONFIDENCE_REACHABLE": "_CORE_TAINT_CONFIDENCE_REACHABLE",
+        "DISCLAIMER": "_CORE_TAINT_DISCLAIMER",
+        "result_of": "_core_taint_result_of",
+        "site_for": "_core_taint_site_for",
+        "address_key": "_core_taint_address_key",
+        "summarize": "_core_taint_summarize",
     },
     "ghydra/core/hints.py": {
         "HINT_PATTERNS": "_CORE_HINT_PATTERNS",

@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The pure half of source-to-sink reasoning into the single core (I1,
+  slice 9)**: `ghydra/core/taint.py` now owns what a *call site* is (the call
+  whose target is the address, or whose target name contains the function), how
+  an address sorts (numerically, with unparseable values last instead of an
+  exception that loses the report), how hypotheses are counted by confidence,
+  and the disclaimer that says a heuristic is not a verdict. The I/O — reading
+  the source, the sink, the calls and the call graph — stays in the callers, so
+  the extraction is deliberately partial; `test_taint.py` passes **unedited**,
+  which is what proves the moved part behaves the same.
 - **The telemetry report into the single core (I1, slice 8)**: the window
   filter, the per-tool aggregate and the advice moved into
   `ghydra/core/telemetry.py`, which is told the current time instead of reading

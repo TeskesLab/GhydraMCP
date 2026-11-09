@@ -25,12 +25,14 @@ import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra.core import digest as core  # noqa: E402
 from ghydra import capabilities  # noqa: E402
 from ghydra import contextpack  # noqa: E402
+from ghydra import taint as taint_helper  # noqa: E402
 from ghydra import telemetry  # noqa: E402
 from ghydra.core import cache as cache_core  # noqa: E402
 from ghydra.core import capabilities as cap_core  # noqa: E402
 from ghydra.core import contextpack as ctx_core  # noqa: E402
 from ghydra.core import diff as diff_core  # noqa: E402
 from ghydra.core import fleet as fleet_core  # noqa: E402
+from ghydra.core import taint as taint_core  # noqa: E402
 from ghydra.core import telemetry as tel_core  # noqa: E402
 from ghydra.core import hints as hints_core  # noqa: E402
 from ghydra.core import runbook as runbook_core  # noqa: E402
@@ -842,6 +844,87 @@ class TelemetryToolTests(unittest.TestCase):
         for row in payload["tools"]:
             self.assertEqual({"tool", "calls", "failed", "ms_total", "ms_max",
                               "tokens", "ms_avg"}, set(row))
+
+class TaintCoreTests(unittest.TestCase):
+    """The pure half of source-to-sink reasoning lives once, in the core."""
+
+    CALLS = [
+        {"target": "0x401000", "at": "0x402000"},
+        {"target": "system@plt", "at": "0x403000"},
+        {"target": "", "at": "0x404000"},
+    ]
+
+    def test_the_constants_come_from_the_core(self):
+        self.assertEqual(taint_core.PAGE_LIMIT, taint_helper.PAGE_LIMIT)
+        self.assertEqual(taint_core.MAX_PAGES, taint_helper.MAX_PAGES)
+        self.assertEqual(taint_core.CALL_OPCODES, taint_helper.CALL_OPCODES)
+        self.assertIsInstance(taint_core.CALL_OPCODES, set)
+        self.assertEqual(taint_core.CALL_OPCODES, {57, 58})
+        self.assertEqual(taint_core.DISCLAIMER, bridge._TAINT_DISCLAIMER)
+        self.assertIs(bridge._TAINT_CALL_OPCODES, bridge._CORE_TAINT_CALL_OPCODES)
+        self.assertIn("not proof", taint_core.DISCLAIMER)
+
+    def test_the_site_is_found_by_address(self):
+        self.assertEqual("0x402000",
+                         taint_core.site_for(self.CALLS, "0x401000", "func"))
+        self.assertEqual("0x402000",
+                         bridge._core_taint_site_for(self.CALLS, "0X401000", "func"))
+
+    def test_the_site_is_found_by_name_inside_the_target(self):
+        self.assertEqual("0x403000",
+                         taint_core.site_for(self.CALLS, "0x999", "System"))
+        self.assertEqual("0x403000",
+                         bridge._taint_site_for(self.CALLS, "0x999", "System"))
+
+    def test_no_match_and_empty_targets_are_none(self):
+        self.assertIsNone(taint_core.site_for(self.CALLS, "0xdead", "nope"))
+        self.assertIsNone(taint_core.site_for([{"target": "", "at": "0x1"}],
+                                              "0x1", "x"))
+        self.assertIsNone(taint_core.site_for([], "0x1", "x"))
+
+    def test_an_address_sorts_numerically(self):
+        addresses = ["0x10", "0x9", "0x100"]
+        self.assertEqual(["0x9", "0x10", "0x100"],
+                         sorted(addresses, key=taint_core.address_key))
+
+    def test_an_unparseable_address_goes_last_instead_of_raising(self):
+        values = ["0x10", "not-an-address", "0x8"]
+        ordered = sorted(values, key=taint_core.address_key)
+        self.assertEqual("not-an-address", ordered[-1])
+        self.assertEqual((1, 0), taint_core.address_key("nope"))
+        self.assertEqual((0, 16), bridge._core_taint_address_key("0x10"))
+
+    def test_the_summary_counts_by_confidence(self):
+        report = {"hypotheses": [
+            {"confidence": "direct"}, {"confidence": "reachable"},
+            {"confidence": "weak"}, {"confidence": "weak"}, {}]}
+        summary = taint_core.summarize(report)
+        self.assertEqual(5, summary["total"])
+        self.assertEqual(1, summary["direct"])
+        self.assertEqual(1, summary["reachable"])
+        self.assertEqual(2, summary["weak"])
+        self.assertTrue(summary["found"])
+        self.assertEqual(summary, bridge._core_taint_summarize(report))
+        self.assertEqual(summary, bridge._taint_summarize(report))
+
+    def test_weak_alone_is_not_a_finding(self):
+        summary = taint_core.summarize(
+            {"hypotheses": [{"confidence": "weak"}, {"confidence": "weak"}]})
+        self.assertFalse(summary["found"])
+        self.assertEqual(0, summary["direct"] + summary["reachable"])
+
+    def test_an_empty_report_is_not_found(self):
+        self.assertFalse(taint_core.summarize({})["found"])
+        self.assertEqual(0, taint_core.summarize({})["total"])
+
+    def test_the_report_result_helper_distinguishes_failure_from_absence(self):
+        self.assertEqual({"x": 1},
+                         taint_core.result_of({"success": True, "result": {"x": 1}}))
+        self.assertIsNone(taint_core.result_of({"success": False,
+                                                "error": {"code": "X"}}))
+        self.assertIsNone(taint_core.result_of("nope"))
+        self.assertEqual(taint_core.result_of({"success": True, "result": []}),
+                         bridge._core_taint_result_of({"success": True, "result": []}))
 
 
 if __name__ == "__main__":
