@@ -18,6 +18,7 @@ are trying to do**, not by where the code lives.
 | understand how the pieces fit | [GHYDRA_CONCEPTS.md](GHYDRA_CONCEPTS.md) | the mental model |
 | do a specific job | [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) | task recipes with real commands |
 | translate an answer that looks wrong | [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md) | error codes → cause → fix |
+| parse an answer, or wire it into CI | [GHYDRA_OUTPUT.md](GHYDRA_OUTPUT.md) | formats, the envelope, exit codes |
 | look up a tool | [GHYDRA_TOOLS.md](GHYDRA_TOOLS.md) | the generated catalogue (134 tools) |
 | use the CLI | [GHYDRA_CLI.md](GHYDRA_CLI.md) | every command |
 | call the REST API | [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) | every route, `API_VERSION` 3000 |

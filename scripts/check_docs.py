@@ -133,6 +133,96 @@ def catalogue_problems() -> list:
     return []
 
 
+# ------------------------------------------------------- duplicate headings
+#: Where a repeated heading is the design (one section per release).
+REPEATING_HEADINGS_ALLOWED = {"CHANGELOG.md"}
+
+
+def duplicate_heading_problems() -> list:
+    """A document that repeats a heading at the same level has been edited badly.
+
+    The index is generated from the headings, so a duplicate makes the index
+    ambiguous — and in practice it means a block was pasted twice (measured: the
+    CLI reference carried the same 17-line section 18 times).
+    """
+    problems = []
+    for relative in sorted(INDEXED_DOCUMENTS):
+        path = os.path.join(ROOT, relative)
+        if not os.path.exists(path) or relative in REPEATING_HEADINGS_ALLOWED:
+            continue
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        in_toc = False
+        seen = {}
+        parents = {}          # level -> the title of the enclosing section
+        for number, line in enumerate(text.splitlines(), start=1):
+            stripped = line.strip()
+            if stripped == "<!-- toc -->":
+                in_toc = True
+                continue
+            if stripped == "<!-- /toc -->":
+                in_toc = False
+                continue
+            if in_toc or not line.startswith("#"):
+                continue
+            level = len(line) - len(line.lstrip("#"))
+            if level < 2:
+                continue
+            title = line[level:].strip()
+            # A heading is identified by where it sits: `### Tests` under
+            # "Troubleshooting" and under "Adding New Tests" are two sections,
+            # not a duplicate. The same title under the *same* parent is.
+            parent = parents.get(level - 1)
+            key = (level, title, parent)
+            if key in seen:
+                where = f" under '{parent}'" if parent else ""
+                problems.append(
+                    f"{relative}:{number}: heading '{title}' repeats level {level}"
+                    f"{where} (first at line {seen[key]})")
+            else:
+                seen[key] = number
+            parents[level] = title
+            for deeper in [key_level for key_level in parents if key_level > level]:
+                del parents[deeper]
+    return problems
+
+
+def index_current_problems() -> list:
+    """The big references must carry a current generated index."""
+    sys.path.insert(0, ROOT)
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "gen_toc", os.path.join(ROOT, "scripts", "gen_toc.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load scripts/gen_toc.py: {failure}"]
+    problems = []
+    for relative, depth in module.INDEXED.items():
+        path = os.path.join(ROOT, relative)
+        if not os.path.exists(path):
+            problems.append(f"{relative} is missing")
+            continue
+        with open(path, encoding="utf-8") as handle:
+            current = handle.read()
+        try:
+            updated = module.apply(current, depth)
+        except SystemExit as failure:
+            problems.append(f"{relative}: {failure}")
+            continue
+        if updated != current:
+            problems.append(f"{relative}: the index is stale, run scripts/gen_toc.py")
+    return problems
+
+
+#: The documents the guards read: the generated ones and the big references.
+INDEXED_DOCUMENTS = ("GHIDRA_HTTP_API.md", "GHYDRA_CLI.md", "DOCUMENTATION.md",
+                     "GHYDRA_CONCEPTS.md", "GHYDRA_RECIPES.md",
+                     "GHYDRA_TROUBLESHOOTING.md", "ARCHITECTURE.md",
+                     "GHYDRA_TOOLS.md", "GHYDRA_GETTING_STARTED.md",
+                     "TESTING.md", "CHANGELOG.md")
+
 # ------------------------------------------------------------------- links
 def index_link_problems() -> list:
     """Every local document linked from the index must exist."""
@@ -168,6 +258,8 @@ def main() -> int:
 
     problems.extend(catalogue_problems())
     problems.extend(index_link_problems())
+    problems.extend(duplicate_heading_problems())
+    problems.extend(index_current_problems())
     if not version_copy_ok():
         problems.append(
             "ghydra/x64dbg.py must use __version__ (scripts/version.py's sixth copy)")

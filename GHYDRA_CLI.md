@@ -2,6 +2,57 @@
 
 A command-line interface for GhydraMCP that provides access to Ghidra's reverse engineering capabilities via a standalone tool.
 
+<!-- toc -->
+
+- [`ghydra stats` — what the session actually did](#ghydra-stats-what-the-session-actually-did)
+- [Overview](#overview)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Global Options](#global-options)
+- [Agent / programmatic use](#agent-programmatic-use)
+- [Configuration](#configuration)
+- [Implemented Command Groups](#implemented-command-groups)
+  - [Instances Commands](#instances-commands)
+  - [Scripts Commands](#scripts-commands)
+  - [Functions Commands](#functions-commands)
+  - [The four composed commands](#the-four-composed-commands)
+  - [Raw Image Commands](#raw-image-commands)
+  - [Kuna Commands](#kuna-commands)
+- [x64dbg Commands](#x64dbg-commands)
+  - [Doctor, Inspect, Evidence and Session Commands](#doctor-inspect-evidence-and-session-commands)
+- [The other command groups](#the-other-command-groups)
+  - [Headless Commands](#headless-commands)
+  - [Report Commands](#report-commands)
+  - [x64dbg Report and Annotations](#x64dbg-report-and-annotations)
+  - [1. Memory Commands (`ghydra/cli/memory.py`)](#1-memory-commands-ghydraclimemorypy)
+  - [2. Data Commands (`ghydra/cli/data.py`)](#2-data-commands-ghydraclidatapy)
+  - [3. Structs Commands (`ghydra/cli/structs.py`)](#3-structs-commands-ghydraclistructspy)
+  - [4. Xrefs Commands (`ghydra/cli/xrefs.py`)](#4-xrefs-commands-ghydraclixrefspy)
+  - [5. Analysis Commands (`ghydra/cli/analysis.py`)](#5-analysis-commands-ghydraclianalysispy)
+  - [6. UI Commands (`ghydra/cli/ui.py`)](#6-ui-commands-ghydracliuipy)
+  - [7. Comments Commands (`ghydra/cli/comments.py`)](#7-comments-commands-ghydraclicommentspy)
+  - [8. Project Commands (`ghydra/cli/project.py`)](#8-project-commands-ghydracliprojectpy)
+- [Implementation Pattern](#implementation-pattern)
+- [Output Formatting](#output-formatting)
+  - [Default Mode (Rich Terminal Output)](#default-mode-rich-terminal-output)
+  - [JSON Mode (`--json` flag)](#json-mode---json-flag)
+- [Testing Against Running Ghidra](#testing-against-running-ghidra)
+- [API Endpoint Reference](#api-endpoint-reference)
+- [Tips for Implementation](#tips-for-implementation)
+- [Development Workflow](#development-workflow)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [License](#license)
+- [Reproducible runbooks and diffs (R6)](#reproducible-runbooks-and-diffs-r6)
+- [Source-to-sink hypotheses (R5)](#source-to-sink-hypotheses-r5)
+- [Mission mode (R8)](#mission-mode-r8)
+- [Decompile cache (I11)](#decompile-cache-i11)
+- [Fleet queries (R7)](#fleet-queries-r7)
+- [BSim (R1)](#bsim-r1)
+  - [The digital twin (R2)](#the-digital-twin-r2)
+
+<!-- /toc -->
+
 ## `ghydra stats` — what the session actually did
 
 The bridge records one JSON object per MCP tool call under
@@ -24,24 +75,6 @@ tool at `async_mode`.
 
 Ghydra CLI is a standalone command-line tool that exposes all the functionality of the GhydraMCP bridge in a terminal-friendly format. It supports both human-readable formatted output (with tables, syntax highlighting, and colors) and JSON output for scripting.
 
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
-
 ## Installation
 
 ```bash
@@ -52,24 +85,6 @@ pip install -e .
 # After installation, reshim if using asdf
 asdf reshim
 ```
-
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
 
 ## Quick Start
 
@@ -87,24 +102,6 @@ ghydra memory read --address 0x401000 --length 64
 ghydra --json functions list
 ```
 
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
-
 ## Global Options
 
 These are options on the **root** command, so they must come **before** the subcommand —
@@ -119,24 +116,6 @@ usage error, since no subcommand redefines them):
 - `--version`: Show version and exit
 - `--help`: Show help message
 
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
-
 ## Agent / programmatic use
 
 For scripts and AI agents, prefer one of these so output is parse-clean:
@@ -146,24 +125,6 @@ For scripts and AI agents, prefer one of these so output is parse-clean:
 - `--no-color` (or `NO_COLOR=1`) forces plain output even in a terminal, if you want tables without ANSI styling.
 
 Earlier versions forced ANSI color codes on regardless of the output target, which corrupted hex-address parsing when an agent captured the output; that is fixed.
-
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
 
 ## Configuration
 
@@ -196,24 +157,6 @@ The `kuna` section of the config file wins over the environment: `"enabled": fal
 Kuna integration off even when `GHYDRA_KUNA=1` is set, and `kuna.path` overrides
 `GHYDRA_KUNA_PATH`. A config file without an `enabled` value leaves the decision to the
 environment.
-
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
 
 ## Implemented Command Groups
 
@@ -510,24 +453,6 @@ ghydra kuna status                    # lists the exports on this machine with t
 ghydra kuna export-read 9f2c1a4b7e03 main
 ```
 
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
-
 ## x64dbg Commands
 
 The `x64dbg` group drives the [x64dbg MCP server](https://github.com/duty1g/x64dbg-mcp-server), the
@@ -628,24 +553,6 @@ ghydra session close s-3f9a21c4
 
 The `doctor` exits with a non-zero status when something is wrong, so it can be used as a gate.
 
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
-
 ## The other command groups
 
 The following command groups follow the same pattern as `instances` and `functions`.
@@ -730,13 +637,6 @@ The annotations take the addresses in the file — the ones in the binary — an
 the addresses of the live process. `--mode Label` sets labels instead of comments, and `--limit`
 says how many of them to apply.
 
-### Headless Commands
-
-Run the GhidraMCP API without a window. A headless Ghidra run imports and analyses the binary and
-then serves the same REST API the CodeBrowser plugin serves. See
-[GHYDRA_HEADLESS.md](GHYDRA_HEADLESS.md) for the full reference.
-
-```bash
 # Analyse a binary and serve the API on 8192
 ghydra headless start C:\bin\cmd.exe --port 8192
 
@@ -759,11 +659,6 @@ ghydra headless stop
 The project goes to `ghidra_projects` in your home directory: Ghidra refuses a project path with an
 element that starts with a dot, so `~/.ghidra` is not a place a project can live.
 
-### Report Commands
-
-Build a report on a binary: Ghidra and Kuna side by side, and the annotations for the debugger.
-
-```bash
 # The whole report: the document, the data and the annotations
 ghydra report build C:\bin\cmd.exe --output out
 
@@ -788,11 +683,6 @@ ghydra report build C:\bin\cmd.exe --no-kuna
 
 The three files are `<name>-report.md`, `<name>-report.json` and `<name>-x64dbg.json`.
 
-### x64dbg Report and Annotations
-
-Take down what the debugger is doing, and put the annotations of a report into it.
-
-```bash
 # The snapshot: state, registers, modules, breakpoints, disassembly, stack, memory map
 ghydra x64dbg report --output out
 
@@ -1051,24 +941,6 @@ def project():
 # Endpoint: POST /project/open
 ```
 
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
-
 ## Implementation Pattern
 
 All command groups follow the same pattern:
@@ -1081,24 +953,6 @@ All command groups follow the same pattern:
 6. **Format output** using `formatter.format_*()` methods
 7. **Page long output** using `should_page()` and `page_output()`
 8. **Import and register** in `main.py`
-
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
 
 ## Output Formatting
 
@@ -1119,24 +973,6 @@ The CLI supports two output modes:
 - Pretty-printed by default
 - Suitable for scripting and automation
 - Can be piped to `jq` for processing
-
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
 
 ## Testing Against Running Ghidra
 
@@ -1162,24 +998,6 @@ To test the CLI against a running Ghidra instance:
    ghydra functions get --name nonexistent  # Should show error
    ```
 
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
-
 ## API Endpoint Reference
 
 Reference `bridge_mcp_hydra.py` for the exact endpoint patterns:
@@ -1195,24 +1013,6 @@ Reference `bridge_mcp_hydra.py` for the exact endpoint patterns:
 - **Project**: `/project`, `/project/files`, `/project/open`
 - **Instances**: `/plugin-version`, `/program`
 
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
-
 ## Tips for Implementation
 
 1. **Copy existing patterns**: Use `instances.py` or `functions.py` as templates
@@ -1222,24 +1022,6 @@ tool at `async_mode`.
 5. **Use formatters**: Ensure `TableFormatter` has appropriate `format_*()` methods for each response type
 6. **Page output**: Long listings should use paging for better UX
 7. **Error messages**: Provide helpful error messages for common mistakes
-
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
 
 ## Development Workflow
 
@@ -1255,24 +1037,6 @@ ghydra <command>
 # Check help text
 ghydra <group> <command> --help
 ```
-
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
 
 ## Architecture
 
@@ -1312,24 +1076,6 @@ ghydra/
     └── validators.py    # ✅ Input validation
 ```
 
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
-
 ## Contributing
 
 When implementing remaining command groups:
@@ -1339,24 +1085,6 @@ When implementing remaining command groups:
 3. Update this README with usage examples
 4. Test against running Ghidra instance
 5. Ensure help text is clear and includes examples
-
-## `ghydra stats` — what the session actually did
-
-The bridge records one JSON object per MCP tool call under
-`~/.ghydra/telemetry.jsonl` (local only — nothing is sent anywhere; disable
-with `GHYDRA_TELEMETRY=0`). The log is capped at about 1 MB.
-
-```bash
-ghydra stats                    # calls, failures, latency, tokens per tool
-ghydra stats --days 30          # a wider window
-ghydra stats --reset            # delete the local log, then report
-ghydra --json stats             # the raw report
-```
-
-When the log shows a pattern a composed tool replaces, the report names it:
-4+ inspection calls point at `analysis_context_pack`, 4+ listings at
-`programs_overview`, 4+ decompiles at `functions_batch_decompile`, and a slow
-tool at `async_mode`.
 
 ## License
 

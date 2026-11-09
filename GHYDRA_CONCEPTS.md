@@ -5,8 +5,6 @@ and become a surface you can navigate.
 
 ---
 
-## 1. Three surfaces, one API
-
 ```
 MCP client ──► bridge_mcp_hydra.py ─┐
 CLI (ghydra) ──────────────────────┼──► HTTP REST ──► Ghidra plugin
@@ -172,3 +170,4 @@ paths or binary content. `GHYDRA_TELEMETRY=0` turns it off.
 | local | `kuna_*`, `x64dbg_*`, `ghydra twin`, `ghydra bsim` |
 | protections | read-only middleware, `--dry-run`, dry-run defaults |
 | honesty | the disclaimers in `taint`, `bsim`, and the twin's provenance |
+## 1. Three surfaces, one API

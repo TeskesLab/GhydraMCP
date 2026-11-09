@@ -2,6 +2,41 @@
 
 ## Overview
 
+<!-- toc -->
+
+- [Overview](#overview)
+- [General Concepts](#general-concepts)
+  - [Request Format](#request-format)
+  - [Response Format](#response-format)
+  - [Error Responses](#error-responses)
+  - [Addressing and Searching](#addressing-and-searching)
+  - [Pagination](#pagination)
+- [Meta Endpoints](#meta-endpoints)
+  - [`GET /plugin-version`](#get-plugin-version)
+  - [`GET /info`](#get-info)
+  - [`GET /instances`](#get-instances)
+- [Resource Types](#resource-types)
+  - [1. Project](#1-project)
+  - [2. Program](#2-program)
+  - [3. Current Location](#3-current-location)
+  - [3.1 Address Inspection](#31-address-inspection)
+  - [4. Functions](#4-functions)
+  - [5. Symbols & Labels](#5-symbols-labels)
+  - [6. Data](#6-data)
+  - [6.1 Strings](#61-strings)
+  - [6.2 Structs](#62-structs)
+  - [6.3 Scalars](#63-scalars)
+  - [7. Memory Segments](#7-memory-segments)
+  - [8. Memory Access](#8-memory-access)
+  - [9. Cross-References (XRefs)](#9-cross-references-xrefs)
+  - [10. Analysis](#10-analysis)
+  - [11. Scripts (gated)](#11-scripts-gated)
+  - [12. Raw Image](#12-raw-image)
+  - [13. BSim (signatures)](#13-bsim-signatures)
+- [Design Considerations for AI Usage](#design-considerations-for-ai-usage)
+
+<!-- /toc -->
+
 This API provides a Hypermedia-driven interface (HATEOAS) to interact with Ghidra's CodeBrowser, enabling AI-driven and automated reverse engineering workflows. It allows interaction with Ghidra projects, programs (binaries), functions, symbols, data, memory segments, cross-references, and analysis features. Each program open in Ghidra will have its own plugin instance, so all resources are specific to that program.
 
 ## General Concepts

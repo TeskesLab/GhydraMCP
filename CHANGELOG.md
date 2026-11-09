@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The two big references are navigable, and their indexes are generated**:
+  `GHYDRA_CLI.md` (55 KB) and `GHIDRA_HTTP_API.md` (48 KB) now open with a table
+  of contents, produced by `scripts/gen_toc.py` from the headings and checked by
+  the docs guard — a renamed section cannot leave a dead index behind. Generating
+  it exposed two real defects that no test had caught: the CLI reference carried
+  the same 17-line section **eighteen times** (a copy/paste artifact, 12.5 KB of
+  duplication) and three sections duplicated at the same depth. Both removed, and
+  `check_docs.py` now fails a document that repeats a heading under the same
+  parent. New guide: [GHYDRA_OUTPUT.md](GHYDRA_OUTPUT.md) — the four shapes
+  (text/JSON/table/report), the envelope, the `Next:` line, `GHYDRA_MCP_OUTPUT`,
+  JUnit/SARIF, and the exit codes of `assert` (0/1/2) and of the CLI.
 - **The documentation set, and the guards that keep it true**: the tool became
   wide enough that a reader could not find the answer, so the documentation is now
   a set with a map rather than a pile of files:
