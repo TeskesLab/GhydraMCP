@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.11.0"
+BRIDGE_VERSION = "v3.12.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -888,6 +888,53 @@ def _extract_batch_transport_timeout(json_data: dict | None = None) -> int:
     # for the batch it will actually accept.
     return per_target * min(len(targets), MAX_BATCH_TARGETS) + 30
 
+def _connection_never_established(exc: BaseException) -> bool:
+    """Was the connection refused before any request byte was sent?
+
+    "Failed to establish a new connection" is the one transport failure that is
+    always safe to repeat: the request never reached the server, so repeating it
+    cannot make a state-changing call happen twice. A reset *mid-flight* is not
+    this: there the request may already have been acted on.
+    """
+    seen = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text = f"{type(current).__name__}: {current}"
+        lowered = text.lower()
+        if "newconnectionerror" in lowered:
+            return True
+        if "failed to establish a new connection" in lowered:
+            return True
+        if "connection refused" in lowered or "actively refused" in lowered:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _request_with_connection_retry(method: str, url: str, attempts: int = 3,
+                                   **kwargs):
+    """Do the request, retrying only when nothing was ever sent.
+
+    This machine resets or refuses a loopback connection every now and then
+    (measured at ~7% of them). A refusal before the connection exists leaves the
+    server untouched, so the retry is safe for every method - including POST,
+    which is not otherwise retried.
+    """
+    last: BaseException | None = None
+    for attempt in range(attempts):
+        try:
+            return _http_session().request(method, url, **kwargs)
+        except requests.exceptions.ConnectionError as exc:
+            if not _connection_never_established(exc) or attempt == attempts - 1:
+                raise
+            last = exc
+            time.sleep(0.05 * (2 ** attempt))
+    if last is not None:
+        raise last
+    raise RuntimeError("unreachable")
+
+
 def _make_request(method: str, port: int, endpoint: str, params: dict | None = None, 
                  json_data: dict | None = None, data: str | None = None, 
                  headers: dict | None = None) -> dict:
@@ -933,7 +980,7 @@ def _make_request(method: str, port: int, endpoint: str, params: dict | None = N
             request_headers['Content-Type'] = 'text/plain'
 
     try:
-        response = _http_session().request(
+        response = _request_with_connection_retry(
             method,
             url,
             params=params,

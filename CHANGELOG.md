@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`examples/`: reverse engineering as a CI test**: the smallest useful
+  example of the thing a pipeline can gate on — `examples/asserts.json` (eight
+  assertions covering every kind, each with the `message` that explains *why* it
+  exists) and `examples/ci/analyze.yml` (a GitHub Actions template that starts a
+  headless instance, runs the assertions, uploads **SARIF** to code scanning and
+  keeps the JUnit report, stopping the run with `if: always()`). Validated
+  end-to-end against a live Ghidra 12.2 headless run: 8 assertions, 3 passed /
+  5 failed, exit 1, and a SARIF 2.1.0 document with one result per failure.
+  Writing the example found two real bugs: `reaches` and `has_xref_to` let a 404
+  **escape** instead of producing a verdict (a missing name now fails the
+  assertion, while a transport error still raises), and a `reaches` assertion
+  printed `reaches None` because it has no single `name` (it is labelled
+  `main -> strcmp` now). The scan evidence also stopped conflating distinct
+  names with entries. `test_assertions.py` keeps the example valid so it cannot
+  rot.
 - **Single core, generated into the bridge (I1, slice 1)**: the bridge ships as
   one file and cannot import `ghydra`, so the pure helpers were duplicated — the
   canonical-JSON digest alone existed three times (runbook, cache, and the two

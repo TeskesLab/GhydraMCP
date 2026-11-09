@@ -285,6 +285,80 @@ class CommandTests(unittest.TestCase):
         document = json.loads(open(target, encoding="utf-8").read())
         self.assertEqual("2.1.0", document["version"])
 
+class MissingNameTests(unittest.TestCase):
+    """A name that is not in the binary is a verdict, not a crash.
+
+    Found by running `examples/asserts.json` against a live instance: the 404
+    escaped `reaches` and `has_xref_to` and turned the whole run into exit 2.
+    """
+
+    class Missing(Exception):
+        def __init__(self, code="FUNCTION_NOT_FOUND"):
+            super().__init__("No function at address or named 'x'")
+            self.code = code
+
+    def _assert(self, kind, name, **extra):
+        class Client:
+            def get(self, endpoint, params=None):
+                raise MissingNameTests.Missing()
+        spec = {"id": "X1", "kind": kind, "name": name, **extra}
+        return A.evaluate(Client(), [spec])["result"]["assertions"][0]
+
+    def test_has_function_reports_a_missing_function(self):
+        item = self._assert("has_function", "main")
+        self.assertEqual("fail", item["status"])
+        self.assertIn("does not exist", item["evidence"])
+
+    def test_reaches_reports_a_missing_end(self):
+        item = self._assert("reaches", "main", **{"from": "main", "to": "strcmp"})
+        self.assertEqual("fail", item["status"])
+        self.assertIn("not in the binary", item["evidence"])
+
+    def test_has_xref_reports_a_missing_name(self):
+        item = self._assert("has_xref_to", "GetProcAddress")
+        self.assertEqual("fail", item["status"])
+        self.assertIn("not present", item["evidence"])
+
+    def test_a_transport_error_still_raises(self):
+        class Broken:
+            def get(self, endpoint, params=None):
+                raise RuntimeError("connection reset")
+        with self.assertRaises(RuntimeError):
+            A.evaluate(Broken(), [{"id": "X", "kind": "has_xref_to",
+                                   "name": "strlen"}])
+
+
+class ExampleTests(unittest.TestCase):
+    """`examples/` must keep working: it is the thing people copy."""
+
+    ROOT = os.path.dirname(os.path.abspath(__file__))
+
+    def test_the_example_assertions_load_and_cover_the_kinds(self):
+        items = A.load_assertions(os.path.join(self.ROOT, "examples", "asserts.json"))
+        self.assertEqual(8, len(items))
+        self.assertEqual(len({item["id"] for item in items}), len(items))
+        self.assertIn("reaches", {item["kind"] for item in items})
+        for item in items:
+            self.assertTrue(item["message"], item["id"])
+
+    def test_a_reaches_assertion_is_labelled_with_the_pair(self):
+        items = A.load_assertions(os.path.join(self.ROOT, "examples", "asserts.json"))
+        reaches = [item for item in items if item["kind"] == "reaches"][0]
+        self.assertEqual("main -> strcmp", reaches["name"])
+
+    def test_the_example_workflow_is_valid_yaml_and_runs_the_cli(self):
+        import yaml
+        path = os.path.join(self.ROOT, "examples", "ci", "analyze.yml")
+        with open(path, encoding="utf-8") as handle:
+            document = yaml.safe_load(handle)
+        text = open(path, encoding="utf-8").read()
+        self.assertIn("ghydra assert", text)
+        self.assertIn("--format sarif", text)
+        self.assertIn("ghydra headless start", text)
+        self.assertIn("ghydra headless stop", text)
+        self.assertIsInstance(document, dict)
+        self.assertIn("jobs", document)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

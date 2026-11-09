@@ -1,0 +1,94 @@
+# Reverse engineering gate — copy this to .github/workflows/analyze.yml
+#
+# It answers one question in CI: *does the binary we just built still look like
+# the binary we expect?* Eight assertions (examples/asserts.json) are evaluated
+# against a headless Ghidra instance; a violation fails the build and publishes
+# SARIF where a reviewer already looks.
+#
+# What to change in your repository:
+#   BINARY       the artifact this job analyses (a path, or a download step)
+#   GHIDRA_URL   the Ghidra release your extension was built for
+#   asserts.json your expectations, not this project's
+#
+# The extension has to be installed in the Ghidra tree used here; see the
+# project README for the build (`mvn clean package -Dghidra.version=…`) and copy
+# the unpacked extension into $GHIDRA_HOME/Extensions/Ghidra.
+
+name: Reverse engineering gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    env:
+      BINARY: build/my-binary.exe
+      GHIDRA_HOME: ${{ github.workspace }}/ghidra
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------- build
+      # Replace with whatever produces $BINARY in your repository.
+      - name: Build the binary under analysis
+        run: |
+          test -f "$BINARY" || { echo "no $BINARY — replace this step with your build"; exit 1; }
+
+      - name: Set up Python and the CLI
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+
+      # ---------------------------------------------------------------- Ghidra
+      # A headless run is the instance the assertions talk to. The JDK must be
+      # the one the Ghidra release supports (21 for 11.x, 25 for 12.2).
+      - name: Fetch Ghidra
+        run: |
+          set -euo pipefail
+          url=$(curl -sSL https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest \
+                | grep -o 'https://[^"]*_PUBLIC_[0-9]*\.zip' | head -1)
+          curl -sSL "$url" -o ghidra.zip
+          unzip -q ghidra.zip
+          mv ghidra_*_PUBLIC ghidra
+
+      - name: Start a headless instance
+        run: ghydra headless start "$BINARY" --port 8192
+
+      # ------------------------------------------------------- the assertions
+      # --format sarif, and the JUnit report kept as an artifact: the SARIF goes
+      # to code scanning, the XML is what a human opens to read the failure.
+      - name: Assert what the binary must be
+        run: ghydra assert -f asserts.json --format sarif -o analysis.sarif
+      - name: Assert again, for the JUnit report
+        if: always()
+        run: ghydra assert -f asserts.json --format junit -o analysis.xml || true
+
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: analysis.sarif
+
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reverse-engineering-report
+          path: |
+            analysis.xml
+            analysis.sarif
+
+      # The run holds a project lock: a job that dies before this leaves the
+      # project locked for the next one.
+      - name: Stop the headless instance
+        if: always()
+        run: ghydra headless stop

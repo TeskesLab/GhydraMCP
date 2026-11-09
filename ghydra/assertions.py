@@ -77,10 +77,13 @@ def load_assertions(path: str) -> List[Dict[str, Any]]:
                 raise AssertionError_(f"assertion #{index + 1}: reaches needs from and to")
         elif not target:
             raise AssertionError_(f"assertion #{index + 1}: '{kind}' needs a name")
+        label = target
+        if kind == "reaches":
+            label = f"{item.get('from')} -> {item.get('to')}"
         validated.append({
             "id": str(item.get("id") or f"A{index + 1}"),
             "kind": kind,
-            "name": target,
+            "name": label,
             "from": item.get("from"),
             "to": item.get("to"),
             "message": item.get("message") or "",
@@ -134,7 +137,7 @@ def _evaluate_listing(client, assertion, endpoint, keys) -> Dict[str, Any]:
     wanted = str(assertion["name"]).lower()
     matched = [name for name in names if wanted in name.lower()]
     kind = assertion["kind"]
-    scanned = f"scanned {len(names)} of {len(items)} entries"
+    scanned = f"scanned {len(items)} entries ({len(names)} distinct names)"
     if not complete:
         scanned += " (listing truncated: the answer is inconclusive)"
     if kind.startswith("has_"):
@@ -157,8 +160,7 @@ def _evaluate_function(client, assertion) -> Dict[str, Any]:
     try:
         response = client.get(f"functions/by-name/{_quote(name)}")
     except Exception as exc:  # a 404 is the answer, not a failure of the check
-        code = getattr(exc, "code", "") or ""
-        if code in ("FUNCTION_NOT_FOUND", "SYMBOL_NOT_FOUND") or "404" in str(exc):
+        if _is_missing(exc):
             if kind == "has_function":
                 return _result(assertion, "fail", "the function does not exist")
             return _result(assertion, "pass", "the function does not exist")
@@ -170,9 +172,25 @@ def _evaluate_function(client, assertion) -> Dict[str, Any]:
     return _result(assertion, "fail", f"found at {address}")
 
 
+def _is_missing(exc: Exception) -> bool:
+    """Is this exception "the thing is not there", rather than a failed check?"""
+    code = str(getattr(exc, "code", "") or "")
+    if code in ("FUNCTION_NOT_FOUND", "SYMBOL_NOT_FOUND", "NOT_FOUND",
+                "NO_SYMBOL", "HTTP_404"):
+        return True
+    text = str(exc).lower()
+    return "not found" in text or "no function" in text or "404" in text
+
+
 def _evaluate_xrefs(client, assertion) -> Dict[str, Any]:
     name = str(assertion["name"])
-    response = client.get(f"xrefs/to-name/{_quote(name)}")
+    try:
+        response = client.get(f"xrefs/to-name/{_quote(name)}")
+    except Exception as exc:  # a 404 is the answer, not a failure of the check
+        if _is_missing(exc):
+            return _result(assertion, "fail",
+                           f"{name} is not present in the binary")
+        raise
     payload = response.get("result")
     items = payload if isinstance(payload, list) else []
     meta = response.get("meta") or {}
@@ -183,8 +201,15 @@ def _evaluate_xrefs(client, assertion) -> Dict[str, Any]:
 
 
 def _evaluate_reaches(client, assertion) -> Dict[str, Any]:
-    response = client.get("analysis/call-path", params={
-        "from": assertion["from"], "to": assertion["to"]})
+    try:
+        response = client.get("analysis/call-path", params={
+            "from": assertion["from"], "to": assertion["to"]})
+    except Exception as exc:  # a name that is not there cannot be reached
+        if _is_missing(exc):
+            return _result(assertion, "fail",
+                           f"{assertion['from']} cannot reach "
+                           f"{assertion['to']}: one of them is not in the binary")
+        raise
     payload = response.get("result") or {}
     path = payload.get("path") if isinstance(payload, dict) else None
     if isinstance(path, list) and path:

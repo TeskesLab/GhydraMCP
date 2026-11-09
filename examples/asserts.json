@@ -1,0 +1,51 @@
+[
+  {
+    "id": "A1",
+    "kind": "has_function",
+    "name": "main",
+    "message": "every analysed binary must have an entry point Ghidra recognises"
+  },
+  {
+    "id": "A2",
+    "kind": "no_import",
+    "name": "CreateRemoteThread",
+    "message": "this build must not inject into another process"
+  },
+  {
+    "id": "A3",
+    "kind": "no_import",
+    "name": "VirtualAllocEx",
+    "message": "remote allocation paired with CreateRemoteThread is the injection pair"
+  },
+  {
+    "id": "A4",
+    "kind": "has_string",
+    "name": "/api/v1/",
+    "message": "the client talks to the v1 API"
+  },
+  {
+    "id": "A5",
+    "kind": "no_string",
+    "name": "BEGIN RSA PRIVATE KEY",
+    "message": "no private key may be embedded in the binary"
+  },
+  {
+    "id": "A6",
+    "kind": "has_import",
+    "name": "Socket",
+    "message": "networking is expected in this build"
+  },
+  {
+    "id": "A7",
+    "kind": "reaches",
+    "from": "main",
+    "to": "strcmp",
+    "message": "the entry point must reach the string comparison it is built around"
+  },
+  {
+    "id": "A8",
+    "kind": "has_xref_to",
+    "name": "GetProcAddress",
+    "message": "dynamic resolution is part of this build's design"
+  }
+]

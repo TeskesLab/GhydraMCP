@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
@@ -154,6 +155,60 @@ class CliEntrypointTests(unittest.TestCase):
     def test_the_env_var_selects_json_too(self):
         result = self._run("version", env_extra={"GHYDRA_JSON": "1"})
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+class ConnectionRetryTests(unittest.TestCase):
+    """A connection that never came up is safe to repeat; a reset is not.
+
+    This machine refuses or resets a loopback connection every now and then
+    (measured ~7%). Only the refusal means nothing was sent, so only the refusal
+    may be retried - including for a POST, which is otherwise never repeated.
+    """
+
+    def _refused(self):
+        from requests.exceptions import ConnectionError as RequestConnectionError
+        import urllib3
+        return RequestConnectionError(
+            "Failed to establish a new connection: [WinError 10061] No connection "
+            "could be made",
+            urllib3.exceptions.NewConnectionError(None, "refused"))
+
+    def _reset(self):
+        from requests.exceptions import ConnectionError as RequestConnectionError
+        return RequestConnectionError("Connection aborted.",
+                                      ConnectionResetError(10054, "reset"))
+
+    def test_a_refused_connection_is_recognised(self):
+        self.assertTrue(bridge._connection_never_established(self._refused()))
+
+    def test_a_mid_flight_reset_is_not(self):
+        self.assertFalse(bridge._connection_never_established(self._reset()))
+
+    def test_the_refusal_is_retried_and_can_succeed(self):
+        session = mock.Mock()
+        session.request.side_effect = [self._refused(), "the answer"]
+        with mock.patch.object(bridge, "_http_session", return_value=session), \
+                mock.patch.object(bridge.time, "sleep"):
+            result = bridge._request_with_connection_retry("POST", "http://x/y")
+        self.assertEqual("the answer", result)
+        self.assertEqual(2, session.request.call_count)
+
+    def test_the_reset_is_not_retried(self):
+        session = mock.Mock()
+        session.request.side_effect = self._reset()
+        with mock.patch.object(bridge, "_http_session", return_value=session), \
+                mock.patch.object(bridge.time, "sleep"):
+            with self.assertRaises(Exception):
+                bridge._request_with_connection_retry("POST", "http://x/y")
+        self.assertEqual(1, session.request.call_count)
+
+    def test_the_attempts_are_bounded(self):
+        session = mock.Mock()
+        session.request.side_effect = self._refused()
+        with mock.patch.object(bridge, "_http_session", return_value=session), \
+                mock.patch.object(bridge.time, "sleep"):
+            with self.assertRaises(Exception):
+                bridge._request_with_connection_retry("GET", "http://x/y")
+        self.assertEqual(3, session.request.call_count)
 
 
 if __name__ == "__main__":
