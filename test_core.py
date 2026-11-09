@@ -24,8 +24,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra.core import digest as core  # noqa: E402
 from ghydra import capabilities  # noqa: E402
+from ghydra import contextpack  # noqa: E402
 from ghydra.core import cache as cache_core  # noqa: E402
 from ghydra.core import capabilities as cap_core  # noqa: E402
+from ghydra.core import contextpack as ctx_core  # noqa: E402
 from ghydra.core import diff as diff_core  # noqa: E402
 from ghydra.core import fleet as fleet_core  # noqa: E402
 from ghydra.core import hints as hints_core  # noqa: E402
@@ -646,6 +648,81 @@ class CapabilitiesCoreTests(unittest.TestCase):
             with self.subTest(rule=rule.get("id")):
                 for key in ("id", "name", "tactic", "imports", "strings"):
                     self.assertIn(key, rule)
+
+class ContextPackCoreTests(unittest.TestCase):
+    """The question classifier and the budget composer live once, in the core."""
+
+    def test_the_classifier_agrees(self):
+        questions = ("what does this function do?", "o que faz essa função?",
+                     "de onde vem esse dado?", "where is this written?",
+                     "o que mudou desde a última versão?", "what changed",
+                     "qual o tamanho do binário?", "", None)
+        for question in questions:
+            with self.subTest(question=question):
+                self.assertEqual(ctx_core.classify_question(question),
+                                 bridge._core_context_classify(question))
+                self.assertEqual(ctx_core.classify_question(question),
+                                 bridge._ctx_classify_question(question))
+
+    def test_the_classifier_falls_back_to_the_overview(self):
+        self.assertEqual("overview",
+                         ctx_core.classify_question("qual o tamanho do binário?"))
+
+    def test_the_three_templates_are_the_shim_s(self):
+        self.assertEqual(set(ctx_core.TEMPLATES), set(contextpack.TEMPLATES))
+        self.assertIs(bridge._CONTEXT_TEMPLATES, bridge._CORE_CONTEXT_TEMPLATES)
+        self.assertEqual(ctx_core._CHAR_PER_TOKEN,
+                         bridge._CORE_CONTEXT_CHAR_PER_TOKEN)
+
+    def test_the_token_estimate_agrees(self):
+        for text in ("", "a", "abcd", "x" * 400, "linha\n" * 30):
+            with self.subTest(text=text[:12]):
+                self.assertEqual(ctx_core.estimate_tokens(text),
+                                 bridge._ctx_tokens(text))
+
+    def _sections(self):
+        return [{"title": "function", "body": "x" * 2000,
+                 "citations": ["0x401000", "0x401010"]},
+                {"title": "program", "body": "y" * 200, "citations": ["0x401010"]}]
+
+    def test_the_pack_agrees(self):
+        sections = self._sections()
+        expected = ctx_core.build_context_pack("q", "what_it_does", "a.exe",
+                                               sections, 300)
+        self.assertEqual(expected, bridge._core_build_context_pack(
+            "q", "what_it_does", "a.exe", sections, 300))
+        self.assertEqual(expected, bridge.build_context_pack(
+            "q", "what_it_does", "a.exe", sections, 300))
+
+    def test_the_first_section_is_never_dropped_only_truncated(self):
+        report = ctx_core.build_context_pack("q", "what_it_does", "a.exe",
+                                             self._sections(), 300)
+        titles = [item["title"] for item in report["result"]["sections"]]
+        self.assertEqual("function", titles[0])
+        reasons = [item["reason"] for item in report["result"]["omitted"]]
+        self.assertTrue(any(reason.startswith("truncated") for reason in reasons),
+                        report["result"]["omitted"])
+
+    def test_an_over_budget_section_is_dropped_whole_with_a_reason(self):
+        sections = [{"title": "function", "body": "x" * 100, "citations": []},
+                    {"title": "huge", "body": "y" * 8000, "citations": []}]
+        report = ctx_core.build_context_pack("q", "what_it_does", "a.exe",
+                                             sections, 400)
+        self.assertEqual(["function"],
+                         [item["title"] for item in report["result"]["sections"]])
+        self.assertEqual(["huge"],
+                         [item["section"] for item in report["result"]["omitted"]])
+
+    def test_the_budget_never_goes_below_the_floor(self):
+        report = ctx_core.build_context_pack("q", "overview", "a.exe", [], 1)
+        self.assertGreaterEqual(report["result"]["budget_tokens"], 200)
+
+    def test_citations_are_deduplicated_in_order(self):
+        sections = [{"title": "a", "body": "", "citations": ["0x1", "0x2"]},
+                    {"title": "b", "body": "", "citations": ["0x2", "0x3"]}]
+        report = ctx_core.build_context_pack("q", "overview", "a.exe",
+                                             sections, 4000)
+        self.assertEqual(["0x1", "0x2", "0x3"], report["result"]["citations"])
 
 
 if __name__ == "__main__":

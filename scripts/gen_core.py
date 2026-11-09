@@ -40,6 +40,7 @@ CORE_MODULES = (
     "ghydra/core/diff.py",
     "ghydra/core/fleet.py",
     "ghydra/core/capabilities.py",
+    "ghydra/core/contextpack.py",
 )
 
 #: Per module, the public name -> the private name the bridge uses.
@@ -88,6 +89,13 @@ CORE_RENAMES = {
         "_address": "_core_cap_address",
         "_evidence": "_core_cap_evidence",
         "build_capability_report": "_core_build_capability_report",
+    },
+    "ghydra/core/contextpack.py": {
+        "TEMPLATES": "_CORE_CONTEXT_TEMPLATES",
+        "_CHAR_PER_TOKEN": "_CORE_CONTEXT_CHAR_PER_TOKEN",
+        "classify_question": "_core_context_classify",
+        "estimate_tokens": "_core_context_tokens",
+        "build_context_pack": "_core_build_context_pack",
     },
     "ghydra/core/hints.py": {
         "HINT_PATTERNS": "_CORE_HINT_PATTERNS",

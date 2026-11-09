@@ -1,8 +1,12 @@
 """Local telemetry reader and summarizer (I14).
 
 The bridge records one JSON object per tool call under
-``~/.ghydra/telemetry.jsonl`` (or under ``GHYDRA_STATE_DIR``). Nothing is ever
-sent anywhere; this module only reads that file back. The bridge carries its
+``~/.ghydra/telemetry.jsonl`` (or under ``GHYDRA_STATE_DIR``): the tool name, a
+timestamp, whether the call failed, its error code, the duration and an estimate
+of the answer's size. Never the arguments, the results, a path, a symbol, an
+address or any binary content, and no identifier of any kind. Nothing is ever
+sent anywhere; this module only reads that file back. ``GHYDRA_TELEMETRY=0``
+stops the recording and deleting the file erases what was recorded. The bridge carries its
 own copy (it ships as one file and must not import the ghydra package);
 ``test_telemetry.py`` asserts the two summarizers agree.
 """

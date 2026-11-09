@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The context pack into the single core (I1, slice 7)**: the question
+  classifier, the token estimate and the budget composer moved whole —
+  `ghydra/core/contextpack.py` is the definition, `ghydra/contextpack.py` is a
+  re-export shim and the bridge delegates. The two decisions that matter are
+  now made once: the section the question is about is **truncated, never
+  dropped**, and every other section is dropped whole with its reason, so the
+  "omitted and why" list is the same on both surfaces.
+- **Telemetry now states what it records, in the text the user reads**: the
+  `telemetry_summary` docstring and the module docstring list the six fields
+  (tool name, timestamp, success, error code, duration, answer-size estimate),
+  say explicitly that arguments, results, paths, symbols, addresses and binary
+  content are never written, and give both controls (`GHYDRA_TELEMETRY=0`,
+  deleting the file). "Local only" is a claim; the fields are what can be
+  checked, so the fields are now in the text.
 - **The capability rules into the single core (I1, slice 6)**: the ATT&CK/MBC
   triage module was pure by construction — envelopes in, report out — so the
   whole thing moved: `ghydra/core/capabilities.py` now owns the ten rules, the

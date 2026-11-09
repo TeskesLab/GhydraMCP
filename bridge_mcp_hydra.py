@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.16.0"
+BRIDGE_VERSION = "v3.17.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1412,6 +1412,59 @@ def _core_build_capability_report(program, imports, strings, include_strings=Tru
         name = program['result'].get('name') or ''
     return {'success': True, 'result': {'program': name, 'summary': {'imports_scanned': len(import_items), 'strings_scanned': len(string_items), 'rules': len(_CORE_CAPABILITY_RULES), 'techniques_matched': len(findings)}, 'failures': failures, 'findings': findings, 'method': 'Heuristic import/string matching; a lead for an analyst, not a verdict.'}}
 # <<< end generated from ghydra/core/capabilities.py
+
+
+# >>> generated from ghydra/core/contextpack.py (52886803566460de) — edit the core, then run scripts/gen_core.py
+_CORE_CONTEXT_TEMPLATES = {'what_it_does': re.compile('o que (esse|esse|esta|essa|este|a função|the function|it) |what .*(does|do)|o que faz|descompil|decompil', re.IGNORECASE), 'data_origin': re.compile('de onde|quem (escreve|lê|le|leu|escreveu)|where .*(from|written|read)|who (writes|reads)|xref|referên|referen', re.IGNORECASE), 'what_changed': re.compile('o que mudou|what changed|mudou|diff|desde a última|since last', re.IGNORECASE)}
+
+_CORE_CONTEXT_CHAR_PER_TOKEN = 4
+
+def _core_context_classify(question):
+    """Map a free-form question to one of the three MVP templates."""
+    for template, pattern in _CORE_CONTEXT_TEMPLATES.items():
+        if pattern.search(question or ''):
+            return template
+    return 'overview'
+
+def _core_context_tokens(text):
+    return max(1, len(text) // _CORE_CONTEXT_CHAR_PER_TOKEN)
+
+def _core_build_context_pack(question, template, program, sections, budget_tokens=4000):
+    """Assemble the fetched sections into one budgeted dossier.
+
+    sections: ordered dicts {title, body, citations} in DESCENDING priority —
+    the first section is the answer the caller asked for and is never dropped,
+    only truncated. Everything after it is dropped whole, oldest first, until
+    the pack fits; each drop is recorded with its reason.
+    """
+    budget_tokens = max(200, int(budget_tokens))
+    included = []
+    omitted = []
+    citations = []
+    seen_citations = set()
+    used = 0
+    header = _core_context_tokens(f'Context pack: {question}')
+    for index, section in enumerate(sections):
+        title = str(section.get('title', 'section'))
+        body = str(section.get('body', ''))
+        section_citations = [str(c) for c in section.get('citations') or []]
+        if index == 0:
+            room = budget_tokens - header - used - _core_context_tokens(title)
+            if _core_context_tokens(body) > room > 0:
+                keep_chars = room * _CORE_CONTEXT_CHAR_PER_TOKEN
+                body = body[:keep_chars].rsplit('\n', 1)[0]
+                omitted.append({'section': title, 'reason': f'truncated to fit {budget_tokens} tokens'})
+        elif used + _core_context_tokens(title) + _core_context_tokens(body) + header > budget_tokens:
+            omitted.append({'section': title, 'reason': 'dropped: over the token budget'})
+            continue
+        used += _core_context_tokens(title) + _core_context_tokens(body)
+        included.append({'title': title, 'body': body, 'citations': section_citations})
+        for citation in section_citations:
+            if citation not in seen_citations:
+                seen_citations.add(citation)
+                citations.append(citation)
+    return {'success': True, 'result': {'question': question, 'template': template, 'program': program, 'sections': included, 'citations': citations, 'omitted': omitted, 'budget_tokens': budget_tokens, 'used_tokens': header + used, 'method': 'Composed from already-fetched endpoints; ranked by relevance to the question, truncated by budget. Every address is citable.'}}
+# <<< end generated from ghydra/core/contextpack.py
 
 
 def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
@@ -9213,90 +9266,31 @@ def analysis_capabilities_summary(include_strings: bool = True,
     return build_capability_report(program, imports, strings, include_strings)
 
 
-# Context pack (R3): a copy of ghydra/contextpack.py, the way the capability
-# rules are duplicated — the bridge is one standalone file and must not import
-# the ghydra package. test_context_pack.py asserts the copies agree.
-_CONTEXT_CHAR_PER_TOKEN = 4
+# Context pack (R3): generated from ghydra/core/contextpack.py (I1).
+_CONTEXT_CHAR_PER_TOKEN = _CORE_CONTEXT_CHAR_PER_TOKEN
 
-_CONTEXT_TEMPLATES = {
-    "what_it_does": re.compile(
-        r"o que (esse|esse|esta|essa|este|a função|the function|it) "
-        r"|what .*(does|do)|o que faz|descompil|decompil", re.IGNORECASE),
-    "data_origin": re.compile(
-        r"de onde|quem (escreve|lê|le|leu|escreveu)|where .*(from|written|read)"
-        r"|who (writes|reads)|xref|referên|referen", re.IGNORECASE),
-    "what_changed": re.compile(
-        r"o que mudou|what changed|mudou|diff|desde a última|since last",
-        re.IGNORECASE),
-}
+_CONTEXT_TEMPLATES = _CORE_CONTEXT_TEMPLATES
 
 
 def _ctx_classify_question(question: str) -> str:
-    for template, pattern in _CONTEXT_TEMPLATES.items():
-        if pattern.search(question or ""):
-            return template
-    return "overview"
+    """Delegates to the generated core (I1)."""
+    return _core_context_classify(question)
 
 
 def _ctx_tokens(text: str) -> int:
-    return max(1, len(text) // _CONTEXT_CHAR_PER_TOKEN)
+    """Delegates to the generated core (I1)."""
+    return _core_context_tokens(text)
 
 
 def build_context_pack(question: str, template: str, program: str,
                        sections: list, budget_tokens: int = 4000) -> dict:
-    """Assemble fetched sections into one budgeted dossier (R3)."""
-    budget_tokens = max(200, int(budget_tokens))
-    included = []
-    omitted = []
-    citations = []
-    seen_citations = set()
-    used = 0
+    """Assemble the fetched sections into one budgeted dossier (R3).
 
-    header = _ctx_tokens(f"Context pack: {question}")
-    for index, section in enumerate(sections):
-        title = str(section.get("title", "section"))
-        body = str(section.get("body", ""))
-        section_citations = [str(c) for c in section.get("citations") or []]
-
-        if index == 0:
-            # The section the question is about: truncate, never drop.
-            room = budget_tokens - header - used - _ctx_tokens(title)
-            if _ctx_tokens(body) > room > 0:
-                keep_chars = room * _CONTEXT_CHAR_PER_TOKEN
-                body = body[:keep_chars].rsplit("\n", 1)[0]
-                omitted.append({"section": title,
-                                "reason": f"truncated to fit {budget_tokens} "
-                                          f"tokens"})
-        elif used + _ctx_tokens(title) + _ctx_tokens(body) + header > budget_tokens:
-            omitted.append({"section": title,
-                            "reason": "dropped: over the token budget"})
-            continue
-
-        used += _ctx_tokens(title) + _ctx_tokens(body)
-        included.append({"title": title, "body": body,
-                         "citations": section_citations})
-        for citation in section_citations:
-            if citation not in seen_citations:
-                seen_citations.add(citation)
-                citations.append(citation)
-
-    return {
-        "success": True,
-        "result": {
-            "question": question,
-            "template": template,
-            "program": program,
-            "sections": included,
-            "citations": citations,
-            "omitted": omitted,
-            "budget_tokens": budget_tokens,
-            "used_tokens": header + used,
-            "method": "Composed from already-fetched endpoints; ranked by "
-                      "relevance to the question, truncated by budget. Every "
-                      "address is citable.",
-        },
-    }
-
+    Delegates to the generated core (I1): the same budget arithmetic decides
+    what the CLI and the bridge leave out, and why.
+    """
+    return _core_build_context_pack(question, template, program, sections,
+                                    budget_tokens)
 
 def _ctx_section(title: str, response, key: str = "result",
                  citations: tuple = ()) -> dict:
@@ -13087,7 +13081,12 @@ def telemetry_summary(days: int = 7) -> dict:
     """Summarize what this bridge has actually done, from the local log
 
     The log is local only (never sent anywhere): one JSON object per tool
-    call under ~/.ghydra/telemetry.jsonl, capped at about 1 MB. This tool
+    call under ~/.ghydra/telemetry.jsonl, capped at about 1 MB and trimmed
+    oldest first. A record holds the tool name, a timestamp, whether the call
+    failed, its error code, the duration and an estimate of the answer's size —
+    never the arguments, the results, a path, a symbol, an address or any
+    binary content, and no identifier of any kind. Set GHYDRA_TELEMETRY=0 to
+    stop recording; deleting the file erases what was recorded. This tool
     aggregates it — calls, failures, latency and estimated token volume per
     tool, the error codes seen — and names the composed tool when the log
     shows a pattern one of them replaces.
