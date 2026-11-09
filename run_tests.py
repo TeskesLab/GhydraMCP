@@ -813,11 +813,36 @@ def run_cache_tests():
         return False
 
 
+def run_fleet_tests():
+    """Run the fleet query (R7) tests."""
+    print_header("Running Fleet Query Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_fleet.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running fleet tests: {e}")
+        return False
+
+
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
     "--capability-summary", "--tasks", "--errors", "--context-pack", "--tool-groups", "--telemetry",
-    "--assertions", "--read-only", "--runbook", "--taint", "--mission", "--cache",
+    "--assertions", "--read-only", "--runbook", "--taint", "--mission", "--cache", "--fleet",
 )
 
 SUITES = {
@@ -850,6 +875,7 @@ SUITES = {
     "--taint": run_taint_tests,
     "--mission": run_mission_tests,
     "--cache": run_cache_tests,
+    "--fleet": run_fleet_tests,
 }
 
 USAGE = (

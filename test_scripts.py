@@ -178,7 +178,7 @@ class ScriptProtocolTests(unittest.TestCase):
         # fixture is always safe to repeat, so retry the transport failure
         # instead of letting a random test fail on the machine's timing.
         last = ""
-        for attempt in range(5):
+        for attempt in range(8):
             content = asyncio.run(bridge.mcp.call_tool(tool, {
                 "port": self.fixture.port, **arguments,
             }))
@@ -189,10 +189,10 @@ class ScriptProtocolTests(unittest.TestCase):
             )
             if "CONNECTION_ERROR" not in last:
                 return last
-            if attempt < 4:
-                # 0.05, 0.1, 0.2, 0.4: a closed window on this machine
-                # lasts longer than one immediate retry.
-                time.sleep(0.05 * (2 ** attempt))
+            if attempt < 7:
+                # 0.05 up to 0.8 s: a cold window on this machine outlasts
+                # one immediate retry, and a full suite leaves it cold.
+                time.sleep(min(0.8, 0.05 * (2 ** attempt)))
         return last
 
     def test_python_output_survives_mcp_text_formatting(self):
@@ -259,13 +259,13 @@ class ScriptCliTests(unittest.TestCase):
         # The CLI is a fresh process per attempt, so a connection that never
         # reached the fixture leaves nothing behind to repeat.
         result = None
-        for attempt in range(5):
+        for attempt in range(8):
             result = self.runner.invoke(
                 cli, [*options, "scripts", "run", *arguments], env=env)
             if "CONNECTION_ERROR" not in (result.output or ""):
                 return result
-            if attempt < 4:
-                time.sleep(0.05 * (2 ** attempt))
+            if attempt < 7:
+                time.sleep(min(0.8, 0.05 * (2 ** attempt)))
         return result
 
     def test_python_file_selects_runtime_and_prints_captured_output(self):

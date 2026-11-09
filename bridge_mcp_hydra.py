@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.7.0"
+BRIDGE_VERSION = "v3.8.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -3207,6 +3207,44 @@ def format_cache_stats(response: dict, **kwargs) -> str:
     ])
 
 
+def format_fleet_query(response: dict, **kwargs) -> str:
+    """The fleet answer: one row per binary, and what could not be asked."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    kind = result.get("kind")
+    target = result.get("target")
+    lines = ["Fleet: " + str(kind) + (f" {target}" if target else ""),
+             f"  binaries: {result.get('count', 0)}  "
+             f"with it: {result.get('with_it', 0)}  "
+             f"without it: {result.get('without_it', 0)}"]
+    for row in result.get("binaries") or []:
+        marker = "YES" if row.get("present") else ("no " if row.get("ok") else "???")
+        line = (f"  [{marker}] {row.get('name') or row.get('identity')}"
+                f"  ports {','.join(str(port) for port in row.get('ports') or [])}")
+        detail = row.get("detail") or {}
+        if detail.get("address"):
+            line += f"  at {detail['address']}"
+        if detail.get("count") is not None:
+            line += f"  refs {detail['count']}"
+        if detail.get("matched"):
+            line += f"  matched {', '.join(str(m) for m in detail['matched'][:2])}"
+        if row.get("complete") is False:
+            line += "  (listing truncated)"
+        lines.append(line)
+        if row.get("disagreements"):
+            lines.append(f"       the ports disagree: {row['disagreements']}")
+    for item in result.get("unreachable") or []:
+        lines.append(f"  [---] port {item.get('port')} did not answer "
+                     f"({item.get('reason')})")
+    if result.get("partial"):
+        lines.append(f"  note: the question could not be answered for "
+                     f"{len(result['partial'])} member(s)")
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -3341,6 +3379,7 @@ FORMATTERS = {
     "mission_start": format_mission_start,
     "cache_stats": format_cache_stats,
     "cache_clear": format_cache_stats,
+    "fleet_query": format_fleet_query,
 }
 
 
@@ -12300,6 +12339,227 @@ def cache_clear(port: int | None = None) -> dict:
                                   f"{'y' if removed == 1 else 'ies'}."}}
 
 
+# ================= Fleet queries (R7) =================
+# Duplicated from ghydra/fleet.py: the bridge is a standalone script and must
+# not import the ghydra package. test_fleet.py asserts the two sides agree.
+
+_FLEET_PAGE_LIMIT = 1000
+_FLEET_MAX_PAGES = 5
+_FLEET_KINDS = ("overview", "has_function", "has_import", "has_string", "xrefs_to")
+_FLEET_IDENTITY_FIELDS = ("programId", "path", "executablePath", "imageBase")
+
+
+def _fleet_result(envelope):
+    if isinstance(envelope, dict) and envelope.get("success", False):
+        return envelope.get("result")
+    return None
+
+
+def _fleet_identity_of(program) -> str:
+    if not isinstance(program, dict):
+        return ""
+    for key in _FLEET_IDENTITY_FIELDS:
+        value = program.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _fleet_collect_member(port: int) -> dict:
+    response = safe_get(port, "program")
+    program = _fleet_result(response)
+    identity = _fleet_identity_of(program)
+    if not identity:
+        error = (response.get("error") or {}) if isinstance(response, dict) else {}
+        code = error.get("code") if isinstance(error, dict) else None
+        return {"port": port, "reachable": False, "error": code or "FLEET_NO_PROGRAM"}
+    return {"port": port, "reachable": True, "identity": identity,
+            "program": program,
+            "name": program.get("name") if isinstance(program, dict) else None}
+
+
+def _fleet_paged_names(port: int, endpoint: str, keys) -> dict:
+    names = []
+    offset = 0
+    complete = True
+    for _page in range(_FLEET_MAX_PAGES):
+        response = safe_get(port, endpoint, {"offset": offset,
+                                            "limit": _FLEET_PAGE_LIMIT})
+        if not isinstance(response, dict) or not response.get("success", False):
+            return {"names": names, "complete": False, "error": True}
+        payload = response.get("result")
+        page = payload if isinstance(payload, list) else []
+        for item in page:
+            if not isinstance(item, dict):
+                continue
+            for key in keys:
+                value = item.get(key)
+                if isinstance(value, str) and value:
+                    names.append(value)
+                    break
+        meta = response.get("meta") or {}
+        total = meta.get("total") if isinstance(meta, dict) else None
+        if not page or len(page) < _FLEET_PAGE_LIMIT:
+            break
+        if isinstance(total, int) and len(names) >= total:
+            break
+        offset += len(page)
+    else:
+        complete = False
+    return {"names": names, "complete": complete, "error": False}
+
+
+def _fleet_ask(port: int, kind: str, target=None) -> dict:
+    if kind == "overview":
+        response = safe_get(port, "program")
+        program = _fleet_result(response)
+        if not isinstance(program, dict):
+            return {"ok": False, "error": "FLEET_NO_PROGRAM"}
+        return {"ok": True, "present": True,
+                "detail": {"name": program.get("name"),
+                           "path": program.get("executablePath") or program.get("path"),
+                           "language": program.get("language"),
+                           "statistics": program.get("statistics")}}
+    if kind == "has_function":
+        response = safe_get(port, f"functions/by-name/{quote(str(target))}")
+        payload = _fleet_result(response)
+        if isinstance(payload, dict) and payload.get("address"):
+            return {"ok": True, "present": True,
+                    "detail": {"address": str(payload["address"])}}
+        error = (response.get("error") or {}) if isinstance(response, dict) else {}
+        code = error.get("code") if isinstance(error, dict) else None
+        if code in ("FUNCTION_NOT_FOUND", "SYMBOL_NOT_FOUND", "NOT_FOUND"):
+            return {"ok": True, "present": False, "detail": {}}
+        return {"ok": False, "error": code or "FLEET_QUERY_FAILED"}
+    if kind == "has_import":
+        listing = _fleet_paged_names(port, "symbols/imports",
+                                    ("name", "label", "symbol"))
+        wanted = str(target or "").lower()
+        matched = [name for name in listing["names"] if wanted and wanted in name.lower()]
+        result = {"ok": not listing["error"], "present": bool(matched),
+                  "detail": {"matched": matched[:5]},
+                  "complete": listing["complete"]}
+        if listing["error"]:
+            result["error"] = "FLEET_QUERY_FAILED"
+        return result
+    if kind == "has_string":
+        listing = _fleet_paged_names(port, "strings", ("value", "name", "string"))
+        wanted = str(target or "")
+        matched = [value for value in listing["names"] if wanted and wanted in value]
+        result = {"ok": not listing["error"], "present": bool(matched),
+                  "detail": {"matched": matched[:5]},
+                  "complete": listing["complete"]}
+        if listing["error"]:
+            result["error"] = "FLEET_QUERY_FAILED"
+        return result
+    if kind == "xrefs_to":
+        response = safe_get(port, f"xrefs/to-name/{quote(str(target))}")
+        payload = _fleet_result(response)
+        items = payload if isinstance(payload, list) else []
+        meta = response.get("meta") or {} if isinstance(response, dict) else {}
+        total = meta.get("total") if isinstance(meta, dict) else None
+        count = total if isinstance(total, int) else len(items)
+        return {"ok": True, "present": bool(count), "detail": {"count": count}}
+    return {"ok": False, "error": f"FLEET_UNKNOWN_KIND: {kind}"}
+
+
+def _fleet_query(ports, kind: str, target=None) -> dict:
+    if kind not in _FLEET_KINDS:
+        return {"success": False,
+                "error": {"code": "FLEET_UNKNOWN_KIND",
+                          "message": "the kinds are: " + ", ".join(_FLEET_KINDS)}}
+
+    members = {}
+    unreachable = []
+    order = []
+    for port in sorted(int(p) for p in ports):
+        member = _fleet_collect_member(port)
+        if not member["reachable"]:
+            unreachable.append({"port": port, "reason": member.get("error")})
+            continue
+        identity = member["identity"]
+        answer = _fleet_ask(port, kind, target)
+        existing = members.get(identity)
+        if existing is None:
+            members[identity] = {"identity": identity, "name": member.get("name"),
+                                 "ports": [port], "program": member.get("program"),
+                                 "answer": answer}
+            order.append(identity)
+        else:
+            existing["ports"].append(port)
+            if existing["answer"].get("present") != answer.get("present"):
+                existing.setdefault("disagreements", []).append(
+                    {"port": port, "answer": answer})
+
+    rows = []
+    for identity in order:
+        member = members[identity]
+        answer = member["answer"]
+        row = {"identity": identity, "name": member.get("name"),
+               "ports": member["ports"], "present": bool(answer.get("present")),
+               "ok": bool(answer.get("ok")),
+               "detail": answer.get("detail") or {}}
+        if answer.get("complete") is False:
+            row["complete"] = False
+        if member.get("disagreements"):
+            row["disagreements"] = member["disagreements"]
+        rows.append(row)
+
+    partial = [row["identity"] for row in rows if not row["ok"]]
+    truncated = [row["identity"] for row in rows if row.get("complete") is False]
+    return {"success": True, "result": {
+        "kind": kind, "target": target, "binaries": rows, "count": len(rows),
+        "with_it": sum(1 for row in rows if row["present"]),
+        "without_it": sum(1 for row in rows if row["ok"] and not row["present"]),
+        "unreachable": unreachable, "partial": partial, "truncated": truncated,
+        "ok": not partial and not unreachable}}
+
+
+def _fleet_ports(text) -> list:
+    if isinstance(text, (list, tuple)):
+        return [int(value) for value in text]
+    ports = []
+    for piece in str(text or "").replace(";", ",").split(","):
+        piece = piece.strip()
+        if piece:
+            ports.append(int(piece))
+    return ports
+
+
+@mcp.tool()
+@text_output
+def fleet_query(kind: str, ports: str, target: str | None = None) -> dict:
+    """Ask one question of several instances and merge by file
+
+    A port that does not answer is reported, never dropped; two ports serving
+    the same program are one row (merged on the program's identity, not on the
+    port). An import/string absence is only claimed from a complete listing.
+
+    Args:
+        kind: overview | has_function | has_import | has_string | xrefs_to
+        ports: The instances to ask, comma-separated (e.g. "8192,8193")
+        target: The name, string or value the question is about (not used by
+            overview)
+
+    Returns:
+        dict: One row per binary, with its ports, the answer and what failed
+    """
+    try:
+        parsed = _fleet_ports(ports)
+    except (TypeError, ValueError) as exc:
+        return {"success": False,
+                "error": {"code": "FLEET_BAD_PORTS", "message": str(exc)}}
+    if not parsed:
+        return {"success": False,
+                "error": {"code": "FLEET_BAD_PORTS",
+                          "message": "give at least one port, e.g. \"8192,8193\""}}
+    if kind in ("has_function", "has_import", "has_string", "xrefs_to") and not target:
+        return {"success": False,
+                "error": {"code": "FLEET_MISSING_TARGET",
+                          "message": f"'{kind}' needs a target"}}
+    return _fleet_query(parsed, kind, target)
+
+
 _TOOL_GROUPS = {
     "core": {"programs", "project", "projects", "instances", "ui", "doctor",
              "evidence", "session", "tasks", "tools", "mission", "cache"},
@@ -12312,6 +12572,7 @@ _TOOL_GROUPS = {
     "kuna": {"kuna"},
     "x64dbg": {"x64dbg"},
     "runbook": {"runbook"},
+    "fleet": {"fleet"},
 }
 
 _META_NAMESPACE = "tools"

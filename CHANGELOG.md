@@ -7,7 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Decompile cache on disk (I11)**: decompilation is the expensive call in
+- **Fleet queries (R7)**: a question can now be asked of several instances at
+  once. `ghydra fleet overview|has-function|has-import|has-string|xrefs-to
+  --ports 8192,8193` and the bridge tool `fleet_query(kind, ports, target)`
+  merge the answers **by file identity** — the program's `programId`, falling
+  back to its path — so two ports serving the same binary are one row (with both
+  ports listed, and a disagreement between them reported), while two binaries
+  that merely share a name in different projects stay apart. A port that does
+  not answer is reported as `unreachable`, never dropped: "not present" must not
+  be confused with "not asked". An import/string absence is only claimed from a
+  listing read to its end (`complete: false` otherwise). `test_fleet.py` covers
+  the identity fallbacks, the merge, the disagreement, the unreachable member,
+  the truncated listing, the CLI and the bridge — and asserts both sides produce
+  the same report.- **Decompile cache on disk (I11)**: decompilation is the expensive call in
   this API, and a session that revisits a function paid for it again.
   `ghydra functions decompile --cache` (CLI) and
   `functions_decompile(use_cache=True)` (bridge) now serve an unchanged program

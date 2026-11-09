@@ -1452,3 +1452,25 @@ answer on stdout stays parseable.
 The server exposes no modification counter, which is why the cache is opt-in:
 a rename does not change the identity it can see. `ghydra cache clear` exists
 for that case.
+
+## Fleet queries (R7)
+
+```bash
+ghydra fleet overview --ports 8192,8193
+ghydra fleet has-function main --ports 8192,8193
+ghydra fleet has-import CreateFileW --ports 8192,8193
+ghydra fleet has-string /api/v1 --ports 8192,8193
+ghydra fleet xrefs-to strlen --ports 8192,8193
+```
+
+One question, several instances, merged **by file identity** (the program's
+`programId`, falling back to its path) — not by port. Two CodeBrowsers with the
+same binary open are one row with both ports listed; two binaries that only
+share a name in different projects stay separate rows.
+
+A port that does not answer is reported as `unreachable` instead of being
+dropped, because "not present" and "not asked" are different answers. An
+absence for an import or a string is only claimed when the listing was read to
+its end (`complete: false` marks the ones that were truncated).
+
+The same question exists on the bridge as `fleet_query(kind, ports, target)`.
