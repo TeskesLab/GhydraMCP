@@ -109,3 +109,72 @@ def ingest_cmd(ctx, max_functions, track_call_graph):
     click.echo(f"  took: {result.get('seconds', 0)}s")
     if result.get('reason'):
         click.echo(f"  note: {result['reason']}")
+
+
+@bsim.command('query')
+@click.option('--address', default=None, help='The function address to ask about')
+@click.option('--name', default=None, help='The function name to ask about')
+@click.option('--min-similarity', type=float, default=0.0,
+              help='Similarity floor 0..1 (0 = BSim default 0.7)')
+@click.option('--min-significance', type=float, default=0.0,
+              help='Significance floor (0 = no floor)')
+@click.option('--max-matches', type=int, default=0,
+              help='How many matches to return (0 = default 10)')
+@click.pass_context
+def query_cmd(ctx, address, name, min_similarity, min_significance, max_matches):
+    """Which stored functions look like this one (R1).
+
+    A match is a lead, not an identification: it carries BSim's similarity and
+    significance. The corpus is whatever was ingested into the configured
+    database.
+
+    \b
+    Example:
+        ghydra bsim query --name main --min-similarity 0.8
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+
+    if not address and not name:
+        click.echo("give one of --address or --name", err=True)
+        ctx.exit(2)
+    params = {}
+    if address:
+        params['address'] = address
+    if name:
+        params['name'] = name
+    if min_similarity:
+        params['min_similarity'] = min_similarity
+    if min_significance:
+        params['min_significance'] = min_significance
+    if max_matches:
+        params['max_matches'] = max_matches
+    try:
+        response = client.get('bsim/query', params=params)
+    except GhidraError as exc:
+        click.echo(formatter.format_error(exc), err=True)
+        ctx.exit(1)
+
+    result = response.get('result') if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        click.echo(str(response), err=True)
+        ctx.exit(1)
+
+    if ctx.obj.get('output_json'):
+        click.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    click.echo(f"BSim query: {result.get('function')} at {result.get('address')}")
+    click.echo(f"  database: {result.get('database')}")
+    click.echo(f"  threshold: similarity >= {result.get('min_similarity')}")
+    click.echo(f"  matches: {result.get('returned', 0)}"
+               f" (of {result.get('total_considered', 0)} considered)")
+    for match in result.get('matches') or []:
+        where = match.get('executable') or '?'
+        path = match.get('path')
+        click.echo(f"  {match.get('similarity')} similarity,"
+                   f" significance {match.get('significance')}:"
+                   f" {match.get('function')} @ {match.get('address')}"
+                   f" in {where}" + (f" ({path})" if path else ""))
+    if result.get('reason'):
+        click.echo(f"  {result['reason']}")

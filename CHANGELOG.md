@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **BSim query (R1, slice 3), validated against a live Ghidra 12.2**:
+  `GET /bsim/query`, `bsim_query` and `ghydra bsim query` ask the signature
+  database which stored functions look like one function of the open program,
+  and answer with BSim's own similarity and significance. Measured on the
+  database ingest created a round earlier: `where.exe`'s `FUN_140001010`
+  matched itself with **similarity 1.0 / significance 26.024 in 0.8 s** (0.2 s by
+  name), and an unknown name answered `BSIM_NO_FUNCTION` with the reason.
+  Reflective like the rest of BSim, and the shared half — opening a database,
+  creating it, finding the program's project location, cleaning up — moved into
+  `BSimDatabase` so ingest and query cannot drift. Three things only the live
+  run could tell: the executable name comes from `getNameExec()` (`getName()`
+  exists and answers null, which left every match without its binary), there is
+  no `getFunction(String)` in this series (the name lookup is a walk), and
+  `AddressFormatException` is checked — a malformed address is "not found", not
+  a failed request.
 - **BSim ingest (R1, slice 2), validated against a live Ghidra 12.2**:
   `POST /bsim/ingest`, `bsim_ingest` and `ghydra bsim ingest` generate signatures
   for the open program and insert them into the configured H2 database, creating

@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.21.0"
+BRIDGE_VERSION = "v3.22.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -4002,6 +4002,30 @@ def format_bsim_ingest(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_bsim_query(response: dict, **kwargs) -> str:
+    """Which stored functions look like this one, with BSim's numbers."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [f"BSim query: {result.get('function')} at {result.get('address')}",
+             f"  database: {result.get('database')}",
+             f"  threshold: similarity >= {result.get('min_similarity')}",
+             f"  matches: {result.get('returned', 0)}"
+             f" (of {result.get('total_considered', 0)} considered)"]
+    for match in result.get("matches") or []:
+        where = match.get("executable") or "?"
+        path = match.get("path")
+        lines.append(f"  {match.get('similarity')} similarity,"
+                     f" significance {match.get('significance')}:"
+                     f" {match.get('function')} @ {match.get('address')}"
+                     f" in {where}" + (f" ({path})" if path else ""))
+    if result.get("reason"):
+        lines.append(f"  {result['reason']}")
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -4139,6 +4163,7 @@ FORMATTERS = {
     "fleet_query": format_fleet_query,
     "bsim_status": format_bsim_status,
     "bsim_ingest": format_bsim_ingest,
+    "bsim_query": format_bsim_query,
 }
 
 
@@ -12987,6 +13012,50 @@ def bsim_ingest(max_functions: int = 0, track_call_graph: bool = False,
 
 
 
+
+
+
+@mcp.tool()
+@text_output
+def bsim_query(address: str = "", name: str = "", min_similarity: float = 0.0,
+               min_significance: float = 0.0, max_matches: int = 0,
+               port: int | None = None) -> dict:
+    """Which stored functions look like this one, according to BSim signatures
+
+    Asks the signature database which of its functions are similar to one
+    function of the open program, and returns BSim's own similarity and
+    significance for each match. Give exactly one of `address` or `name`.
+
+    A match is a **lead, not an identification**: similarity 1.0 means the bytes
+    of the two functions' vectors are the same, not that they are the same
+    source. The corpus is whatever was ingested into the configured database
+    (-Dghydra.bsim.database or GHYDRA_BSIM_DATABASE).
+
+    Args:
+        address: The function address to ask about
+        name: The function name to ask about (when no address is given)
+        min_similarity: Similarity floor, 0..1 (0 = BSim's default 0.7)
+        min_significance: Significance floor (0 = no floor)
+        max_matches: How many matches to return (0 = default 10, cap 200)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: the function asked about, the thresholds used, and the matches
+              with similarity, significance, function, address and executable
+    """
+    port = _get_instance_port(port)
+    params = {}
+    if address:
+        params["address"] = address
+    if name:
+        params["name"] = name
+    if min_similarity:
+        params["min_similarity"] = min_similarity
+    if min_significance:
+        params["min_significance"] = min_significance
+    if max_matches:
+        params["max_matches"] = int(max_matches)
+    return simplify_response(safe_get(port, "bsim/query", params=params or None))
 
 
 

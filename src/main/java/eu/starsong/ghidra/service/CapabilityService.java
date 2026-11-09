@@ -58,6 +58,9 @@ public final class CapabilityService {
         // is there *and* a database is named (it creates the file if missing).
         features.put("bsim_ingest", eu.starsong.ghidra.service.BSimService.available()
             && eu.starsong.ghidra.service.BSimService.database() != null);
+        // A query needs the engine, a named database and the file on disk.
+        features.put("bsim_query", eu.starsong.ghidra.service.BSimService.available()
+            && eu.starsong.ghidra.service.BSimService.databaseExists());
         features.put("read_only", eu.starsong.ghidra.middleware.ReadOnlyGuard.enabled());
         features.put("audit_log", eu.starsong.ghidra.middleware.AuditTrail.enabled());
         features.put("capabilities", true);

@@ -4,6 +4,7 @@ import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
 import eu.starsong.ghidra.server.Resource;
 import eu.starsong.ghidra.service.BSimIngestService;
+import eu.starsong.ghidra.service.BSimQueryService;
 import eu.starsong.ghidra.service.BSimService;
 import io.javalin.Javalin;
 
@@ -25,6 +26,7 @@ public class BSimResource implements Resource {
             Function<io.javalin.http.Context, GhidraContext> contextFactory) {
         app.get("/bsim/status", ctx -> status(contextFactory.apply(ctx)));
         app.post("/bsim/ingest", ctx -> ingest(contextFactory.apply(ctx)));
+        app.get("/bsim/query", ctx -> query(contextFactory.apply(ctx)));
     }
 
     /**
@@ -57,6 +59,57 @@ public class BSimResource implements Resource {
             .link("status", "/bsim/status")
             .link("capabilities", "/capabilities")
             .build());
+    }
+
+    /**
+     * Which stored functions look like one function of the open program.
+     *
+     * <p>A match carries BSim's similarity and significance numbers: it is a
+     * lead, not an identification, and the answer says so.
+     */
+    private void query(GhidraContext ctx) {
+        double minSimilarity = parseDouble(ctx, "min_similarity",
+            BSimQueryService.DEFAULT_SIMILARITY);
+        double minSignificance = parseDouble(ctx, "min_significance",
+            BSimQueryService.DEFAULT_SIGNIFICANCE);
+        int maxMatches = parseInt(ctx, "max_matches",
+            BSimQueryService.DEFAULT_MAX_MATCHES);
+        java.util.Map<String, Object> data = BSimQueryService.query(
+            ctx.program(), ctx.ctx().queryParam("address"),
+            ctx.ctx().queryParam("name"), maxMatches, minSimilarity,
+            minSignificance);
+        ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
+            .self("/bsim/query")
+            .link("status", "/bsim/status")
+            .link("ingest", "/bsim/ingest")
+            .build());
+    }
+
+    private static int parseInt(GhidraContext ctx, String name, int fallback) {
+        String raw = ctx.ctx().queryParam(name);
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(raw.trim());
+        } catch (NumberFormatException bad) {
+            throw new IllegalArgumentException(
+                name + " must be a number, got: " + raw);
+        }
+    }
+
+    private static double parseDouble(GhidraContext ctx, String name,
+            double fallback) {
+        String raw = ctx.ctx().queryParam(name);
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Double.parseDouble(raw.trim());
+        } catch (NumberFormatException bad) {
+            throw new IllegalArgumentException(
+                name + " must be a number, got: " + raw);
+        }
     }
 
     private void status(GhidraContext ctx) {

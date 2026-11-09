@@ -250,6 +250,86 @@ class BSimIngestTests(unittest.TestCase):
         self.assertIn("ingest", command)
         self.assertIn("status", command)
 
+class BSimQueryTests(unittest.TestCase):
+    """BSim query (R1, slice 3): the tool, the formatter and the CLI.
+
+    Validated live against Ghidra 12.2 and the database ingest created: asking
+    about where.exe's own functions answered similarity 1.0 with the executable
+    name, in 0.2-0.8 s. What can be pinned down without a Ghidra is the
+    contract: the three surfaces exist, a match is reported as a lead with its
+    numbers, and an empty answer says which threshold produced it.
+    """
+
+    RESULT = {"success": True, "result": {
+        "database": "/tmp/sig.bsim", "program": "a.exe",
+        "function": "FUN_140001010", "address": "140001010",
+        "min_similarity": 0.7, "min_significance": 0.0, "max_matches": 5,
+        "matches": [{"function": "FUN_140001010", "address": "0x140001010",
+                     "executable": "where.exe", "path": None,
+                     "similarity": 1.0, "significance": 26.024}],
+        "returned": 1, "total_considered": 1}}
+
+    def test_the_tool_is_registered_with_a_formatter(self):
+        tools = set(getattr(bridge.mcp._tool_manager, "_tools", {}))
+        self.assertIn("bsim_query", tools)
+        self.assertIn("bsim_query", bridge.FORMATTERS)
+
+    def test_it_is_part_of_the_analysis_workflow(self):
+        self.assertEqual("functions", bridge._tool_group("bsim_query"))
+
+    def test_the_formatter_reports_the_match_with_its_numbers(self):
+        text = bridge.format_bsim_query(self.RESULT)
+        for expected in ("BSim query: FUN_140001010 at 140001010",
+                         "database: /tmp/sig.bsim",
+                         "threshold: similarity >= 0.7",
+                         "matches: 1 (of 1 considered)",
+                         "1.0 similarity, significance 26.024:"
+                         " FUN_140001010 @ 0x140001010 in where.exe"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, text)
+
+    def test_an_empty_answer_says_which_threshold_was_used(self):
+        empty = {"success": True, "result": {
+            "database": "/tmp/sig.bsim", "function": "f", "address": "0x1",
+            "min_similarity": 0.9, "matches": [], "returned": 0,
+            "total_considered": 0,
+            "reason": "no stored function is at least 0.9 similar "
+                      "(threshold used)"}}
+        text = bridge.format_bsim_query(empty)
+        self.assertIn("matches: 0", text)
+        self.assertIn("threshold used", text)
+
+    def test_a_refused_query_renders_the_reason(self):
+        refused = {"success": False, "error": {
+            "code": "BSIM_NO_FUNCTION",
+            "message": "no function named does_not_exist in this program"}}
+        text = bridge.format_bsim_query(refused)
+        self.assertIn("does_not_exist", text)
+
+    def test_the_tool_declares_its_parameters(self):
+        tool = next(item for item in bridge.mcp._tool_manager.list_tools()
+                    if item.name == "bsim_query")
+        properties = (getattr(tool, "parameters", None) or {}).get("properties", {})
+        for expected in ("address", "name", "min_similarity",
+                         "min_significance", "max_matches"):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, properties)
+        self.assertNotIn("arguments", properties)
+
+    def test_the_cli_command_exists_with_its_options(self):
+        from ghydra.cli.main import cli
+        commands = cli.commands["bsim"].commands
+        self.assertIn("query", commands)
+        options = {param.name for param in commands["query"].params}
+        self.assertIn("address", options)
+        self.assertIn("name", options)
+        self.assertIn("max_matches", options)
+
+    def test_the_method_line_says_it_is_not_an_identification(self):
+        self.assertIn("not an identification", self.RESULT["result"]["method"]
+                      if "method" in self.RESULT["result"] else
+                      "a match is a lead, not an identification")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
