@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The cross-tool target workflow (Phase 3 of the unification plan)**: three
+  commands that make the static and the dynamic side work on one target —
+  `ghydra target describe` (`analyze_open`: both sides, one `TargetDescriptor`, and
+  the identity verdict), `ghydra target locate <name>` (`function_locate`: the
+  static address) and `ghydra target breakpoint <name>` (`breakpoint_set`: locate,
+  translate `runtime = static − image_base + module_base`, set it).
+  The refusal is the point: `breakpoint` exits with `TARGET_NOT_SAME_BINARY`
+  **before touching the debugger** when the descriptor says the two sides are not
+  the same file, and `tests/test_target.py` (`--target`, 12 tests, in CI) asserts
+  the fake debugger recorded no `SetBreakpoint` at all — a refusal that still writes
+  is not a refusal. The same suite caught a dishonesty in the codes while it was
+  being written: a connection failure reached the caller as `TARGET_NOT_FOUND`
+  ("try another name") when the truth was `TARGET_NO_PROGRAM` ("start the
+  instance"); the two are now split by the code the client carries.
+  `run_to` and `decompile` — the last two steps of the chain — need no new address
+  logic, and the gateway process itself stays where the plan puts it.
 - **Phase 2 of the unification plan: one client configuration for both servers**
   (`ghydra mcp-config`): one file in the shape MCP clients already read, with the
   Ghidra bridge over **stdio** and the x64dbg MCP server over **HTTP + bearer token**

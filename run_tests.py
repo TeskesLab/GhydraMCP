@@ -976,6 +976,31 @@ def run_mcp_config_tests():
         return False
 
 
+def run_target_tests():
+    """Run the cross-tool target workflow suite — fakes, no services."""
+    print_header("Running Target Workflow Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_target.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running target workflow tests: {e}")
+        return False
+
+
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
@@ -983,6 +1008,7 @@ NO_GHIDRA_SUITES = (
     "--assertions", "--read-only", "--runbook", "--taint", "--mission", "--cache", "--fleet", "--core", "--twin", "--examples",
     "--contract",
     "--mcp-config",
+    "--target",
 )
 
 SUITES = {
@@ -1021,6 +1047,7 @@ SUITES = {
     "--examples": run_examples_tests,
     "--contract": run_contract_tests,
     "--mcp-config": run_mcp_config_tests,
+    "--target": run_target_tests,
 }
 
 USAGE = (

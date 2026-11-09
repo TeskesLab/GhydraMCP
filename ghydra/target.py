@@ -202,6 +202,135 @@ class TargetDescriptor:
         return found
 
 
+#: Codes this workflow answers with. Stable, because a caller branches on them.
+ERROR_NO_PROGRAM = "TARGET_NO_PROGRAM"
+ERROR_NOT_LOADED = "TARGET_NOT_LOADED"
+ERROR_NOT_FOUND = "TARGET_NOT_FOUND"
+ERROR_NOT_SAME_BINARY = "TARGET_NOT_SAME_BINARY"
+ERROR_BAD_ADDRESS = "TARGET_BAD_ADDRESS"
+
+
+class TargetError(Exception):
+    """A failure of the cross-tool workflow, with its code."""
+
+    def __init__(self, message: str, code: str = "TARGET_ERROR") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+# --------------------------------------------------------------------- reading
+def _program(ghidra_client) -> Dict[str, Any]:
+    """The static side's program, from `GET /program`."""
+    try:
+        envelope = ghidra_client.get("program")
+    except Exception as exc:  # noqa: BLE001 - the reason is the message
+        raise TargetError(f"the Ghidra instance did not answer: {exc}",
+                          ERROR_NO_PROGRAM)
+    result = (envelope or {}).get("result")
+    if not isinstance(result, dict) or not result:
+        raise TargetError("the Ghidra instance reports no open program",
+                          ERROR_NO_PROGRAM)
+    return result
+
+
+def _modules(debugger_client) -> List[Dict[str, Any]]:
+    """The debugger's loaded modules, through its own `ListModules`."""
+    from . import x64dbg as debugger
+
+    text = debugger_client.call_tool("ListModules")
+    return debugger.parse_modules(text)
+
+
+def _function(ghidra_client, target: str) -> Dict[str, Any]:
+    """One function, by address (`0x…`) or by name."""
+    from urllib.parse import quote
+
+    text = str(target or "").strip()
+    if not text:
+        raise TargetError("no function was named", ERROR_NOT_FOUND)
+    address = _as_int(text)
+    endpoint = (f"functions/{text}" if address is not None
+                else f"functions/by-name/{quote(text, safe='')}")
+    try:
+        envelope = ghidra_client.get(endpoint)
+    except Exception as exc:  # noqa: BLE001
+        # The client raises on a non-2xx, so the code it carries is the honest
+        # answer: a function that is not there is NOT_FOUND, an instance that
+        # does not answer is NO_PROGRAM. They call for different actions.
+        code = str(getattr(exc, "code", "") or "")
+        if "NOT_FOUND" in code:
+            raise TargetError(f"no function matches {target!r}", ERROR_NOT_FOUND)
+        raise TargetError(f"the Ghidra instance did not answer: {exc}",
+                          ERROR_NO_PROGRAM)
+    result = (envelope or {}).get("result")
+    if not isinstance(result, dict) or not result:
+        raise TargetError(f"no function matches {target!r}", ERROR_NOT_FOUND)
+    if not result.get("address"):
+        raise TargetError(f"the function {target!r} has no address",
+                          ERROR_BAD_ADDRESS)
+    return result
+
+
+# ------------------------------------------------------------------ the workflow
+def describe(ghidra_client, debugger_client) -> TargetDescriptor:
+    """`analyze_open`: both sides, one descriptor, with the identity verdict."""
+    from . import x64dbg as debugger
+
+    program = _program(ghidra_client)
+    modules = _modules(debugger_client)
+    module = debugger.find_module(modules, program.get("path") or "")
+    if module is None:
+        raise TargetError(
+            "no loaded module matches the binary Ghidra has open "
+            f"({program.get('path') or 'unknown'})", ERROR_NOT_LOADED)
+    return TargetDescriptor.from_program_and_module(program, module)
+
+
+def locate(ghidra_client, target: str) -> Dict[str, Any]:
+    """`function_locate`: the static address of a function, by name or address."""
+    function = _function(ghidra_client, target)
+    address = _as_int(function.get("address"))
+    if address is None:
+        raise TargetError(f"{target!r} resolved to an address that cannot be read",
+                          ERROR_BAD_ADDRESS)
+    return {
+        "name": function.get("name"),
+        "signature": function.get("signature"),
+        "static_address": hex(address),
+        "matched_by": ("address" if _as_int(target) is not None else "name"),
+        # The API's function detail carries no size; saying so is better than a
+        # number nobody measured.
+        "size": None,
+    }
+
+
+def breakpoint(ghidra_client, debugger_client, target: str) -> Dict[str, Any]:
+    """`breakpoint_set`: locate statically, translate, set it in the debugger.
+
+    Refuses with `TARGET_NOT_SAME_BINARY` — **before** touching the debugger —
+    when the two sides are not the same file: a breakpoint at a translated address
+    of another build is a breakpoint in the wrong place.
+    """
+    descriptor = describe(ghidra_client, debugger_client)
+    identity = descriptor.identity()
+    if not descriptor.correlatable():
+        raise TargetError(
+            "the two sides are not the same target: " + str(identity["reason"]),
+            ERROR_NOT_SAME_BINARY)
+
+    found = locate(ghidra_client, target)
+    static_address = _as_int(found["static_address"])
+    runtime = descriptor.to_runtime(static_address)
+    debugger_client.call_tool("SetBreakpoint", {"target": hex(runtime)})
+    return {
+        "function": found["name"],
+        "static_address": hex(static_address),
+        "runtime_address": hex(runtime),
+        "delta": hex(descriptor.delta()) if descriptor.delta() is not None else None,
+        "identity": identity,
+    }
+
+
 def _as_int(value: Any) -> Optional[int]:
     """An integer out of a number or a `0x` string."""
     if value is None or isinstance(value, bool):

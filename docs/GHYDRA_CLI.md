@@ -10,6 +10,7 @@ A command-line interface for GhydraMCP that provides access to Ghidra's reverse 
 - [Quick Start](#quick-start)
 - [Global Options](#global-options)
 - [Agent / programmatic use](#agent-programmatic-use)
+- [The cross-tool target workflow](#the-cross-tool-target-workflow)
 - [The combined MCP client configuration](#the-combined-mcp-client-configuration)
 - [Configuration](#configuration)
 - [Implemented Command Groups](#implemented-command-groups)
@@ -126,6 +127,30 @@ For scripts and AI agents, prefer one of these so output is parse-clean:
 - `--no-color` (or `NO_COLOR=1`) forces plain output even in a terminal, if you want tables without ANSI styling.
 
 Earlier versions forced ANSI color codes on regardless of the output target, which corrupted hex-address parsing when an agent captured the output; that is fixed.
+
+## The cross-tool target workflow
+
+The three commands that make the static and the dynamic side work on **one**
+target. They print JSON on stdout, unwrapped, because a script or an agent drives
+them.
+
+```bash
+ghydra target describe            # both sides, one TargetDescriptor, identity verdict
+ghydra target locate main         # the static address Ghidra knows
+ghydra target breakpoint main     # locate, translate, set it in the debugger
+```
+
+`describe` is the `analyze_open` step: it pairs the Ghidra program with the loaded
+module and reports `correlatable`. `breakpoint` is where the two address spaces meet:
+it locates the function statically, translates
+`runtime = static − image_base + module_base`, and sets the breakpoint — **unless the
+two sides are not the same file**, in which case it exits with
+`TARGET_NOT_SAME_BINARY` and does not touch the debugger.
+
+The codes are the contract: `TARGET_NO_PROGRAM` (an instance did not answer — start
+it), `TARGET_NOT_FOUND` (no such function — try another name), `TARGET_NOT_LOADED`
+(the debugger does not have the binary open), `TARGET_NOT_SAME_BINARY` (a copy or a
+rebuild — the addresses of one do not describe the other).
 
 ## The combined MCP client configuration
 

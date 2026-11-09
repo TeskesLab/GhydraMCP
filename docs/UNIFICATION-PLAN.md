@@ -333,3 +333,28 @@ the command wrote its output unwrapped.
 Phase 2 still depends on the x64dbg side for its *vocabulary*: the configuration
 registers that server separately, which is what makes the names tolerable until its
 tools carry the `x64dbg_` prefix.
+
+### Phase 3 — the gateway: started (2026-11-09)
+
+The chain the plan asks for is `analyze_open → function_locate → breakpoint_set →
+run_to → decompile`. Three of the five exist now as **CLI commands over one
+descriptor**, which is the part that needs the address model:
+
+| Step | Command | What it does |
+| --- | --- | --- |
+| `analyze_open` | `ghydra target describe` | both sides → one `TargetDescriptor` + identity verdict |
+| `function_locate` | `ghydra target locate <name>` | the static address Ghidra knows |
+| `breakpoint_set` | `ghydra target breakpoint <name>` | locate → translate → set, or refuse |
+
+`run_to` and `decompile` are the remaining two; neither needs new address logic
+(`decompile` already exists as `ghydra functions decompile`, and `run_to` is one
+x64dbg tool call with a timeout).
+
+The refusal is what the tests pin: `tests/test_target.py` (`--target`) asserts that a
+descriptor built from two **different** files raises `TARGET_NOT_SAME_BINARY` and
+that the fake debugger recorded **no `SetBreakpoint` call at all** — a refusal that
+still writes to the debugger is not a refusal.
+
+What is still missing for a real gateway is the process: a single MCP server that
+fronts both, which the plan puts in a third repository. The commands are the same
+workflow without that server, and they are what an agent would call through it.

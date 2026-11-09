@@ -1258,7 +1258,7 @@ The links let a client discover related resources without hardcoding URLs.
 
 # Testing
 
-There are **26 suites**. Most need a running Ghidra; the contract suites do not, and they are
+There are **27 suites**. Most need a running Ghidra; the contract suites do not, and they are
 what CI runs on every push. See [TESTING.md](docs/TESTING.md) for what each one proves.
 
 ```bash
@@ -1270,7 +1270,7 @@ A suite that needs Ghidra **skips** itself when there is none, so a green run ag
 means nothing — confirm the tests actually executed before trusting it. The contract suites are the
 exceptions and always give a signal: `--kuna`, `--x64dbg` (a fake plugin that answers like the real
 one), `--surface`, `--capabilities`, `--scripts`, `--compatibility`, `--runner`, `--docs`,
-`--core` (the single-core generator), `--twin`, `--examples`, `--contract`, `--mcp-config`, and the composed-answer suites.
+`--core` (the single-core generator), `--twin`, `--examples`, `--contract`, `--mcp-config`, `--target`, and the composed-answer suites.
 
 ## HTTP API Tests
 

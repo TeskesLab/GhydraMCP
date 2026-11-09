@@ -12,8 +12,8 @@
     "success_field": "success"
   },
   "counts": {
-    "codes": 112,
-    "families": 36
+    "codes": 117,
+    "families": 37
   },
   "codes": [
     {
@@ -673,6 +673,41 @@
       "http_status": null,
       "message": null,
       "origin": "`ghydra/taint.py:46`"
+    },
+    {
+      "code": "TARGET_BAD_ADDRESS",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:210`"
+    },
+    {
+      "code": "TARGET_NOT_FOUND",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:208`"
+    },
+    {
+      "code": "TARGET_NOT_LOADED",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:207`"
+    },
+    {
+      "code": "TARGET_NOT_SAME_BINARY",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:209`"
+    },
+    {
+      "code": "TARGET_NO_PROGRAM",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:206`"
     },
     {
       "code": "TASK_NOT_FOUND",

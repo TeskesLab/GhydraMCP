@@ -163,6 +163,7 @@ from .fleet_cmd import fleet as fleet_group
 from .bsim_cmd import bsim as bsim_group
 from .twin_cmd import twin as twin_group
 from .mcp_config import mcp_config as mcp_config_command
+from .target_cmd import target_group
 
 cli.add_command(instances.instances)
 cli.add_command(functions.functions)
@@ -201,6 +202,7 @@ cli.add_command(fleet_group)
 cli.add_command(bsim_group)
 cli.add_command(twin_group)
 cli.add_command(mcp_config_command)
+cli.add_command(target_group)
 cli.add_command(inspect_address.inspect_address)
 
 

@@ -36,7 +36,7 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 
 ## Every command
 
-`150` commands in `39` groups.
+`153` commands in `40` groups.
 
 | Command | What it does |
 | --- | --- |
@@ -170,6 +170,9 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 | `ghydra symbols exports` | List exported symbols. |
 | `ghydra symbols imports` | List imported symbols. |
 | `ghydra symbols list` | List all symbols in the program. |
+| `ghydra target breakpoint` | Set a breakpoint in the debugger on a function Ghidra knows. |
+| `ghydra target describe` | Show the target as both sides see it, and whether they may be correlated. |
+| `ghydra target locate` | Find a function's static address by name or by address. |
 | `ghydra twin build` | Take a snapshot of the instance's program. |
 | `ghydra twin diff` | What changed between two snapshots, with the shared comparison. |
 | `ghydra twin query` | Answer a question from a snapshot, with no Ghidra running. |
