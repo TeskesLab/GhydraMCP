@@ -262,6 +262,17 @@ class TargetDescriptorTests(unittest.TestCase):
         self.assertTrue(descriptor.same_binary())
         self.assertTrue(descriptor.correlatable())
 
+    def test_a_posix_path_stays_case_sensitive(self):
+        """The rule is about the path: two different files on Linux stay different."""
+        descriptor = TargetDescriptor(
+            binary="/opt/bin/sample", module_path="/opt/bin/Sample")
+        self.assertFalse(descriptor.same_binary())
+
+    def test_a_unc_path_keeps_its_prefix(self):
+        from ghydra.target import normalize_path
+        self.assertEqual("//server/share/sample.exe",
+                         normalize_path("\\\\server\\share\\sample.exe"))
+
     def test_a_static_only_descriptor_refuses_to_translate(self):
         descriptor = TargetDescriptor.from_program_and_module(
             dict(self.PROGRAM), {})

@@ -20,6 +20,7 @@ GhydraMCP-side implementation of it.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -32,17 +33,31 @@ SCHEMA_NAME = "target-descriptor.schema.json"
 DELTA_KEY = "delta"
 
 
-def normalize_path(path: Any) -> str:
-    """A path in the form two sides can compare.
+#: A drive-letter prefix, the mark of a Windows path.
+_DRIVE = re.compile(r"^[A-Za-z]:")
 
-    Windows compares case-insensitively and tolerates both separators, and the two
-    sides here (a JVM plugin and a native debugger) can disagree about drive-letter
-    case and about `/` versus `\\` for the same file.
+
+def normalize_path(path: Any) -> str:
+    """A path in the form two sides can compare, whatever machine compares it.
+
+    The rule is about the path, not about the host: `os.path.normcase` lower-cases
+    on Windows and does nothing elsewhere, which made the same pair of paths compare
+    equal here and different on the Linux CI. A **Windows** path compares
+    case-insensitively (the file system does), a POSIX path does not, both separators
+    mean the same thing, and a UNC path keeps its `//`.
     """
     text = str(path or "").strip()
     if not text:
         return ""
-    return os.path.normcase(os.path.normpath(text.replace("/", os.sep)))
+    windows = bool(_DRIVE.match(text)) or "\\" in text
+    text = text.replace("\\", "/")
+    prefix = "//" if text.startswith("//") else ""
+    body = text[2:] if prefix else text
+    body = re.sub(r"/+", "/", body)
+    if len(body) > 1:
+        body = body.rstrip("/")
+    normalized = prefix + body
+    return normalized.lower() if windows else normalized
 
 
 def path_name(path: Any) -> str:
