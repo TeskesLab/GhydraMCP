@@ -255,6 +255,17 @@ def retry_on_lost_answer(action, attempts=3):
     return result
 
 
+def tool_result(name, **kwargs):
+    """Call a bridge x64dbg tool, retrying when the transport ate the answer.
+
+    The fake plugin is stateless, so a repeat costs nothing and cannot change an
+    answer. This is the test's rule, not the product's: `_x64dbg_request` never
+    repeats a mutating tool, and `X64dbgRetryTests` is what proves it.
+    """
+    function = getattr(bridge, name).__wrapped__
+    return retry_on_lost_answer(lambda: function(**kwargs))
+
+
 class X64dbgClientTests(unittest.TestCase):
     """The client against a server that answers like the plugin."""
 
@@ -655,14 +666,14 @@ class X64dbgBridgeTests(unittest.TestCase):
         self.assertEqual(len(result["result"]["modules"]), 2)
 
     def test_the_catalogue_is_listed(self):
-        result = bridge.x64dbg_tools.__wrapped__()
+        result = tool_result("x64dbg_tools", )
         self.assertTrue(result["success"], result)
         self.assertEqual(result["result"]["count"], len(CATALOGUE))
         names = [tool["name"] for tool in result["result"]["tools"]]
         self.assertIn("SetBreakpoint", names)
 
     def test_a_tool_is_called_by_name(self):
-        result = bridge.x64dbg_call.__wrapped__(tool="ListModules")
+        result = tool_result("x64dbg_call", tool="ListModules")
         self.assertTrue(result["success"], result)
         self.assertIn("0x7FF7A1230000", result["result"]["text"])
 
@@ -676,7 +687,7 @@ class X64dbgBridgeTests(unittest.TestCase):
         with mock.patch.object(bridge, "_x64dbg_settings", return_value={
                 "host": "127.0.0.1", "port": self.fake.port,
                 "token": "", "path": ""}):
-            result = bridge.x64dbg_status.__wrapped__()
+            result = tool_result("x64dbg_status", )
         self.assertFalse(result["success"])
         self.assertEqual(result["error"]["code"], "X64DBG_DISABLED")
 
@@ -753,13 +764,13 @@ class X64dbgBridgeTests(unittest.TestCase):
                          "the schema asks for an object, and a client flattens it")
 
     def test_an_object_is_accepted_when_the_call_is_made_directly(self):
-        result = retry_on_lost_answer(lambda: bridge.x64dbg_call.__wrapped__(
+        result = retry_on_lost_answer(lambda: tool_result("x64dbg_call", 
             tool="SetBreakpoint", tool_arguments={"target": "0x7FF7A1234000"}))
         self.assertTrue(result["success"], result)
         self.assertIn(("SetBreakpoint", {"target": "0x7FF7A1234000"}), self.fake.calls)
 
     def test_arguments_that_are_not_json_are_refused(self):
-        result = bridge.x64dbg_call.__wrapped__(
+        result = tool_result("x64dbg_call", 
             tool="SetBreakpoint", tool_arguments="not json at all")
         self.assertFalse(result["success"], result)
         self.assertEqual(result["error"]["code"], "X64DBG_BAD_ARGS")
@@ -823,7 +834,7 @@ class X64dbgBridgeTests(unittest.TestCase):
         }
         with mock.patch.object(bridge, "safe_get", return_value=program):
             with mock.patch.object(bridge, "_get_instance_port", return_value=8192):
-                result = bridge.x64dbg_target.__wrapped__()
+                result = tool_result("x64dbg_target", )
 
         self.assertTrue(result["success"], result)
         self.assertEqual(result["result"]["image_base"], 0x140000000)
@@ -838,7 +849,7 @@ class X64dbgBridgeTests(unittest.TestCase):
         }
         with mock.patch.object(bridge, "safe_get", return_value=program):
             with mock.patch.object(bridge, "_get_instance_port", return_value=8192):
-                result = bridge.x64dbg_target.__wrapped__()
+                result = tool_result("x64dbg_target", )
 
         self.assertTrue(result["success"], result)
         self.assertNotIn("test-token", json.dumps(result))
@@ -850,13 +861,13 @@ class X64dbgBridgeTests(unittest.TestCase):
         }
         with mock.patch.object(bridge, "safe_get", return_value=program):
             with mock.patch.object(bridge, "_get_instance_port", return_value=8192):
-                result = bridge.x64dbg_target.__wrapped__()
+                result = tool_result("x64dbg_target", )
 
         self.assertFalse(result["success"])
         self.assertEqual(result["error"]["code"], "X64DBG_NO_MATCH")
 
     def test_an_address_that_is_not_one_is_refused(self):
-        result = bridge.x64dbg_breakpoint_at.__wrapped__(address="not an address")
+        result = tool_result("x64dbg_breakpoint_at", address="not an address")
         self.assertFalse(result["success"])
         self.assertEqual(result["error"]["code"], "X64DBG_BAD_ARGS")
 

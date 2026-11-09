@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The x64dbg suite stops failing on a dropped loopback connection**: measured
+  in full local runs, a bridge-level x64dbg test failed every now and then —
+  twice in a row, on two different tests — with a transport reset underneath.
+  The fake plugin is stateless, so the *test* may repeat a call even where the
+  product must not: one helper (`tool_result`) sends the nine bridge-tool call
+  sites in `X64dbgBridgeTests` through the retry the suite already had, and the
+  tests that prove the product *does not* repeat a mutating tool are untouched
+  (`X64dbgRetryTests`). Three consecutive runs of the suite pass, one of them
+  taking 126 s because the retries were doing the work.
 - **BSim apply-names (R1, slice 4a), validated against a live Ghidra 12.2**:
   `POST /bsim/apply-names`, `bsim_apply_names` and `ghydra bsim apply-names` name
   a function after the stored function it most resembles. **The default is a dry
