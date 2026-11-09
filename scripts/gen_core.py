@@ -39,6 +39,7 @@ CORE_MODULES = (
     "ghydra/core/cache.py",
     "ghydra/core/diff.py",
     "ghydra/core/fleet.py",
+    "ghydra/core/capabilities.py",
 )
 
 #: Per module, the public name -> the private name the bridge uses.
@@ -76,6 +77,17 @@ CORE_RENAMES = {
         "IDENTITY_FIELDS": "_CORE_FLEET_IDENTITY_FIELDS",
         "program_identity_of": "_core_fleet_identity_of",
         "merge_answers": "_core_fleet_merge",
+    },
+    "ghydra/core/capabilities.py": {
+        "CAPABILITY_RULES": "_CORE_CAPABILITY_RULES",
+        "_IMPORT_KEYS": "_CORE_CAP_IMPORT_KEYS",
+        "_STRING_KEYS": "_CORE_CAP_STRING_KEYS",
+        "_ADDRESS_KEYS": "_CORE_CAP_ADDRESS_KEYS",
+        "_items": "_core_cap_items",
+        "_text": "_core_cap_text",
+        "_address": "_core_cap_address",
+        "_evidence": "_core_cap_evidence",
+        "build_capability_report": "_core_build_capability_report",
     },
     "ghydra/core/hints.py": {
         "HINT_PATTERNS": "_CORE_HINT_PATTERNS",

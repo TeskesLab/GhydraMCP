@@ -23,7 +23,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra.core import digest as core  # noqa: E402
+from ghydra import capabilities  # noqa: E402
 from ghydra.core import cache as cache_core  # noqa: E402
+from ghydra.core import capabilities as cap_core  # noqa: E402
 from ghydra.core import diff as diff_core  # noqa: E402
 from ghydra.core import fleet as fleet_core  # noqa: E402
 from ghydra.core import hints as hints_core  # noqa: E402
@@ -353,18 +355,41 @@ class CacheDelegationTests(unittest.TestCase):
         self.assertIs(bridge._CACHE_IDENTITY_FIELDS, bridge._CORE_CACHE_IDENTITY_FIELDS)
         self.assertIs(bridge._CACHE_STATISTIC_FIELDS, bridge._CORE_CACHE_STATISTIC_FIELDS)
 
-    def test_no_core_function_is_defined_twice_in_the_bridge(self):
+    def test_every_core_name_in_the_bridge_is_generated_or_delegated(self):
         """The point of the mechanism: one definition, not a second copy.
 
-        Every public name of every core module must exist in the bridge only as
-        the generated `_core_*` version — a bare `def <name>(` would be the
-        duplication coming back.
+        A public name of a core module may appear in the bridge only as the
+        generated ``_core_*`` copy. A *wrapper* with the public name is allowed
+        only when its whole body delegates — a constant assigned from the core,
+        or a function that calls the ``_core_*`` name. A real implementation
+        would be the duplication coming back.
         """
-        text = _bridge_text()
+        import ast as _ast
+        tree = _ast.parse(_bridge_text())
+        top = {}
+        for node in tree.body:
+            if isinstance(node, (_ast.FunctionDef, _ast.ClassDef)):
+                top.setdefault(node.name, []).append(node)
+            elif isinstance(node, _ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, _ast.Name):
+                        top.setdefault(target.id, []).append(node)
+
+        def delegates(node) -> bool:
+            if isinstance(node, _ast.Assign):
+                value = node.value
+                return (isinstance(value, _ast.Name)
+                        and (value.id.startswith("_CORE_") or value.id.startswith("_core_")))
+            return any(isinstance(item, _ast.Name)
+                       and (item.id.startswith("_core_") or item.id.startswith("_CORE_"))
+                       for item in _ast.walk(node))
+
         for module in gen_core.CORE_MODULES:
             for public in gen_core.CORE_RENAMES.get(module, {}):
-                with self.subTest(module=module, name=public):
-                    self.assertNotIn(f"def {public}(", text)
+                for node in top.get(public, []):
+                    with self.subTest(module=module, name=public):
+                        self.assertTrue(delegates(node),
+                                        f"{public} has a body of its own in the bridge")
 
 
 class GeneratorGuardTests(unittest.TestCase):
@@ -550,6 +575,77 @@ class FleetCoreTests(unittest.TestCase):
         self.assertIs(bridge._FLEET_KINDS, bridge._CORE_FLEET_KINDS)
         self.assertIs(bridge._FLEET_IDENTITY_FIELDS,
                       bridge._CORE_FLEET_IDENTITY_FIELDS)
+
+class CapabilitiesCoreTests(unittest.TestCase):
+    """The ATT&CK rules and the composer live once, in the core."""
+
+    IMPORTS = {"success": True, "result": [
+        {"name": "VirtualAllocEx", "address": "0x140001000"},
+        {"name": "WriteProcessMemory", "address": "0x140001010"},
+        {"name": "CreateRemoteThread", "address": "0x140001020"},
+    ]}
+    STRINGS = {"success": True, "result": [
+        {"value": "SeDebugPrivilege", "address": "0x140002000"},
+    ]}
+
+    def _report(self):
+        program = {"success": True, "result": {"name": "sample.exe"}}
+        return {"program": program, "imports": self.IMPORTS,
+                "strings": self.STRINGS}
+
+    def test_the_rules_agree_and_are_the_shim_s(self):
+        self.assertEqual(cap_core.CAPABILITY_RULES, bridge._CORE_CAPABILITY_RULES)
+        self.assertIs(bridge.CAPABILITY_RULES, bridge._CORE_CAPABILITY_RULES)
+        self.assertIs(capabilities.build_capability_report,
+                      cap_core.build_capability_report)
+        self.assertEqual(capabilities.CAPABILITY_RULES, cap_core.CAPABILITY_RULES)
+
+    def test_the_report_agrees(self):
+        payload = self._report()
+        expected = cap_core.build_capability_report(
+            payload["program"], payload["imports"], payload["strings"])
+        self.assertEqual(expected, bridge._core_build_capability_report(
+            payload["program"], payload["imports"], payload["strings"]))
+        self.assertEqual(expected, bridge.build_capability_report(
+            payload["program"], payload["imports"], payload["strings"]))
+
+    def test_the_report_carries_evidence_addresses(self):
+        payload = self._report()
+        report = cap_core.build_capability_report(
+            payload["program"], payload["imports"], payload["strings"])
+        self.assertTrue(report["result"]["findings"], report)
+        addresses = [item["address"]
+                     for finding in report["result"]["findings"]
+                     for item in finding["evidence"]]
+        self.assertIn("0x140001000", addresses)
+
+    def test_a_rule_with_no_evidence_produces_no_finding(self):
+        report = cap_core.build_capability_report(
+            {"success": True, "result": {"name": "x"}},
+            {"success": True, "result": []},
+            {"success": True, "result": []})
+        self.assertEqual([], report["result"]["findings"])
+        self.assertEqual(0, report["result"]["summary"]["techniques_matched"])
+
+    def test_a_failed_listing_is_reported_not_hidden(self):
+        report = cap_core.build_capability_report(
+            {"success": True, "result": {"name": "x"}},
+            {"success": False, "error": {"code": "TIMEOUT"}},
+            {"success": True, "result": []})
+        self.assertIn("imports", report["result"]["failures"])
+
+    def test_strings_can_be_skipped(self):
+        payload = self._report()
+        report = cap_core.build_capability_report(
+            payload["program"], payload["imports"], payload["strings"],
+            include_strings=False)
+        self.assertEqual(0, report["result"]["summary"]["strings_scanned"])
+
+    def test_every_rule_declares_its_parts(self):
+        for rule in cap_core.CAPABILITY_RULES:
+            with self.subTest(rule=rule.get("id")):
+                for key in ("id", "name", "tactic", "imports", "strings"):
+                    self.assertIn(key, rule)
 
 
 if __name__ == "__main__":

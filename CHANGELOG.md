@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The capability rules into the single core (I1, slice 6)**: the ATT&CK/MBC
+  triage module was pure by construction — envelopes in, report out — so the
+  whole thing moved: `ghydra/core/capabilities.py` now owns the ten rules, the
+  evidence helpers and the composer, `ghydra/capabilities.py` is a re-export
+  shim (every existing import still works) and the bridge delegates to the
+  generated copy. The step also showed the guard doing its job twice: a helper
+  the generated region no longer owned was left referenced
+  (`name '_cap_items' is not defined`), which the capability suite caught at
+  once, and the "no second copy" invariant had to be refined — a *delegating*
+  wrapper with the public name is exactly what this mechanism produces, so the
+  test now accepts it only when its body calls the generated name.
 - **The fleet merge into the single core (I1, slice 5)**: `ghydra/core/fleet.py`
   owns the two rules that make a fleet answer trustworthy — the merge is by
   **file identity** (two ports serving one program are one row, and their
