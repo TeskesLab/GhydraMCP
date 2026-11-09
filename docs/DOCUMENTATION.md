@@ -21,6 +21,7 @@ are trying to do**, not by where the code lives.
 | parse an answer, or wire it into CI | [GHYDRA_OUTPUT.md](GHYDRA_OUTPUT.md) | formats, the envelope, exit codes |
 | look up a tool | [GHYDRA_TOOLS.md](GHYDRA_TOOLS.md) | the generated catalogue (134 tools) |
 | look up an error code | [GHYDRA_ERRORS.md](GHYDRA_ERRORS.md) | every code, its status and the line that raises it |
+| unify this with the x64dbg side | [../contract/README.md](../contract/README.md) | the contract: vocabulary, address model, error envelope, conformance |
 | recall a command | [GHYDRA_CHEATSHEET.md](GHYDRA_CHEATSHEET.md) | **generated** one-liner for every command |
 | use the CLI | [GHYDRA_CLI.md](GHYDRA_CLI.md) | every command |
 | call the REST API | [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) | every route, `API_VERSION` 3000 |

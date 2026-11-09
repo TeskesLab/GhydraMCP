@@ -276,3 +276,40 @@ changes land. Factor that in before committing to a shared-repo layout.
 - x64dbg SDK binding: `src/core/bridge.zig:338-395` (33 runtime-resolved symbols).
 - GhidraMCP server: `src/main/java/eu/starsong/ghidra/api/ApiConstants.java` (`API_VERSION` 3000,
   port range), `GhydraPlugin.java` (resource registration).
+
+---
+
+## 8. Progress
+
+Updated as the plan is executed. A phase is "done" for a side only when the
+`--contract` suite proves it there.
+
+### Phase 1 — GhydraMCP side: done (2026-11-09)
+
+The plan said this side needed nothing for the unification itself, and offered one
+optional item (expose metadata as MCP resources — those already exist:
+`ghidra://instance/{port}`, and the function resources). What Phase 1 *did* need from
+this repository is the contract, and that now exists:
+
+| Contract rule | Where it lives | Proof |
+| --- | --- | --- |
+| vocabulary (`namespace_verb`, snake_case, no reserved parameter) | `contract/vocabulary.json`, `contract/tools.json` (generated) | `tests/test_contract.py`: 134 names match, 0 reserved, 134 formatters |
+| address model (`TargetDescriptor`, both address forms, identity) | `contract/target-descriptor.schema.json`, `ghydra/target.py` | conversion round-trips; a descriptor over two different files is **not correlatable**; the schema rejects a bad one |
+| error envelope (stable code + human text) | `contract/error-codes.json` (generated) | 112 codes, shaped, unique, each with its side and its `file:line` |
+| conformance | `tests/test_contract.py`, run as `--contract` (and in CI) | 24 tests |
+
+What this does **not** do is fix the x64dbg side. Its nine Phase-1 defects are
+untouched — including the data race (#1) and the UI-thread call (#2), which are the
+two that make it unsafe to point at a real debugging session. Those live in
+`danalec/x64dbg-mcp-server` (verified at `9d7a93e`, 80 flat tools), and the plan's
+own rule applies: do not entangle the repositories.
+
+### What Phase 2 and 3 still need
+
+- **Phase 2** — one agent surface: a combined MCP client configuration that registers
+  both servers, with the two sides separately toggleable. It depends on the x64dbg
+  side adopting the vocabulary, or on aliases.
+- **Phase 3** — the gateway: `analyze_open → function_locate → breakpoint_set →
+  run_to → decompile`. The `TargetDescriptor` is its first requirement and it now
+  exists on this side; the gateway still needs the debugger's `module_base` and
+  `module_path` from a second server, and the path-identity refusal it already has.

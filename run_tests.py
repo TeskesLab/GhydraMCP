@@ -926,11 +926,37 @@ def run_examples_tests():
         return False
 
 
+def run_contract_tests():
+    """Run the unification-contract suite — no Ghidra, no debugger, no network."""
+    print_header("Running Contract Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_contract.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running contract tests: {e}")
+        return False
+
+
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
     "--capability-summary", "--tasks", "--errors", "--context-pack", "--tool-groups", "--telemetry",
     "--assertions", "--read-only", "--runbook", "--taint", "--mission", "--cache", "--fleet", "--core", "--twin", "--examples",
+    "--contract",
 )
 
 SUITES = {
@@ -967,6 +993,7 @@ SUITES = {
     "--core": run_core_tests,
     "--twin": run_twin_tests,
     "--examples": run_examples_tests,
+    "--contract": run_contract_tests,
 }
 
 USAGE = (

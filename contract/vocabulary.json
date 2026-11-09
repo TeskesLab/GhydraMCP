@@ -1,0 +1,68 @@
+{
+  "contract_version": 1,
+  "title": "The tool vocabulary: one naming rule for two servers",
+  "status": "GhydraMCP conforms; the x64dbg side does not yet (its 80 tools are flat PascalCase)",
+  "rule": {
+    "shape": "namespace_verb: snake_case, lower case, the first token names the domain",
+    "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)+$",
+    "why": "The prefix is load-bearing, not decoration. Two tools that read memory exist and they mean different things: `memory_read` reads the static image Ghidra has open, and a live-process read must not be reachable by the same name. The namespaces also keep an agent's tool-selection bounded, which is why both servers group their tools.",
+    "reserved_parameters": ["arguments"],
+    "reserved_parameters_why": "`arguments` is the name of the container the MCP protocol uses for a tool's parameters; a client that re-encodes the container loses the value, and the tool then runs with its defaults instead of failing. It happened here (x64dbg_call), and a guard now refuses the name."
+  },
+  "ghydra_side": {
+    "conforms": true,
+    "namespace_count": 36,
+    "evidence": "contract/tools.json (generated): every one of the 134 names matches the pattern, and no tool declares a reserved parameter",
+    "local_namespaces": {
+      "kuna": "drives the Kuna CLI; takes no instance",
+      "x64dbg": "drives the debugger's own MCP plugin; the prefixed names never collide with the static side"
+    },
+    "proxied_tools": [
+      "x64dbg_breakpoint_at",
+      "x64dbg_call",
+      "x64dbg_go_to",
+      "x64dbg_status",
+      "x64dbg_target",
+      "x64dbg_tools"
+    ]
+  },
+  "x64dbg_side": {
+    "conforms": false,
+    "repository": "danalec/x64dbg-mcp-server (fork of duty1g/x64dbg-mcp-server)",
+    "verified_at": {
+      "commit": "9d7a93e",
+      "registry": "src/mcp/tools.zig",
+      "tools": 80,
+      "shape": "flat PascalCase, no namespace prefix",
+      "protocol_version": "2024-11-05",
+      "bind": "127.0.0.1"
+    },
+    "adoption": "Rename in the registry, and keep the old names as aliases for one release: an agent configuration that names SetBreakpoint must not break the day the rule lands.",
+    "mapping_examples": [
+      {"from": "SetBreakpoint", "to": "x64dbg_set_breakpoint"},
+      {"from": "ReadMemory", "to": "x64dbg_read_memory", "collision": "memory_read (static) must stay distinct"},
+      {"from": "GetDebugState", "to": "x64dbg_get_debug_state"},
+      {"from": "ListModules", "to": "x64dbg_list_modules"},
+      {"from": "ExecuteDebuggerCommand", "to": "x64dbg_execute_debugger_command"},
+      {"from": "SaveDatabase", "to": "x64dbg_save_database"}
+    ],
+    "mapping_rule": "Split the PascalCase into words, lower-case them, join with underscores, prefix `x64dbg_`."
+  },
+  "collisions_that_matter": [
+    {
+      "static": "memory_read",
+      "dynamic": "x64dbg_read_memory",
+      "why": "Same verb, different object: the image on disk versus the live process. An agent that confuses them reports a value that was never in the running program."
+    },
+    {
+      "static": "functions_get",
+      "dynamic": "x64dbg_get_function",
+      "why": "Ghidra's function and the debugger's view of a function differ by relocations and by what the debugger has symbols for."
+    },
+    {
+      "static": "programs_get",
+      "dynamic": "x64dbg_list_modules",
+      "why": "A program is a file; a module is a loaded image of one. The TargetDescriptor is where the two are correlated."
+    }
+  ]
+}

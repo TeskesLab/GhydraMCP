@@ -7,6 +7,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The unification contract, and the address model that can refuse** (Phase 1 of
+  `docs/UNIFICATION-PLAN.md`): the plan's verdict is that these two projects cannot
+  share code — a Java plugin in Ghidra and a Zig DLL in x64dbg — only a
+  specification. That specification now exists in [`contract/`](contract/README.md),
+  with the half that can be derived from this repository **generated**:
+  [`tools.json`](contract/tools.json) (134 tools, 36 namespaces, every one matching
+  `namespace_verb`, none declaring the reserved `arguments`, all with a formatter)
+  and [`error-codes.json`](contract/error-codes.json) (112 codes with side, HTTP
+  status and `file:line`), both checked by `scripts/gen_contract.py --check`.
+  New [`ghydra/target.py`](ghydra/target.py) is the address model the plan asks for:
+  `runtime = static − image_base + module_base`, plus the identity that makes the
+  arithmetic safe — a descriptor built from two **different** files reports
+  `correlatable: false` and says why, and the same file name in another directory is
+  `name-only` (a copy, a symlink or a rebuild), not the same target. The shape is
+  [`contract/target-descriptor.schema.json`](contract/target-descriptor.schema.json).
+  The conformance suite `tests/test_contract.py` (`--contract`, and in CI) proves
+  all of it: 24 tests, including a small validator that reads the schema and refuses
+  a descriptor the schema refuses.
+  Honest status, also recorded in the plan: the **x64dbg side is untouched**. Its
+  nine Phase-1 defects — the data race, the GUI call from an HTTP worker thread, the
+  silent JSON overflow, the static port — are the reason the plan puts them first,
+  and they live in the other repository. The contract marks that side as
+  `"conforms": false` rather than pretending.
 - **The reference documents moved to `docs/`, and the guards follow them**: the
   root had 5 documents and 20 reference pages; the 20 are now in
   [`docs/`](docs/), next to the three design notes that were already there.

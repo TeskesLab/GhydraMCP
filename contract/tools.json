@@ -1,0 +1,1771 @@
+{
+  "contract_version": 1,
+  "generated_by": "scripts/gen_contract.py",
+  "vocabulary": {
+    "rule": "namespace-qualified, snake_case, domain_verb: the prefix is what keeps two tools that mean different things apart (memory_read reads the static image; x64dbg_read_memory would read the live process)",
+    "name_pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)+$",
+    "namespace": "the first token of the name",
+    "reserved_parameters": [
+      "arguments"
+    ],
+    "takes_instance": "the tool names a Ghidra instance through its port"
+  },
+  "counts": {
+    "tools": 134,
+    "namespaces": 36,
+    "with_formatter": 134,
+    "with_reserved_parameter": 0
+  },
+  "tools": [
+    {
+      "name": "analysis_callees",
+      "namespace": "analysis",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "limit",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "analysis_callers",
+      "namespace": "analysis",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "limit",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "analysis_capabilities_summary",
+      "namespace": "analysis",
+      "group": "functions",
+      "parameters": [
+        "include_strings",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "analysis_context_pack",
+      "namespace": "analysis",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "budget_tokens",
+        "port",
+        "question"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "analysis_diff",
+      "namespace": "analysis",
+      "group": "functions",
+      "parameters": [
+        "b_port",
+        "include_strings",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "analysis_get_callgraph",
+      "namespace": "analysis",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "max_depth",
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "analysis_get_dataflow",
+      "namespace": "analysis",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "direction",
+        "max_steps",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "analysis_run",
+      "namespace": "analysis",
+      "group": "functions",
+      "parameters": [
+        "analysis_options",
+        "background",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "analysis_status",
+      "namespace": "analysis",
+      "group": "functions",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "analysis_taint",
+      "namespace": "analysis",
+      "group": "functions",
+      "parameters": [
+        "max_depth",
+        "port",
+        "sink",
+        "source"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "analysis_trace_call_path",
+      "namespace": "analysis",
+      "group": "functions",
+      "parameters": [
+        "from_function",
+        "max_depth",
+        "port",
+        "to_function"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "bsim_apply_names",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "dry_run",
+        "min_similarity",
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "bsim_diff_versions",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "max_functions",
+        "min_similarity",
+        "other_executable",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "bsim_ingest",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "max_functions",
+        "port",
+        "track_call_graph"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "bsim_query",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "max_matches",
+        "min_significance",
+        "min_similarity",
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "bsim_status",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "cache_clear",
+      "namespace": "cache",
+      "group": "core",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "cache_stats",
+      "namespace": "cache",
+      "group": "core",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "classes_list",
+      "namespace": "classes",
+      "group": "types",
+      "parameters": [
+        "limit",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "comments_get",
+      "namespace": "comments",
+      "group": "data",
+      "parameters": [
+        "address",
+        "comment_type",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "comments_set",
+      "namespace": "comments",
+      "group": "data",
+      "parameters": [
+        "address",
+        "comment",
+        "comment_type",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "data_create",
+      "namespace": "data",
+      "group": "data",
+      "parameters": [
+        "address",
+        "data_type",
+        "port",
+        "size"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "data_delete",
+      "namespace": "data",
+      "group": "data",
+      "parameters": [
+        "address",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "data_list",
+      "namespace": "data",
+      "group": "data",
+      "parameters": [
+        "addr",
+        "limit",
+        "name",
+        "name_contains",
+        "offset",
+        "port",
+        "type"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "data_list_strings",
+      "namespace": "data",
+      "group": "data",
+      "parameters": [
+        "filter",
+        "limit",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "data_rename",
+      "namespace": "data",
+      "group": "data",
+      "parameters": [
+        "address",
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "data_set_type",
+      "namespace": "data",
+      "group": "data",
+      "parameters": [
+        "address",
+        "data_type",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "datatypes_create_enum",
+      "namespace": "datatypes",
+      "group": "types",
+      "parameters": [
+        "category",
+        "name",
+        "port",
+        "size",
+        "values"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "datatypes_create_struct",
+      "namespace": "datatypes",
+      "group": "types",
+      "parameters": [
+        "category",
+        "fields",
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "datatypes_create_union",
+      "namespace": "datatypes",
+      "group": "types",
+      "parameters": [
+        "category",
+        "fields",
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "datatypes_list",
+      "namespace": "datatypes",
+      "group": "types",
+      "parameters": [
+        "category",
+        "kind",
+        "limit",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "datatypes_search",
+      "namespace": "datatypes",
+      "group": "types",
+      "parameters": [
+        "limit",
+        "name",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "doctor_check",
+      "namespace": "doctor",
+      "group": "core",
+      "parameters": [],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "evidence_add",
+      "namespace": "evidence",
+      "group": "core",
+      "parameters": [
+        "address",
+        "code",
+        "confidence",
+        "kind",
+        "ledger",
+        "name",
+        "note",
+        "source",
+        "tags"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "evidence_export",
+      "namespace": "evidence",
+      "group": "core",
+      "parameters": [
+        "binary",
+        "ledger",
+        "output"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "evidence_list",
+      "namespace": "evidence",
+      "group": "core",
+      "parameters": [
+        "address",
+        "kind",
+        "ledger",
+        "query",
+        "tag"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "fleet_query",
+      "namespace": "fleet",
+      "group": "fleet",
+      "parameters": [
+        "kind",
+        "ports",
+        "target"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_analyze",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "name",
+        "port",
+        "xref_limit"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_batch_decompile",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "async_mode",
+        "port",
+        "targets",
+        "timeout"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_create",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_decompile",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "end_line",
+        "max_age",
+        "max_lines",
+        "name",
+        "port",
+        "show_constants",
+        "start_line",
+        "style",
+        "syntax_tree",
+        "timeout",
+        "use_cache"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_delete",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_disassemble",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "limit",
+        "name",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_get",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_get_cfg",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_get_containing",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_get_next",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_get_pcode",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_get_prev",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_get_variables",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_list",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "addr_max",
+        "addr_min",
+        "count",
+        "limit",
+        "name_contains",
+        "name_matches_regex",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_rename",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "new_name",
+        "old_name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_set_comment",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "comment",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_set_signature",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "name",
+        "port",
+        "signature"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "functions_update_variable",
+      "namespace": "functions",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "new_data_type",
+        "new_name",
+        "port",
+        "variable_name"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "headless_start",
+      "namespace": "headless",
+      "group": "headless",
+      "parameters": [
+        "async_mode",
+        "binary",
+        "ghidra_home",
+        "java_home",
+        "port",
+        "timeout"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "headless_status",
+      "namespace": "headless",
+      "group": "headless",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "headless_stop",
+      "namespace": "headless",
+      "group": "headless",
+      "parameters": [
+        "port",
+        "timeout"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "inspect_address",
+      "namespace": "inspect",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "inspect_target",
+      "namespace": "inspect",
+      "group": "functions",
+      "parameters": [
+        "path"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "instances_capabilities",
+      "namespace": "instances",
+      "group": "core",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "instances_current",
+      "namespace": "instances",
+      "group": "core",
+      "parameters": [],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "instances_discover",
+      "namespace": "instances",
+      "group": "core",
+      "parameters": [
+        "host"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "instances_list",
+      "namespace": "instances",
+      "group": "core",
+      "parameters": [],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "instances_register",
+      "namespace": "instances",
+      "group": "core",
+      "parameters": [
+        "port",
+        "url"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "instances_unregister",
+      "namespace": "instances",
+      "group": "core",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "instances_use",
+      "namespace": "instances",
+      "group": "core",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_crypto",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "algorithm",
+        "binary_path",
+        "section"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_decompile",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "addr",
+        "binary_path",
+        "function",
+        "max_lines",
+        "mode"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_disassemble",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "addr",
+        "binary_path",
+        "bytes",
+        "count",
+        "mode",
+        "target"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_export_read",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "artifact",
+        "directory",
+        "function",
+        "job_id",
+        "max_bytes"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_export_start",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "binary_path",
+        "functions",
+        "job_id",
+        "jobs"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_export_status",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "job_id"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_functions",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "binary_path",
+        "limit",
+        "name_filter",
+        "offset"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_read",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "addr",
+        "binary_path",
+        "bytes",
+        "target"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_status",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_strings",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "binary_path",
+        "encoding",
+        "limit",
+        "min_length",
+        "pattern",
+        "section"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_summary",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "binary_path",
+        "mode"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_unpack",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "binary_path",
+        "output"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "kuna_xrefs",
+      "namespace": "kuna",
+      "group": "kuna",
+      "parameters": [
+        "binary_path",
+        "direction",
+        "kind",
+        "target"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "memory_disassemble",
+      "namespace": "memory",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "limit",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "memory_read",
+      "namespace": "memory",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "format",
+        "length",
+        "port",
+        "segment"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "memory_write",
+      "namespace": "memory",
+      "group": "functions",
+      "parameters": [
+        "address",
+        "bytes_data",
+        "format",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "mission_start",
+      "namespace": "mission",
+      "group": "core",
+      "parameters": [
+        "goal",
+        "max_calls",
+        "max_tokens",
+        "output",
+        "port",
+        "verify"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "namespaces_list",
+      "namespace": "namespaces",
+      "group": "types",
+      "parameters": [
+        "limit",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "programs_delete",
+      "namespace": "programs",
+      "group": "core",
+      "parameters": [
+        "port",
+        "program_id"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "programs_get",
+      "namespace": "programs",
+      "group": "core",
+      "parameters": [
+        "port",
+        "program_id"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "programs_list",
+      "namespace": "programs",
+      "group": "core",
+      "parameters": [
+        "limit",
+        "offset",
+        "port",
+        "project"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "programs_overview",
+      "namespace": "programs",
+      "group": "core",
+      "parameters": [
+        "import_limit",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "programs_save",
+      "namespace": "programs",
+      "group": "core",
+      "parameters": [
+        "all",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "project_info",
+      "namespace": "project",
+      "group": "core",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "project_list_files",
+      "namespace": "project",
+      "group": "core",
+      "parameters": [
+        "folder",
+        "limit",
+        "offset",
+        "port",
+        "recursive"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "project_open_file",
+      "namespace": "project",
+      "group": "core",
+      "parameters": [
+        "path",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "projects_get",
+      "namespace": "projects",
+      "group": "core",
+      "parameters": [
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "projects_list",
+      "namespace": "projects",
+      "group": "core",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "raw_image_cleanup",
+      "namespace": "raw",
+      "group": "types",
+      "parameters": [
+        "address",
+        "all",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "raw_image_define",
+      "namespace": "raw",
+      "group": "types",
+      "parameters": [
+        "address",
+        "endian",
+        "format",
+        "height",
+        "port",
+        "width"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "runbook_record",
+      "namespace": "runbook",
+      "group": "runbook",
+      "parameters": [
+        "output",
+        "port",
+        "steps"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "runbook_replay",
+      "namespace": "runbook",
+      "group": "runbook",
+      "parameters": [
+        "path",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "scalars_search",
+      "namespace": "scalars",
+      "group": "data",
+      "parameters": [
+        "in_function",
+        "limit",
+        "offset",
+        "port",
+        "to_function",
+        "value"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "scripts_list",
+      "namespace": "scripts",
+      "group": "scripts",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "scripts_run",
+      "namespace": "scripts",
+      "group": "scripts",
+      "parameters": [
+        "args",
+        "filename",
+        "language",
+        "name",
+        "port",
+        "source"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "segments_list",
+      "namespace": "segments",
+      "group": "data",
+      "parameters": [
+        "limit",
+        "name",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "session_close",
+      "namespace": "session",
+      "group": "core",
+      "parameters": [
+        "session_id"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "session_list",
+      "namespace": "session",
+      "group": "core",
+      "parameters": [],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "session_open",
+      "namespace": "session",
+      "group": "core",
+      "parameters": [
+        "binary",
+        "name",
+        "port",
+        "timeout"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "structs_add_field",
+      "namespace": "structs",
+      "group": "types",
+      "parameters": [
+        "comment",
+        "field_name",
+        "field_type",
+        "offset",
+        "port",
+        "struct_name"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "structs_create",
+      "namespace": "structs",
+      "group": "types",
+      "parameters": [
+        "category",
+        "description",
+        "name",
+        "port",
+        "size"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "structs_delete",
+      "namespace": "structs",
+      "group": "types",
+      "parameters": [
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "structs_get",
+      "namespace": "structs",
+      "group": "types",
+      "parameters": [
+        "name",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "structs_list",
+      "namespace": "structs",
+      "group": "types",
+      "parameters": [
+        "category",
+        "limit",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "structs_update_field",
+      "namespace": "structs",
+      "group": "types",
+      "parameters": [
+        "field_name",
+        "field_offset",
+        "new_comment",
+        "new_name",
+        "new_type",
+        "port",
+        "struct_name"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "symbols_exports",
+      "namespace": "symbols",
+      "group": "types",
+      "parameters": [
+        "limit",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "symbols_imports",
+      "namespace": "symbols",
+      "group": "types",
+      "parameters": [
+        "limit",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "symbols_list",
+      "namespace": "symbols",
+      "group": "types",
+      "parameters": [
+        "count",
+        "limit",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "tasks_cancel",
+      "namespace": "tasks",
+      "group": "core",
+      "parameters": [
+        "task_id"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "tasks_get",
+      "namespace": "tasks",
+      "group": "core",
+      "parameters": [
+        "task_id"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "tasks_list",
+      "namespace": "tasks",
+      "group": "core",
+      "parameters": [],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "telemetry_summary",
+      "namespace": "telemetry",
+      "group": "core",
+      "parameters": [
+        "days"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "tools_groups",
+      "namespace": "tools",
+      "group": "core",
+      "parameters": [],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "tools_load_group",
+      "namespace": "tools",
+      "group": "core",
+      "parameters": [
+        "group"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "tools_search",
+      "namespace": "tools",
+      "group": "core",
+      "parameters": [
+        "limit",
+        "query"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "tools_unload_group",
+      "namespace": "tools",
+      "group": "core",
+      "parameters": [
+        "group"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "ui_get_current_address",
+      "namespace": "ui",
+      "group": "core",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "ui_get_current_function",
+      "namespace": "ui",
+      "group": "core",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "variables_list",
+      "namespace": "variables",
+      "group": "functions",
+      "parameters": [
+        "global_only",
+        "limit",
+        "offset",
+        "port",
+        "search",
+        "source"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "x64dbg_breakpoint_at",
+      "namespace": "x64dbg",
+      "group": "x64dbg",
+      "parameters": [
+        "address",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "x64dbg_call",
+      "namespace": "x64dbg",
+      "group": "x64dbg",
+      "parameters": [
+        "timeout",
+        "tool",
+        "tool_arguments"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "x64dbg_go_to",
+      "namespace": "x64dbg",
+      "group": "x64dbg",
+      "parameters": [
+        "address",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "x64dbg_status",
+      "namespace": "x64dbg",
+      "group": "x64dbg",
+      "parameters": [],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "x64dbg_target",
+      "namespace": "x64dbg",
+      "group": "x64dbg",
+      "parameters": [
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "x64dbg_tools",
+      "namespace": "x64dbg",
+      "group": "x64dbg",
+      "parameters": [],
+      "reserved_parameters": [],
+      "takes_instance": false,
+      "has_formatter": true
+    },
+    {
+      "name": "xrefs_find_by_name",
+      "namespace": "xrefs",
+      "group": "data",
+      "parameters": [
+        "limit",
+        "name",
+        "offset",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "xrefs_list",
+      "namespace": "xrefs",
+      "group": "data",
+      "parameters": [
+        "from_addr",
+        "limit",
+        "offset",
+        "port",
+        "to_addr",
+        "type"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    }
+  ]
+}

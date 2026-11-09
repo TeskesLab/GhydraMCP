@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TeskesLab/GhydraMCP/contract/target-descriptor.schema.json",
+  "title": "TargetDescriptor",
+  "description": "One debugging target, as the static side (Ghidra) and the dynamic side (x64dbg) each see it. The conversion between the two address spaces is runtime = static - image_base + module_base; the identity fields exist so that a consumer can refuse the conversion when the two sides are not looking at the same file.",
+  "type": "object",
+  "required": ["contract_version", "binary", "image_base", "identity", "correlatable"],
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "The version of this shape. A consumer refuses a version it does not know."
+    },
+    "schema": {
+      "type": "string",
+      "description": "The file this document claims to follow."
+    },
+    "binary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The path of the file the static side has open. The identity of the target."
+    },
+    "binary_name": {
+      "type": "string",
+      "description": "The file name of binary, for a display that has no room for the path."
+    },
+    "arch": {
+      "type": "string",
+      "description": "The architecture as the static side names it (Ghidra language id, eg x86:LE:64:default)."
+    },
+    "image_base": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]+$",
+      "description": "The address the image is built to load at. The anchor of the static address space."
+    },
+    "module_base": {
+      "type": ["string", "null"],
+      "pattern": "^0x[0-9a-fA-F]+$",
+      "description": "Where the loader actually put the module. Null when only the static side is known, in which case nothing may be translated."
+    },
+    "module_size": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "module_path": {
+      "type": "string",
+      "description": "The path the debugger reports for the loaded module. Compared with binary to decide identity."
+    },
+    "module_name": {
+      "type": "string"
+    },
+    "session": {
+      "type": "object",
+      "description": "How to reach the dynamic side (host, port, debugger version).",
+      "additionalProperties": true
+    },
+    "source": {
+      "type": "object",
+      "description": "How to reach the static side (host, port, plugin version).",
+      "additionalProperties": true
+    },
+    "delta": {
+      "type": ["string", "null"],
+      "pattern": "^0x-?[0-9a-fA-F]+$",
+      "description": "module_base - image_base, the constant the conversion adds. Null when module_base is unknown."
+    },
+    "identity": {
+      "type": "object",
+      "required": ["same_binary", "match", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "same_binary": {
+          "type": "boolean",
+          "description": "True only when both sides name the same file by the same normalised path."
+        },
+        "match": {
+          "type": "string",
+          "enum": ["path", "name-only", "different", "unknown"],
+          "description": "How the two paths relate. name-only is a copy, a symlink or a rebuild: not the same target."
+        },
+        "reason": {
+          "type": ["string", "null"],
+          "description": "Why the identity is what it is, in words a log can carry."
+        }
+      }
+    },
+    "correlatable": {
+      "type": "boolean",
+      "description": "Whether the conversion may be used: same binary, a positive image base and a known module base. A consumer must not translate when this is false."
+    }
+  }
+}
