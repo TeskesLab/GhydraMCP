@@ -127,7 +127,8 @@ class GhidraHTTPClient:
         self,
         endpoint: str,
         data: Optional[Dict[str, Any]] = None,
-        json_data: Optional[Dict[str, Any]] = None
+        json_data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Make POST request to API.
 
@@ -135,6 +136,8 @@ class GhidraHTTPClient:
             endpoint: API endpoint path
             data: Optional form data
             json_data: Optional JSON payload
+            params: Optional query string (the BSim routes take their arguments
+                there, including the ones that change state)
 
         Returns:
             Parsed JSON response data
@@ -155,6 +158,7 @@ class GhidraHTTPClient:
         try:
             response = self.session.post(
                 url,
+                params=params,
                 data=data,
                 json=json_data,
                 headers=headers,

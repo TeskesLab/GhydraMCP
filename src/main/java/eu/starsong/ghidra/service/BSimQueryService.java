@@ -8,7 +8,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import eu.starsong.ghidra.util.GhidraSwing;
 import ghidra.program.model.address.Address;
+import eu.starsong.ghidra.util.GhidraSwing;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.Program;
@@ -96,7 +98,8 @@ public final class BSimQueryService {
         double significance = minSignificance <= 0 ? DEFAULT_SIGNIFICANCE
             : minSignificance;
 
-        Function function = resolveFunction(program, address, name);
+        Function function = GhidraSwing.runRead(
+            () -> resolveFunction(program, address, name));
         if (function == null) {
             return BSimDatabase.failure(data, "BSIM_NO_FUNCTION",
                 address != null
@@ -205,7 +208,11 @@ public final class BSimQueryService {
             data.put("success", Boolean.TRUE);
             data.put("matches", matches);
             data.put("returned", matches.size());
-            data.put("total_considered", total);
+            // The response carries what BSim itself considered; the loop above
+            // only counts the notes it happened to walk before filling the page.
+            Object considered = BSimDatabase.call(response, "getTotalCount");
+            data.put("total_considered",
+                considered instanceof Number ? ((Number) considered).intValue() : total);
             data.put("method", "BSim similarity over the signature database; a "
                 + "match is a lead, not an identification.");
             data.put("seconds", BSimDatabase.secondsSince(started));

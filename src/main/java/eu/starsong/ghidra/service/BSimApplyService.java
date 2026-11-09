@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import eu.starsong.ghidra.util.GhidraSwing;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.SourceType;
@@ -82,9 +83,29 @@ public final class BSimApplyService {
                 + " similar, so nothing was applied");
             return data;
         }
-        Map<?, ?> match = (Map<?, ?>) matches.get(0);
+        // BSim does not promise the matches are ordered, and the rename must
+        // follow the *most* similar one, not the first one in the list.
+        Map<?, ?> match = null;
+        double best = -1.0;
+        for (Object item : matches) {
+            if (!(item instanceof Map)) {
+                continue;
+            }
+            Map<?, ?> candidate = (Map<?, ?>) item;
+            double score = asDouble(candidate.get("similarity"));
+            if (score > best) {
+                best = score;
+                match = candidate;
+            }
+        }
+        if (match == null) {
+            data.put("success", Boolean.FALSE);
+            data.put("code", "BSIM_NO_MATCH");
+            data.put("reason", "the query returned no usable match");
+            return data;
+        }
         String matchedName = asString(match.get("function"));
-        double similarity = asDouble(match.get("similarity"));
+        double similarity = best;
         data.put("match", match);
         if (matchedName == null || matchedName.isBlank()) {
             data.put("success", Boolean.FALSE);
@@ -100,7 +121,8 @@ public final class BSimApplyService {
             return data;
         }
 
-        Function function = resolve(program, address, name);
+        Function function = GhidraSwing.runRead(
+            () -> resolve(program, address, name));
         if (function == null) {
             data.put("success", Boolean.FALSE);
             data.put("code", "BSIM_NO_FUNCTION");

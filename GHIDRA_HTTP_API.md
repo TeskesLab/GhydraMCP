@@ -1045,7 +1045,7 @@ database, creating it when it does not exist.
 | Query parameter | Meaning |
 | --- | --- |
 | `max_functions` | How many functions to scan at most (0 or absent = all, cap 200 000) |
-| `track_call_graph` | `true` records the call graph. **Default `false`** — see the note below. |
+| `track_call_graph` | `true` records the call graph. **Default `false`**; with it, `where.exe` ingested 189 functions. |
 
 The answer reports `discovered_functions`, `scanned_functions`,
 `skipped_functions`, `described_functions`, `inserted_functions`,
@@ -1056,11 +1056,15 @@ Re-ingesting a program that is already there is **not a failure**: BSim
 deduplicates by executable fingerprint, and the answer says
 `success: true, already_present: true, inserted_functions: 0`.
 
-> **The call graph is off by default, deliberately.** Measured on Ghidra 12.2 / H2:
-> a database created with `trackcallgraph=true` rejects the insert with a
-> duplicate `callgraphtable(src,dest)` key on ordinary recursion. The signature
-> tables are what a similarity query needs, so the default is off; turning it on
-> is an explicit request and may fail that way.
+> **The call graph is off by default.** A similarity query does not need it and it
+> makes the database bigger, so it is opt-in. When asked for it works: measured,
+> `where.exe` ingests **189 functions** into a call-graph database. An earlier
+> version of this note claimed a call-graph database rejects the insert with a
+> duplicate `callgraphtable(src,dest)` key — that was a bug on our side, not a
+> limit of H2. The call-graph records have to be sorted before the insert, the way
+> Ghidra's own `AddProgramToH2BSimDatabaseScript` does
+> (`listAllFunctions().forEachRemaining(fd -> fd.sortCallgraph())`). They are
+> sorted now.
 
 Failure codes: `BSIM_DISABLED`, `BSIM_NO_DATABASE`, `BSIM_NO_PROGRAM`,
 `BSIM_CREATE_FAILED`, `BSIM_INIT_FAILED`, `BSIM_SCAN_FAILED`,

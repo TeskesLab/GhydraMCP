@@ -251,8 +251,10 @@ def _step_overview(caller, mission) -> None:
         mission.add_unknown("What is this binary?",
                             f"the program could not be read ({_error_code(envelope)})")
         return
+    # /program answers `path`, not `executable_path`: reading only the name it
+    # does not use left every dossier printing "(no path)".
     mission.program = {key: payload.get(key) for key in
-                       ("name", "executable_path", "image_base", "language")
+                       ("name", "path", "executable_path", "image_base", "language")
                        if payload.get(key) is not None}
     mission.add_finding(
         "data", "Program fingerprint",

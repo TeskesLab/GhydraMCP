@@ -68,8 +68,13 @@ public final class BSimDiffService {
             return BSimDatabase.failure(data, "BSIM_NO_PROGRAM",
                 "no program is open in this instance");
         }
-        if (!BSimService.available() || BSimService.database() == null
-                || !BSimService.databaseExists()) {
+        if (!BSimService.available()) {
+            // The engine, not the database, is what is missing: sending the
+            // reader to configure a database would not help.
+            return BSimDatabase.failure(data, "BSIM_DISABLED",
+                "this Ghidra build has no BSim query engine");
+        }
+        if (BSimService.database() == null || !BSimService.databaseExists()) {
             return BSimDatabase.failure(data, "BSIM_NO_DATABASE",
                 "a comparison needs an ingested database: set -D"
                     + BSimService.PROPERTY_DATABASE + "=<path> and ingest both "
@@ -103,6 +108,7 @@ public final class BSimDiffService {
         int same = 0;
         int missing = 0;
         int noSignature = 0;
+        int unknownAddress = 0;
         List<Map<String, Object>> failures = new ArrayList<>();
         for (Function function : functions) {
             Map<String, Object> queried = BSimQueryService.query(program,
@@ -138,15 +144,24 @@ public final class BSimDiffService {
                     + floor + " similar");
                 missing++;
             } else {
-                String otherAddress = String.valueOf(pair.get("address"));
-                boolean relocated = !sameAddress(
-                    function.getEntryPoint().toString(), otherAddress);
-                row.put("class", relocated ? "moved" : "same");
-                row.put("other", pair);
-                if (relocated) {
-                    moved++;
+                Object otherAddress = pair.get("address");
+                if (otherAddress == null || String.valueOf(otherAddress).isBlank()) {
+                    // Paired, but the address of the other side is unknown:
+                    // calling that "moved" would claim a relocation nobody saw.
+                    row.put("class", "unknown_address");
+                    row.put("other", pair);
+                    unknownAddress++;
                 } else {
-                    same++;
+                    boolean relocated = !sameAddress(
+                        function.getEntryPoint().toString(),
+                        String.valueOf(otherAddress));
+                    row.put("class", relocated ? "moved" : "same");
+                    row.put("other", pair);
+                    if (relocated) {
+                        moved++;
+                    } else {
+                        same++;
+                    }
                 }
             }
             rows.add(row);
@@ -158,7 +173,11 @@ public final class BSimDiffService {
         data.put("moved", moved);
         data.put("not_found", missing);
         data.put("no_signature", noSignature);
+        data.put("unknown_address", unknownAddress);
         data.put("query_failures", failures);
+        // A comparison that could not query part of the program is not a
+        // complete comparison, and must say so.
+        data.put("complete", Boolean.valueOf(failures.isEmpty()));
         data.put("method", "Pairing by BSim similarity within the named "
             + "executable; a pair is a hypothesis, and every pair carries its "
             + "similarity. A function with no pair is listed, not dropped.");

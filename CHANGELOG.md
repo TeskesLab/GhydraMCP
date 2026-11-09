@@ -7,6 +7,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The BSim surface after an independent review: five real bugs, one of them
+  mine to own**: a fresh-context review of the BSim and twin code found twelve
+  issues. Five mattered enough to fix before anything else.
+  **The ingest was broken** — the refactor that introduced `BSimDatabase` replaced
+  a `getMethod("numFunctions")` read with a `getField` read, and
+  `DescriptionManager.numFunctions` is a *method*: every ingest answered
+  `BSIM_SCAN_FAILED`, and my "94 functions in 3.1 s" claim had stopped being true
+  because the last live run predated the refactor. It works again (94/94,
+  re-measured live).
+  **A failure was reported as a success** — the action routes wrapped every
+  payload in `Response.ok`, so `success: true` sat on top of a failed ingest and
+  the bridge and the CLI printed a table of zeros; a failure now carries
+  `success: false`, its code, its reason and an honest status (400/409/503/500).
+  **`?dry_run=yes` applied the rename** — `Boolean.parseBoolean` answers false for
+  anything but "true", so the one parameter that protects the program was lenient
+  in the dangerous direction; only `true`/`false` are accepted, and anything else
+  is a 400 that changes nothing.
+  **`ghydra bsim ingest` and `ghydra bsim apply-names` never ran** — the CLI called
+  `client.post(..., params=...)`, which the client did not accept; `post` takes a
+  query string now, and all four BSim commands were re-validated end to end.
+  **The call-graph "trap" was our bug, not H2's** — the duplicate key came from
+  unsorted call-graph records; with Ghidra's own sort in place,
+  `track_call_graph=true` ingests 189 functions of `where.exe`, and both guides are
+  corrected.
+  Also fixed from the same review: the H2 handle leaked when the create or the
+  initialize failed; the program database was traversed outside the EDT (the
+  repo's rule); `apply-names` followed the first match instead of the most
+  similar; `diff` reported `BSIM_NO_DATABASE` when the engine itself was missing;
+  a pair whose address is unknown was called `moved`; `total_considered` counted
+  the notes walked instead of what BSim considered; and the twin could crash on
+  `--output twin.json`, recorded zero parameters for every function, called an
+  unverifiable snapshot "complete", could not find a snapshot by name, and its
+  `diff` presented phantom removals as fact. The mission dossier stopped claiming
+  "nothing was left undetermined" for a mission that stopped, and no longer says
+  "every conclusion holds" when nothing was re-read.
 - **The x64dbg fixture listens with a 128-deep backlog, not 5**: the remaining
   local flake had a measurable cause. `ThreadingHTTPServer` listens with
   `request_queue_size = 5`; a burst of connections fills that queue, the OS drops

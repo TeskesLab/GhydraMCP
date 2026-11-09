@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.25.1"
+BRIDGE_VERSION = "v3.25.2"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1624,7 +1624,7 @@ def _core_taint_summarize(report):
 # <<< end generated from ghydra/core/taint.py
 
 
-# >>> generated from ghydra/core/mission.py (297179fac030c1a5) — edit the core, then run scripts/gen_core.py
+# >>> generated from ghydra/core/mission.py (05a2838bbe643615) — edit the core, then run scripts/gen_core.py
 _CORE_MISSION_VERSION = 1
 
 _CORE_MISSION_DEFAULT_CALLS = 60
@@ -1721,7 +1721,11 @@ def _core_mission_dossier(goal, mission_id, program, hints, budget, failed, skip
         lines.append('')
         lines.append(f"- kind: `{finding.get('kind')}`  confidence: `{finding.get('confidence')}`  status: `{finding.get('status')}`")
         if finding.get('detail'):
-            lines.extend(['', '```', str(finding['detail'])[:2000], '```'])
+            detail = str(finding['detail'])
+            cut = len(detail) > 2000
+            lines.extend(['', '```', detail[:2000], '```'])
+            if cut:
+                lines.append(f'_(detail truncated to 2000 of {len(detail)} characters)_')
         for item in finding.get('evidence') or []:
             lines.append(f"- evidence: `{item.get('endpoint')}` (digest `{(item.get('digest') or '')[:16]}`)")
         lines.append('')
@@ -1729,12 +1733,18 @@ def _core_mission_dossier(goal, mission_id, program, hints, budget, failed, skip
         lines.extend(['## Verification', '', f"- evidence items re-read: {verification['checked']}", f"- findings verified: {verification['verified']}"])
         if verification.get('unverified'):
             lines.append(f"- **unverified: {', '.join(verification['unverified'])}** (their evidence moved or could not be re-read)")
+        elif not verification.get('checked'):
+            lines.append('- no evidence item was re-read, so no conclusion was verified')
         else:
             lines.append('- every conclusion still holds against its evidence')
         lines.append('')
     unknowns = [item for item in findings if item.get('status') == _CORE_MISSION_STATUS_UNKNOWN]
     lines.extend(['## Not determined', ''])
-    if not unknowns:
+    if not unknowns and failed:
+        lines.append(f'_The mission stopped before it could answer: {failed}_')
+    elif not unknowns and (not findings):
+        lines.append('_No question was answered, so nothing is undetermined yet._')
+    elif not unknowns:
         lines.append('_Nothing was left undetermined._')
     for item in unknowns:
         lines.append(f"- {item['id']}: {item['title']} — {item.get('detail') or ''}".rstrip())

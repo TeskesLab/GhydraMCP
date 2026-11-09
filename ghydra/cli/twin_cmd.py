@@ -87,7 +87,8 @@ def query_cmd(ctx, path, kind, match, limit):
     """
     formatter = ctx.obj['formatter']
     try:
-        document = twin_helper.load(path)
+        # A path or the name `twin build --name` saved it under.
+        document = twin_helper.load(twin_helper.resolve_path(path))
         answer = twin_helper.query(document, kind, match, limit)
     except (OSError, ValueError) as exc:
         click.echo(f"Error: {exc}", err=True)
@@ -143,8 +144,8 @@ def diff_cmd(ctx, left, right):
     """
     formatter = ctx.obj['formatter']
     try:
-        first = twin_helper.load(left)
-        second = twin_helper.load(right)
+        first = twin_helper.load(twin_helper.resolve_path(left))
+        second = twin_helper.load(twin_helper.resolve_path(right))
     except (OSError, ValueError) as exc:
         click.echo(f"Error: {exc}", err=True)
         ctx.exit(1)

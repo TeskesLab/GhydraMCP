@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import eu.starsong.ghidra.util.GhidraSwing;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.Program;
@@ -104,16 +105,28 @@ public final class BSimIngestService {
         data.put("program", program.getName());
         data.put("track_call_graph", Boolean.valueOf(trackCallGraph));
 
-        List<Function> selected = new ArrayList<>();
-        FunctionIterator functions = program.getFunctionManager().getFunctions(true);
-        int discovered = 0;
-        while (functions.hasNext()) {
-            Function function = functions.next();
-            discovered++;
-            if (selected.size() < limit) {
-                selected.add(function);
+        // Selecting functions traverses the program database, so it happens under
+        // the EDT (the repo's rule) and only the references are kept. The
+        // decompilation and the BSim work stay outside, or they would freeze an
+        // open CodeBrowser for the whole scan.
+        final int wanted = limit;
+        int[] discoveredHolder = new int[1];
+        List<Function> selected = GhidraSwing.runRead(() -> {
+            List<Function> chosen = new ArrayList<>();
+            FunctionIterator functions =
+                program.getFunctionManager().getFunctions(true);
+            int seen = 0;
+            while (functions.hasNext()) {
+                Function function = functions.next();
+                seen++;
+                if (chosen.size() < wanted) {
+                    chosen.add(function);
+                }
             }
-        }
+            discoveredHolder[0] = seen;
+            return chosen;
+        });
+        int discovered = discoveredHolder[0];
         data.put("discovered_functions", discovered);
         data.put("scanned_functions", selected.size());
         data.put("skipped_functions", Math.max(0, discovered - selected.size()));
@@ -121,7 +134,7 @@ public final class BSimIngestService {
         Object signatureGenerator = null;
         Object connection = null;
         try {
-            connection = BSimDatabase.open(database, true, data);
+            connection = BSimDatabase.open(database, true, trackCallGraph, data);
             if (connection == null) {
                 return data;
             }
@@ -176,14 +189,28 @@ public final class BSimIngestService {
 
             Object description = generatorClass.getMethod("getDescriptionManager")
                 .invoke(signatureGenerator);
-            int described = description == null ? 0
-                : BSimDatabase.intField(description, "numFunctions");
+            // `numFunctions` is a METHOD on DescriptionManager (measured with
+            // javap against Ghidra 12.2, and how the official script calls it).
+            // Reading it as a field returned 0 and made every ingest fail with
+            // BSIM_SCAN_FAILED.
+            Object describedCount = description == null ? null
+                : BSimDatabase.call(description, "numFunctions");
+            int described = describedCount instanceof Number
+                ? ((Number) describedCount).intValue() : 0;
             if (described == 0) {
                 return BSimDatabase.failure(data, "BSIM_SCAN_FAILED",
                     "no function with a body could be decompiled, so there was "
                         + "nothing to insert");
             }
             data.put("described_functions", described);
+
+            // The official script sorts every call-graph record before the
+            // insert (`listAllFunctions().forEachRemaining(fd -> fd.sortCallgraph())`),
+            // and without it a database with the call graph on rejects the insert
+            // with a duplicate callgraphtable(src,dest) key. That is the real
+            // cause of the duplicate-key failure seen earlier — not "call graphs
+            // are broken on H2".
+            sortCallgraph(description);
 
             Class<?> requestClass = Class.forName(
                 "ghidra.features.bsim.query.protocol.InsertRequest", true, loader);
@@ -225,6 +252,34 @@ public final class BSimIngestService {
         } finally {
             BSimDatabase.disposeQuietly(signatureGenerator);
             BSimDatabase.closeQuietly(connection);
+        }
+    }
+
+    /**
+     * Sort each function's call-graph records, the way Ghidra's own script does.
+     *
+     * <p>The official {@code AddProgramToH2BSimDatabaseScript} calls
+     * {@code listAllFunctions().forEachRemaining(fd -> fd.sortCallgraph())} before
+     * the insert, and without it a database with the call graph on rejects the
+     * insert with a duplicate {@code callgraphtable(src,dest)} key. That is the
+     * real cause of the duplicate-key failure seen earlier — not "call graphs are
+     * broken on H2". Reflective like the rest of the BSim API; a failure here is
+     * not fatal.
+     */
+    private static void sortCallgraph(Object description) {
+        try {
+            Object functions = BSimDatabase.call(description, "listAllFunctions");
+            java.util.Iterator<?> iterator = null;
+            if (functions instanceof Iterable) {
+                iterator = ((Iterable<?>) functions).iterator();
+            } else if (functions instanceof java.util.Iterator) {
+                iterator = (java.util.Iterator<?>) functions;
+            }
+            while (iterator != null && iterator.hasNext()) {
+                BSimDatabase.call(iterator.next(), "sortCallgraph");
+            }
+        } catch (Throwable ignored) {
+            // No call graph to sort: the insert is unaffected.
         }
     }
 }

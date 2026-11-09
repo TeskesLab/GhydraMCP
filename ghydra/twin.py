@@ -138,7 +138,12 @@ def build(client, name: Optional[str] = None,
             {"name": item.get("name"), "address": item.get("address"),
              "return_type": item.get("returnType") or item.get("return_type"),
              "is_thunk": item.get("isThunk") or item.get("is_thunk"),
-             "parameters": item.get("parameters") or []}
+             # The function *listing* carries a count, not the parameters
+             # themselves. Recording `parameters: []` made every snapshot claim
+             # zero parameters for every function.
+             "parameter_count": (item.get("parameterCount")
+                                 if item.get("parameterCount") is not None
+                                 else item.get("parameter_count"))}
             for item in functions
         ],
         "imports": [str(item.get("name")) for item in imports if item.get("name")],
@@ -164,13 +169,31 @@ def build(client, name: Optional[str] = None,
 def save(document: Dict[str, Any], path: Optional[str] = None) -> str:
     """Write a snapshot, atomically enough that a half file is never read."""
     target = path or twin_path(str(document.get("name") or "binary"))
-    os.makedirs(os.path.dirname(target), exist_ok=True)
+    directory = os.path.dirname(target)
+    if directory:
+        # `os.path.dirname("twin.json")` is "" and makedirs("") raises: a caller
+        # writing the twin next to itself is normal and must work.
+        os.makedirs(directory, exist_ok=True)
     temporary = target + ".tmp"
     with open(temporary, "w", encoding="utf-8") as handle:
         json.dump(document, handle, ensure_ascii=False, indent=1)
         handle.write("\n")
     os.replace(temporary, target)
     return target
+
+
+def resolve_path(path_or_name: str) -> str:
+    """The file to read: the path given, or the snapshot of that name.
+
+    `twin build --name app-1.2` writes to the state directory, so a command that
+    only accepted a path made the documented example fail.
+    """
+    if os.path.exists(path_or_name):
+        return path_or_name
+    candidate = twin_path(str(path_or_name))
+    if os.path.exists(candidate):
+        return candidate
+    return path_or_name
 
 
 def load(path: str) -> Dict[str, Any]:
@@ -237,8 +260,14 @@ def query(document: Dict[str, Any], kind: str, needle: str = "",
             if str(function.get("name") or "").lower() == wanted:
                 return {"kind": kind, "function": function, "matched": 1,
                         "returned": 1, "truncated": truncated}
-        return {"kind": kind, "function": None, "matched": 0, "returned": 0,
-                "truncated": truncated}
+        answer = {"kind": kind, "function": None, "matched": 0, "returned": 0,
+                  "truncated": truncated}
+        if (truncated or {}).get("functions"):
+            # "Not found" in a snapshot that was capped means "not in the part I
+            # kept", which is a weaker claim and has to be worded as one.
+            answer["reason"] = ("this snapshot keeps only the first functions it "
+                                "saw; the function may exist in the program")
+        return answer
 
     if kind == "functions":
         matches = [function for function in document.get("functions") or []
@@ -268,8 +297,13 @@ def as_diff_snapshot(document: Dict[str, Any]) -> Dict[str, Any]:
     # returned fewer functions than the program's own statistics claim (measured
     # on where.exe: 104 listed against 198 counted). Either way the comparison
     # must know, or a diff would report phantom removals.
-    complete = not capped and not (isinstance(total, int)
-                                   and total > (counts.get("functions") or 0))
+    # Complete needs a known total: with no total, a snapshot that lists
+    # nothing is indistinguishable from a snapshot of an empty program, and a
+    # diff over it would report every function of the other side as removed.
+    if not isinstance(total, int):
+        complete = False
+    else:
+        complete = not capped and total <= (counts.get("functions") or 0)
     return {
         "program": document.get("program") or {},
         "functions": document.get("functions") or [],
@@ -289,4 +323,7 @@ def diff(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
               "fingerprint": fingerprint(right), "built_at": right.get("built_at")},
     }
     report["same_binary"] = fingerprint(left) == fingerprint(right)
+    # A comparison over a snapshot that is not complete is not a complete
+    # comparison: say it once, in the report, so a reader cannot miss it.
+    report["complete"] = bool(report.get("functions", {}).get("complete", True))
     return report

@@ -71,6 +71,17 @@ final class BSimDatabase {
      */
     static Object open(String database, boolean createWhenMissing,
             Map<String, Object> data) {
+        return open(database, createWhenMissing, false, data);
+    }
+
+    /**
+     * The same, saying whether a database created here records the call graph.
+     *
+     * <p>The flag travels to {@code CreateDatabase}: claiming it in the payload
+     * while creating the database with it off was a lie the report told.
+     */
+    static Object open(String database, boolean createWhenMissing,
+            boolean trackCallGraph, Map<String, Object> data) {
         try {
             ClassLoader loader = loader();
             Class<?> serverInfoClass = Class.forName(SERVER_INFO, true, loader);
@@ -88,8 +99,9 @@ final class BSimDatabase {
                             + " (ingest a program first)");
                     return null;
                 }
-                String created = create(connection, database);
+                String created = create(connection, database, trackCallGraph);
                 if (created != null) {
+                    release(connection, database);
                     failure(data, "BSIM_CREATE_FAILED", created);
                     return null;
                 }
@@ -99,8 +111,11 @@ final class BSimDatabase {
             }
             if (!Boolean.TRUE.equals(
                     connection.getClass().getMethod("initialize").invoke(connection))) {
+                String reason = lastError(connection);
+                // An H2 handle that outlives the failure keeps the file locked.
+                release(connection, database);
                 failure(data, "BSIM_INIT_FAILED",
-                    "the signature database could not be opened: " + lastError(connection));
+                    "the signature database could not be opened: " + reason);
                 return null;
             }
             return connection;
@@ -111,14 +126,16 @@ final class BSimDatabase {
     }
 
     /** Create the database with Ghidra's own {@code CreateDatabase} command. */
-    private static String create(Object connection, String database) {
+    private static String create(Object connection, String database,
+            boolean trackCallGraph) {
         try {
             ClassLoader loader = loader();
             Class<?> infoClass = Class.forName(DATABASE_INFO, true, loader);
             Object info = infoClass.getConstructor().newInstance();
             infoClass.getField("databasename")
                 .set(info, Paths.get(database).getFileName().toString());
-            infoClass.getField("trackcallgraph").set(info, Boolean.FALSE);
+            infoClass.getField("trackcallgraph").set(info,
+                Boolean.valueOf(trackCallGraph));
 
             Class<?> commandClass = Class.forName(CREATE_DATABASE, true, loader);
             Object command = commandClass.getConstructor().newInstance();
@@ -195,6 +212,39 @@ final class BSimDatabase {
             }
         } catch (Throwable ignored) {
             // The database does not carry this list; nothing to add.
+        }
+    }
+
+    /**
+     * Close a database and dispose the shared data source it created.
+     *
+     * <p>Ghidra's own script does exactly this ("Dispose database source if it did
+     * not previously exist"): {@code close()} alone leaves the H2 pool in the
+     * manager's static map, so the file stays open for the rest of the process.
+     */
+    static void release(Object connection, String database) {
+        closeQuietly(connection);
+        try {
+            ClassLoader loader = loader();
+            Class<?> managerClass = Class.forName(
+                "ghidra.features.bsim.query.file.BSimH2FileDBConnectionManager",
+                true, loader);
+            Class<?> serverInfoClass = Class.forName(SERVER_INFO, true, loader);
+            Object serverInfo = serverInfoClass.getConstructor(String.class)
+                .newInstance(database);
+            Object source = managerClass
+                .getMethod("getDataSourceIfExists", serverInfoClass)
+                .invoke(null, serverInfo);
+            if (source == null) {
+                return;
+            }
+            Object active = source.getClass().getMethod("getActiveConnections")
+                .invoke(source);
+            if (active instanceof Number && ((Number) active).intValue() == 0) {
+                source.getClass().getMethod("dispose").invoke(source);
+            }
+        } catch (Throwable ignored) {
+            // No shared source of ours to dispose (another instance may hold it).
         }
     }
 

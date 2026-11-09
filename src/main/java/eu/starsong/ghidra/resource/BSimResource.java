@@ -53,17 +53,11 @@ public class BSimResource implements Resource {
                     "max_functions must be a number, got: " + requested);
             }
         }
-        boolean trackCallGraph = Boolean.parseBoolean(
-            ctx.ctx().queryParam("track_call_graph") == null ? "false"
-                : ctx.ctx().queryParam("track_call_graph").trim());
+        boolean trackCallGraph = flag(ctx, "track_call_graph", false);
         java.util.Map<String, Object> data =
             BSimIngestService.ingest(ctx.program(), maxFunctions, trackCallGraph);
-        ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
-            .self(requested == null ? "/bsim/ingest"
-                : "/bsim/ingest?max_functions=" + maxFunctions)
-            .link("status", "/bsim/status")
-            .link("capabilities", "/capabilities")
-            .build());
+        respond(ctx, data, requested == null ? "/bsim/ingest"
+            : "/bsim/ingest?max_functions=" + maxFunctions);
     }
 
     /**
@@ -83,11 +77,7 @@ public class BSimResource implements Resource {
             ctx.program(), ctx.ctx().queryParam("address"),
             ctx.ctx().queryParam("name"), maxMatches, minSimilarity,
             minSignificance);
-        ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
-            .self("/bsim/query")
-            .link("status", "/bsim/status")
-            .link("ingest", "/bsim/ingest")
-            .build());
+        respond(ctx, data, "/bsim/query");
     }
 
     /**
@@ -101,17 +91,12 @@ public class BSimResource implements Resource {
     private void applyNames(GhidraContext ctx) {
         double minSimilarity = parseDouble(ctx, "min_similarity",
             BSimApplyService.MIN_APPLY_SIMILARITY);
-        boolean dryRun = Boolean.parseBoolean(
-            ctx.ctx().queryParam("dry_run") == null ? "true"
-                : ctx.ctx().queryParam("dry_run").trim());
+        // Default true: the caller has to ask for the rename.
+        boolean dryRun = flag(ctx, "dry_run", true);
         java.util.Map<String, Object> data = BSimApplyService.apply(
             ctx.program(), ctx.ctx().queryParam("address"),
             ctx.ctx().queryParam("name"), minSimilarity, dryRun);
-        ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
-            .self("/bsim/apply-names")
-            .link("query", "/bsim/query")
-            .link("ingest", "/bsim/ingest")
-            .build());
+        respond(ctx, data, "/bsim/apply-names");
     }
 
     /**
@@ -128,11 +113,178 @@ public class BSimResource implements Resource {
         java.util.Map<String, Object> data = BSimDiffService.diff(
             ctx.program(), ctx.ctx().queryParam("other_executable"),
             maxFunctions, minSimilarity);
+        respond(ctx, data, "/bsim/diff");
+    }
+
+    /**
+     * Send a payload as a success or as a failure, consistently.
+     *
+     * <p>A BSim service reports its own failures in the payload (`success: false`
+     * with a `code` and a `reason`) because a missing engine or function is a
+     * normal state, not an exception. The envelope has to say the same thing: the
+     * bridge and the CLI branch on it, and wrapping a failure in `Response.ok`
+     * made every failed ingest read as "inserted 0 functions".
+     */
+    private void respond(GhidraContext ctx, java.util.Map<String, Object> data,
+            String self) {
+        Object code = data.get("code");
+        Object reason = data.get("reason");
+        if (Boolean.FALSE.equals(data.get("success")) && code != null) {
+            failure(ctx, self, String.valueOf(code),
+                reason == null ? "the operation did not complete"
+                    : String.valueOf(reason));
+            return;
+        }
         ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
-            .self("/bsim/diff")
-            .link("query", "/bsim/query")
-            .link("ingest", "/bsim/ingest")
+            .self(self)
+            .link("status", "/bsim/status")
+            .link("capabilities", "/capabilities")
             .build());
+    }
+
+    /**
+     * Send one BSim failure, with the code written out at its call site.
+     *
+     * <p>A guard in `test_errors.py` requires every `Response.error` to carry a
+     * literal code: a code assembled at runtime cannot be reviewed, and the client
+     * branches on it. So each code this surface can answer with has its own branch
+     * — which also makes the status each one deserves visible in one place.
+     */
+    private void failure(GhidraContext ctx, String self, String code, String reason) {
+        switch (code) {
+            case "BSIM_DISABLED":
+                ctx.status(503);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_DISABLED", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_NO_DATABASE":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_NO_DATABASE", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_NO_PROGRAM":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_NO_PROGRAM", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_NO_FUNCTION":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_NO_FUNCTION", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_NO_BODY":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_NO_BODY", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_NO_TARGET":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_NO_TARGET", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_NO_MATCH":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_NO_MATCH", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_NO_NAME":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_NO_NAME", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_BELOW_THRESHOLD":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_BELOW_THRESHOLD", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_RENAME_REFUSED":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_RENAME_REFUSED", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_CREATE_FAILED":
+                ctx.status(409);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_CREATE_FAILED", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_INIT_FAILED":
+                ctx.status(409);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_INIT_FAILED", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_INSERT_FAILED":
+                ctx.status(500);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_INSERT_FAILED", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_SCAN_FAILED":
+                ctx.status(500);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_SCAN_FAILED", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_QUERY_FAILED":
+                ctx.status(500);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_QUERY_FAILED", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_RENAME_FAILED":
+                ctx.status(500);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_RENAME_FAILED", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_INGEST_FAILED":
+                ctx.status(500);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_INGEST_FAILED", reason)
+                    .self(self)
+                    .build());
+                return;
+            default:
+                ctx.status(500);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_INGEST_FAILED",
+                        reason)
+                    .self(self)
+                    .build());
+        }
+    }
+
+    /**
+     * A strict boolean query parameter.
+     *
+     * <p>`Boolean.parseBoolean` answers `false` for anything that is not "true" —
+     * including an empty value, "1" and "yes" — so a lenient parse of `dry_run`
+     * silently **applies** a rename. Only the two words are accepted, and anything
+     * else is a bad request.
+     */
+    private static boolean flag(GhidraContext ctx, String name, boolean fallback) {
+        String raw = ctx.ctx().queryParam(name);
+        if (raw == null) {
+            return fallback;
+        }
+        String value = raw.trim().toLowerCase();
+        if (value.equals("true")) {
+            return true;
+        }
+        if (value.equals("false")) {
+            return false;
+        }
+        throw new IllegalArgumentException(
+            name + " must be true or false, got: " + raw);
     }
 
     private static int parseInt(GhidraContext ctx, String name, int fallback) {
@@ -155,7 +307,11 @@ public class BSimResource implements Resource {
             return fallback;
         }
         try {
-            return Double.parseDouble(raw.trim());
+            double parsed = Double.parseDouble(raw.trim());
+            if (Double.isNaN(parsed) || Double.isInfinite(parsed)) {
+                throw new NumberFormatException("not a finite number");
+            }
+            return parsed;
         } catch (NumberFormatException bad) {
             throw new IllegalArgumentException(
                 name + " must be a number, got: " + raw);

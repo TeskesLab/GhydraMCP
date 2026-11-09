@@ -131,7 +131,14 @@ def dossier(goal: str, mission_id: str, program: Dict[str, Any],
                      f"confidence: `{finding.get('confidence')}`  "
                      f"status: `{finding.get('status')}`")
         if finding.get("detail"):
-            lines.extend(["", "```", str(finding["detail"])[:2000], "```"])
+            detail = str(finding["detail"])
+            # The dossier is the evidence: a silent cut would hide the part that
+            # might matter.
+            cut = len(detail) > 2000
+            lines.extend(["", "```", detail[:2000], "```"])
+            if cut:
+                lines.append(f"_(detail truncated to 2000 of {len(detail)} "
+                             f"characters)_")
         for item in finding.get("evidence") or []:
             lines.append(f"- evidence: `{item.get('endpoint')}` "
                          f"(digest `{(item.get('digest') or '')[:16]}`)")
@@ -144,6 +151,11 @@ def dossier(goal: str, mission_id: str, program: Dict[str, Any],
         if verification.get("unverified"):
             lines.append(f"- **unverified: {', '.join(verification['unverified'])}** "
                          f"(their evidence moved or could not be re-read)")
+        elif not verification.get("checked"):
+            # Nothing was re-read: "every conclusion still holds" would be a
+            # statement about evidence nobody looked at.
+            lines.append("- no evidence item was re-read, so no conclusion was "
+                         "verified")
         else:
             lines.append("- every conclusion still holds against its evidence")
         lines.append("")
@@ -151,7 +163,13 @@ def dossier(goal: str, mission_id: str, program: Dict[str, Any],
     unknowns = [item for item in findings
                 if item.get("status") == STATUS_UNKNOWN]
     lines.extend(["## Not determined", ""])
-    if not unknowns:
+    if not unknowns and failed:
+        # A mission that stopped did not determine everything: saying "nothing
+        # was left undetermined" there is the opposite of what happened.
+        lines.append(f"_The mission stopped before it could answer: {failed}_")
+    elif not unknowns and not findings:
+        lines.append("_No question was answered, so nothing is undetermined yet._")
+    elif not unknowns:
         lines.append("_Nothing was left undetermined._")
     for item in unknowns:
         lines.append(f"- {item['id']}: {item['title']} — "

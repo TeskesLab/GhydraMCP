@@ -1039,8 +1039,30 @@ class MissionCoreTests(unittest.TestCase):
     def test_an_empty_mission_says_so_instead_of_showing_nothing(self):
         text = self._dossier(findings=[], verification=None)
         self.assertIn("_No finding was recorded._", text)
-        self.assertIn("_Nothing was left undetermined._", text)
+        # Nothing was answered, so "nothing is undetermined" would be a claim
+        # about a question nobody asked.
+        self.assertIn("No question was answered", text)
         self.assertNotIn("## Verification", text)
+
+    def test_a_stopped_mission_does_not_claim_completeness(self):
+        text = self._dossier(findings=[],
+                             failed="the call budget (3) is spent",
+                             verification=None)
+        self.assertIn("The mission stopped before it could answer", text)
+        self.assertNotIn("_Nothing was left undetermined._", text)
+
+    def test_verification_without_a_reread_claims_nothing(self):
+        text = self._dossier(verification={"checked": 0, "verified": 0,
+                                           "unverified": []})
+        self.assertIn("no evidence item was re-read", text)
+        self.assertNotIn("every conclusion still holds", text)
+
+    def test_a_truncated_detail_says_it_was_cut(self):
+        text = self._dossier(findings=[{
+            "id": "F1", "title": "long", "kind": "k", "confidence": "low",
+            "status": "verified", "detail": "x" * 2500, "evidence": []}],
+            verification=None)
+        self.assertIn("detail truncated to 2000 of 2500 characters", text)
 
     def test_a_stopped_mission_says_why_and_what_was_skipped(self):
         text = self._dossier(failed="the call budget (3) is spent",

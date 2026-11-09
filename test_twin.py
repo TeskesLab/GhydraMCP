@@ -207,6 +207,107 @@ class CliTests(unittest.TestCase):
         self.assertEqual({"overview", "functions", "function", "imports",
                           "exports", "strings"}, set(kind.type.choices))
 
+class ReviewRegressionTests(unittest.TestCase):
+    """The ways a snapshot could claim something it did not know."""
+
+    def setUp(self):
+        self.directory = tempfile.mkdtemp(prefix="ghydra-twin-review-")
+
+    def tearDown(self):
+        shutil.rmtree(self.directory, ignore_errors=True)
+
+    def test_a_bare_filename_can_be_written(self):
+        """`--output twin.json` used to raise on makedirs("")."""
+        previous = os.getcwd()
+        os.chdir(self.directory)
+        try:
+            written = twin.save(snapshot(), "twin.json")
+        finally:
+            os.chdir(previous)
+        self.assertTrue(os.path.exists(os.path.join(self.directory, "twin.json")))
+        self.assertEqual("twin.json", os.path.basename(written))
+
+    def test_a_snapshot_is_found_by_its_name(self):
+        """`twin build --name x` writes to the state dir; `twin query x` finds it."""
+        document = snapshot(name="by-name")
+        path = twin.twin_path("by-name")
+        twin.save(document, path)
+        try:
+            self.assertEqual(path, twin.resolve_path("by-name"))
+            self.assertEqual(path, twin.resolve_path(path))
+        finally:
+            os.unlink(path)
+
+    def test_an_unknown_name_stays_the_name(self):
+        self.assertEqual("no-such-twin",
+                         twin.resolve_path("no-such-twin"))
+
+    def test_a_function_records_its_parameter_count_not_an_empty_list(self):
+        """The listing has parameterCount, not the parameters themselves."""
+        document = snapshot(functions=[
+            {"name": "f", "address": "0x1", "parameterCount": 2}])
+        self.assertEqual(2, document["functions"][0]["parameterCount"]
+                         if "parameterCount" in document["functions"][0]
+                         else None)
+        # the builder is exercised through a fake client, in the test below
+
+    def test_missing_total_means_not_complete(self):
+        without_total = snapshot(counts={"functions": 0, "imports": 0,
+                                         "exports": 0, "strings": 0})
+        self.assertFalse(twin.as_diff_snapshot(without_total)["functions_complete"])
+
+    def test_the_diff_reports_its_completeness(self):
+        complete = twin.diff(snapshot(), snapshot())
+        self.assertTrue(complete["complete"])
+        capped = snapshot(truncated={"functions": True, "strings": False})
+        self.assertFalse(twin.diff(capped, snapshot())["complete"])
+
+    def test_a_miss_in_a_capped_snapshot_is_worded_as_such(self):
+        capped = snapshot(truncated={"functions": True, "strings": False})
+        answer = twin.query(capped, "function", "0xdead")
+        self.assertIsNone(answer["function"])
+        self.assertIn("may exist", answer["reason"])
+
+    def test_a_miss_in_a_complete_snapshot_makes_no_such_claim(self):
+        answer = twin.query(snapshot(), "function", "0xdead")
+        self.assertNotIn("reason", answer)
+
+
+class BuildFromClientTests(unittest.TestCase):
+    """`twin.build` against a fake client: the fields it must not invent."""
+
+    class FakeClient:
+        base_url = "http://fake:8192"
+
+        def __init__(self, pages):
+            self.pages = pages
+
+        def get(self, endpoint, params=None):
+            params = params or {}
+            items = self.pages.get(endpoint, [])
+            offset = int(params.get("offset", 0))
+            limit = int(params.get("limit", 1000))
+            if endpoint == "program":
+                # /program answers one object, not a page.
+                return {"success": True, "result": items[0]}
+            return {"success": True, "result": items[offset:offset + limit]}
+
+    def test_the_snapshot_records_parameter_count_and_md5(self):
+        client = self.FakeClient({
+            "program": [{"name": "a.exe", "path": "/tmp/a.exe",
+                         "executableMd5": "f" * 32,
+                         "statistics": {"functionCount": 1}}],
+            "functions": [{"name": "main", "address": "0x401000",
+                           "parameterCount": 3, "returnType": "int"}],
+            "symbols/imports": [{"name": "CreateFileW"}],
+            "symbols/exports": [],
+            "strings": [{"value": "/api/v1"}],
+        })
+        document = twin.build(client, name="fake")
+        self.assertEqual("f" * 32, document["program"]["md5"])
+        self.assertEqual(3, document["functions"][0]["parameter_count"])
+        self.assertEqual(["CreateFileW"], document["imports"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

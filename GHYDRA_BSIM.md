@@ -83,8 +83,9 @@ database: C:\...\where.bsim (created)     # 120 KB .mv.db
 - **Ingesting the same program again is not an error.** BSim deduplicates by the
   executable fingerprint: the answer is `success: true, already_present: true,
   inserted_functions: 0`. A pipeline that treated that as failure would be wrong.
-- **The call graph is off by default.** See the traps below — this is the most
-  important decision in this document.
+- **The call graph is off by default** — a query does not need it and it makes the
+  database bigger. With `--track-call-graph` it works (measured: 189 functions for
+  `where.exe`); the trap below explains the bug that used to make it fail.
 
 To build a corpus, ingest each binary in turn (headless runs are the cheap way):
 
@@ -199,12 +200,15 @@ database, every function answered `not_found` rather than an invented pair.
 
 ## 7. The traps (all measured, all now encoded)
 
-1. **`trackcallgraph=true` breaks the insert.** A database created with it rejects
-   the insert with `Unique index violation … callgraphtable(src,dest)` on ordinary
-   recursion. The signature tables are what a query needs, so the default is
-   `false`; turning it on is an explicit request. Ghidra's own
-   `AddProgramToH2BSimDatabaseScript` only reports the error — it does not work
-   around it.
+1. **The call graph needs the records sorted — it is not a limit of H2.** The
+   insert used to fail with `Unique index violation … callgraphtable(src,dest)` on
+   ordinary recursion, and the first conclusion (recorded here) was "H2 cannot
+   take call graphs". It was ours: Ghidra's own script sorts every function's
+   call-graph records before the insert
+   (`listAllFunctions().forEachRemaining(fd -> fd.sortCallgraph())`), and without
+   that sort the records collide. With the sort, a call-graph database ingests
+   `where.exe` completely (189 functions). The default stays off because a query
+   does not need it.
 2. **`initialize()` does not create an H2 database.** On a missing file it answers
    `Database does not exist: …mv.db`. Ingest therefore creates it first, with
    Ghidra's `CreateDatabase` command and the `medium_nosize` template, and only
