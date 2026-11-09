@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra.core import digest as core  # noqa: E402
 from ghydra.core import cache as cache_core  # noqa: E402
+from ghydra.core import diff as diff_core  # noqa: E402
 from ghydra.core import hints as hints_core  # noqa: E402
 from ghydra.core import runbook as runbook_core  # noqa: E402
 from scripts import gen_core  # noqa: E402
@@ -402,6 +403,72 @@ class GeneratorGuardTests(unittest.TestCase):
         for module in gen_core.CORE_MODULES:
             with self.subTest(module=module):
                 self.assertTrue(gen_core._region(module).startswith("# >>> generated"))
+
+class DiffCoreTests(unittest.TestCase):
+    """The comparison lives once, in the core, and both surfaces use it."""
+
+    def _pair(self):
+        a = {"program": {"name": "a.exe"},
+             "functions": [{"address": "0x1", "name": "main"},
+                           {"address": "0x2", "name": "gone"}],
+             "imports": ["A", "B"], "strings": ["s1"],
+             "functions_complete": True}
+        b = {"program": {"name": "b.exe"},
+             "functions": [{"address": "0x1", "name": "entry"},
+                           {"address": "0x3", "name": "new"}],
+             "imports": ["A", "C"], "strings": ["s1", "s2"],
+             "functions_complete": True}
+        return a, b
+
+    def test_the_comparison_agrees(self):
+        a, b = self._pair()
+        self.assertEqual(diff_core.diff_snapshots(a, b),
+                         bridge._core_diff_snapshots(a, b))
+
+    def test_a_rename_is_not_an_add_plus_a_remove(self):
+        a, b = self._pair()
+        report = diff_core.diff_snapshots(a, b)
+        self.assertEqual(1, len(report["functions"]["renamed"]))
+        self.assertEqual("main", report["functions"]["renamed"][0]["from"])
+        self.assertEqual("entry", report["functions"]["renamed"][0]["to"])
+        self.assertEqual(["0x3"], [fn["address"] for fn in report["functions"]["added"]])
+        self.assertEqual(["0x2"], [fn["address"] for fn in report["functions"]["removed"]])
+
+    def test_names_are_compared_as_sets(self):
+        report = diff_core.diff_snapshots({"imports": ["A", "A", ""]},
+                                          {"imports": ["A"]})
+        self.assertFalse(report["changed"])
+        self.assertEqual(1, report["imports"]["count_a"])
+
+    def test_the_program_fingerprint_is_compared(self):
+        a, b = self._pair()
+        self.assertTrue(diff_core.diff_snapshots(a, b)["program_changed"])
+
+    def test_the_complete_flag_needs_both_sides(self):
+        report = diff_core.diff_snapshots({"functions_complete": False},
+                                          {"functions_complete": True})
+        self.assertFalse(report["functions"]["complete"])
+
+    def test_the_summary_counts_every_section(self):
+        a, b = self._pair()
+        summary = diff_core.diff_snapshots(a, b)["summary"]
+        self.assertEqual(1, summary["functions_added"])
+        self.assertEqual(1, summary["functions_removed"])
+        self.assertEqual(1, summary["functions_renamed"])
+        self.assertEqual(1, summary["imports_added"])
+        self.assertEqual(1, summary["imports_removed"])
+        self.assertEqual(1, summary["strings_added"])
+
+    def test_the_bridge_delegates_both_helpers(self):
+        a, b = self._pair()
+        self.assertEqual(diff_core.diff_names({"A"}, {"B"}),
+                         bridge._diff_names({"A"}, {"B"}))
+        self.assertEqual(diff_core.diff_snapshots(a, b),
+                         bridge._diff_snapshots(a, b))
+
+    def test_the_program_fields_come_from_the_core(self):
+        self.assertEqual(diff_core.PROGRAM_FIELDS, bridge._CORE_DIFF_PROGRAM_FIELDS)
+        self.assertIs(bridge._DIFF_PROGRAM_FIELDS, bridge._CORE_DIFF_PROGRAM_FIELDS)
 
 
 if __name__ == "__main__":

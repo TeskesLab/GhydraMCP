@@ -21,10 +21,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from .core import diff as core_diff
+
 PAGE_LIMIT = 1000
 MAX_PAGES = 20
 
-PROGRAM_FIELDS = ("name", "executable_path", "image_base", "language", "compiler")
+#: Defined once, in the core (I1).
+PROGRAM_FIELDS = core_diff.PROGRAM_FIELDS
 
 
 def _get(client, endpoint: str, params: Dict[str, Any] | None = None) -> Any:
@@ -116,58 +119,22 @@ def imports_page_names(page: Dict[str, Any]) -> List[str]:
 
 
 def _sets(values: List[str]) -> set:
-    return {value for value in values if value}
+    """Delegates to the core (I1)."""
+    return core_diff.name_set(values)
 
 
 def diff_snapshots(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
-    """What changed between two snapshots, section by section."""
-    # ---- functions, by address -------------------------------------------
-    by_addr_a = {fn["address"]: fn for fn in a.get("functions") or [] if fn.get("address")}
-    by_addr_b = {fn["address"]: fn for fn in b.get("functions") or [] if fn.get("address")}
-    added, removed, renamed = [], [], []
-    for address, fn in sorted(by_addr_b.items()):
-        if address not in by_addr_a:
-            added.append({"address": address, "name": fn.get("name")})
-        elif fn.get("name") != by_addr_a[address].get("name"):
-            renamed.append({"address": address,
-                            "from": by_addr_a[address].get("name"),
-                            "to": fn.get("name")})
-    for address, fn in sorted(by_addr_a.items()):
-        if address not in by_addr_b:
-            removed.append({"address": address, "name": fn.get("name")})
+    """What changed between two snapshots, section by section.
 
-    # ---- imports and strings, by name ------------------------------------
-    imports = _diff_names(_sets(a.get("imports") or []), _sets(b.get("imports") or []))
-    strings = _diff_names(_sets(a.get("strings") or []), _sets(b.get("strings") or []))
-
-    result = {
-        "program": {"a": a.get("program") or {}, "b": b.get("program") or {}},
-        "program_changed": (a.get("program") or {}) != (b.get("program") or {}),
-        "functions": {
-            "added": added, "removed": removed, "renamed": renamed,
-            "count_a": len(by_addr_a), "count_b": len(by_addr_b),
-            "complete": bool(a.get("functions_complete", True))
-                        and bool(b.get("functions_complete", True)),
-        },
-        "imports": imports,
-        "strings": strings,
-    }
-    result["changed"] = bool(
-        added or removed or renamed or imports["added"] or imports["removed"]
-        or strings["added"] or strings["removed"] or result["program_changed"])
-    result["summary"] = {
-        "functions_added": len(added), "functions_removed": len(removed),
-        "functions_renamed": len(renamed),
-        "imports_added": len(imports["added"]), "imports_removed": len(imports["removed"]),
-        "strings_added": len(strings["added"]), "strings_removed": len(strings["removed"]),
-        "program_changed": result["program_changed"],
-    }
-    return result
+    Delegates to the core (I1): the bridge compares with the same function, so
+    the two surfaces cannot report different changes for the same pair.
+    """
+    return core_diff.diff_snapshots(a, b)
 
 
 def _diff_names(before: set, after: set) -> Dict[str, Any]:
-    return {"added": sorted(after - before), "removed": sorted(before - after),
-            "count_a": len(before), "count_b": len(after)}
+    """Delegates to the core (I1)."""
+    return core_diff.diff_names(before, after)
 
 
 def to_text(report: Dict[str, Any]) -> str:

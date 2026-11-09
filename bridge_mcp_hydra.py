@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.13.0"
+BRIDGE_VERSION = "v3.14.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1208,6 +1208,61 @@ def _core_cache_key(identity, kind, request):
     """
     return _core_digest({'version': _CORE_CACHE_VERSION, 'kind': kind, 'program': identity, 'request': request})
 # <<< end generated from ghydra/core/cache.py
+
+
+# >>> generated from ghydra/core/diff.py (668f5590de331024) — edit the core, then run scripts/gen_core.py
+_CORE_DIFF_PROGRAM_FIELDS = ('name', 'executable_path', 'image_base', 'language', 'compiler')
+
+def _core_diff_name_set(values):
+    """The non-empty names of a listing, as a set (order and repeats are noise)."""
+    return {value for value in values if value}
+
+def _core_diff_names(before, after):
+    """The names added and removed between two sets.
+
+    Args:
+        before: The names of the first snapshot.
+        after: The names of the second one.
+
+    Returns:
+        dict: ``added`` and ``removed`` (sorted, so the answer is stable) plus
+              both counts.
+    """
+    return {'added': sorted(after - before), 'removed': sorted(before - after), 'count_a': len(before), 'count_b': len(after)}
+
+def _core_diff_snapshots(a, b):
+    """What changed between two snapshots, section by section.
+
+    Args:
+        a: The first snapshot: ``program``, ``functions``, ``imports``,
+           ``strings`` and the ``*_complete`` flags.
+        b: The second one, in the same shape.
+
+    Returns:
+        dict: ``functions`` (added/removed/renamed, with counts and whether both
+              listings were complete), ``imports``, ``strings``,
+              ``program_changed``, ``changed`` and a ``summary`` of counts.
+    """
+    by_addr_a = {fn['address']: fn for fn in a.get('functions') or [] if fn.get('address')}
+    by_addr_b = {fn['address']: fn for fn in b.get('functions') or [] if fn.get('address')}
+    added: List[Dict[str, Any]] = []
+    removed: List[Dict[str, Any]] = []
+    renamed: List[Dict[str, Any]] = []
+    for address, fn in sorted(by_addr_b.items()):
+        if address not in by_addr_a:
+            added.append({'address': address, 'name': fn.get('name')})
+        elif fn.get('name') != by_addr_a[address].get('name'):
+            renamed.append({'address': address, 'from': by_addr_a[address].get('name'), 'to': fn.get('name')})
+    for address, fn in sorted(by_addr_a.items()):
+        if address not in by_addr_b:
+            removed.append({'address': address, 'name': fn.get('name')})
+    imports = _core_diff_names(_core_diff_name_set(a.get('imports') or []), _core_diff_name_set(b.get('imports') or []))
+    strings = _core_diff_names(_core_diff_name_set(a.get('strings') or []), _core_diff_name_set(b.get('strings') or []))
+    result: Dict[str, Any] = {'program': {'a': a.get('program') or {}, 'b': b.get('program') or {}}, 'program_changed': (a.get('program') or {}) != (b.get('program') or {}), 'functions': {'added': added, 'removed': removed, 'renamed': renamed, 'count_a': len(by_addr_a), 'count_b': len(by_addr_b), 'complete': bool(a.get('functions_complete', True)) and bool(b.get('functions_complete', True))}, 'imports': imports, 'strings': strings}
+    result['changed'] = bool(added or removed or renamed or imports['added'] or imports['removed'] or strings['added'] or strings['removed'] or result['program_changed'])
+    result['summary'] = {'functions_added': len(added), 'functions_removed': len(removed), 'functions_renamed': len(renamed), 'imports_added': len(imports['added']), 'imports_removed': len(imports['removed']), 'strings_added': len(strings['added']), 'strings_removed': len(strings['removed']), 'program_changed': result['program_changed']}
+    return result
+# <<< end generated from ghydra/core/diff.py
 
 
 def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
@@ -11357,7 +11412,8 @@ RUNBOOK_VERSION = 1
 _RUNBOOK_VOLATILE_KEYS = ("id", "timestamp", "instance", "_links", "api_links")
 _DIFF_PAGE_LIMIT = 1000
 _DIFF_MAX_PAGES = 20
-_DIFF_PROGRAM_FIELDS = ("name", "executable_path", "image_base", "language", "compiler")
+#: Defined once, in the core (I1).
+_DIFF_PROGRAM_FIELDS = _CORE_DIFF_PROGRAM_FIELDS
 
 
 def _runbook_canonical(value: Any) -> str:
@@ -11577,47 +11633,13 @@ def _diff_collect(port: int, include_strings: bool = True) -> dict:
 
 
 def _diff_names(before: set, after: set) -> dict:
-    return {"added": sorted(after - before), "removed": sorted(before - after),
-            "count_a": len(before), "count_b": len(after)}
+    """Delegates to the generated core (I1)."""
+    return _core_diff_names(before, after)
 
 
 def _diff_snapshots(a: dict, b: dict) -> dict:
-    by_addr_a = {fn["address"]: fn for fn in a.get("functions") or [] if fn.get("address")}
-    by_addr_b = {fn["address"]: fn for fn in b.get("functions") or [] if fn.get("address")}
-    added, removed, renamed = [], [], []
-    for address, fn in sorted(by_addr_b.items()):
-        if address not in by_addr_a:
-            added.append({"address": address, "name": fn.get("name")})
-        elif fn.get("name") != by_addr_a[address].get("name"):
-            renamed.append({"address": address,
-                            "from": by_addr_a[address].get("name"),
-                            "to": fn.get("name")})
-    for address, fn in sorted(by_addr_a.items()):
-        if address not in by_addr_b:
-            removed.append({"address": address, "name": fn.get("name")})
-    imports = _diff_names({v for v in (a.get("imports") or []) if v},
-                          {v for v in (b.get("imports") or []) if v})
-    strings = _diff_names({v for v in (a.get("strings") or []) if v},
-                          {v for v in (b.get("strings") or []) if v})
-    result = {
-        "program": {"a": a.get("program") or {}, "b": b.get("program") or {}},
-        "program_changed": (a.get("program") or {}) != (b.get("program") or {}),
-        "functions": {"added": added, "removed": removed, "renamed": renamed,
-                      "count_a": len(by_addr_a), "count_b": len(by_addr_b),
-                      "complete": bool(a.get("functions_complete", True))
-                                  and bool(b.get("functions_complete", True))},
-        "imports": imports, "strings": strings,
-    }
-    result["changed"] = bool(added or removed or renamed or imports["added"]
-                             or imports["removed"] or strings["added"]
-                             or strings["removed"] or result["program_changed"])
-    result["summary"] = {
-        "functions_added": len(added), "functions_removed": len(removed),
-        "functions_renamed": len(renamed),
-        "imports_added": len(imports["added"]), "imports_removed": len(imports["removed"]),
-        "strings_added": len(strings["added"]), "strings_removed": len(strings["removed"]),
-        "program_changed": result["program_changed"]}
-    return result
+    """Delegates to the generated core (I1): one comparison, two surfaces."""
+    return _core_diff_snapshots(a, b)
 
 
 @mcp.tool()

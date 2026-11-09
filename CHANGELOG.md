@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The snapshot comparison into the single core (I1, slice 4)**:
+  `ghydra/core/diff.py` owns what "what changed?" means — a function is
+  identified by its address (a rename is not an add plus a remove), imports and
+  strings are compared as sets of names (order, repeats and empty values are
+  noise), and a section is only complete when *both* listings were read to their
+  end. `analysis_diff` and the mission both use it through one function, and the
+  bridge delegates to the generated copy. The step also cost a lesson worth
+  recording: an anchor that ended at "the next `def`" swallowed the three
+  runbook tools that live after the function, which the runbook suite caught at
+  once (`runbook_record` no longer registered). The splice now ends at the next
+  tool decorator, and the suites that assert tool registration are the guard
+  against repeating it.
 - **`examples/`: reverse engineering as a CI test**: the smallest useful
   example of the thing a pipeline can gate on — `examples/asserts.json` (eight
   assertions covering every kind, each with the `message` that explains *why* it
