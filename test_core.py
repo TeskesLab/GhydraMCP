@@ -17,11 +17,13 @@ import os
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra.core import digest as core  # noqa: E402
+from ghydra.core import cache as cache_core  # noqa: E402
 from ghydra.core import hints as hints_core  # noqa: E402
 from ghydra.core import runbook as runbook_core  # noqa: E402
 from scripts import gen_core  # noqa: E402
@@ -275,6 +277,131 @@ class HintsCoreTests(unittest.TestCase):
                          hints_core.parse_goal("does data from recv reach system?"))
         self.assertEqual({"source": "ReadFile", "sink": "WinExec"},
                          hints_core.parse_goal("de ReadFile até WinExec"))
+
+class CacheCoreTests(unittest.TestCase):
+    """The cache key and the program identity live once, in the core."""
+
+    PROGRAM = {
+        "programId": "proj:/a.exe", "path": "/tmp/a.exe",
+        "language": "x86:LE:64:default", "imageBase": "0x400000",
+        "creationDate": "Mon Jan 01 2024",
+        "statistics": {"functionCount": 10, "symbolCount": 20,
+                       "memoryBlockCount": 4, "notAKey": 1},
+        "ignored": "not part of the identity",
+    }
+
+    def test_the_identity_agrees(self):
+        self.assertEqual(cache_core.identity_from_program(self.PROGRAM),
+                         bridge._core_cache_identity(self.PROGRAM))
+
+    def test_the_identity_keeps_the_statistics_and_drops_the_rest(self):
+        identity = cache_core.identity_from_program(self.PROGRAM)
+        self.assertEqual(10, identity["statistics"]["functionCount"])
+        self.assertNotIn("notAKey", identity["statistics"])
+        self.assertNotIn("ignored", identity)
+
+    def test_a_program_that_is_not_a_dict_has_no_identity(self):
+        for value in (None, [], "x", 7):
+            with self.subTest(value=value):
+                self.assertEqual({}, cache_core.identity_from_program(value))
+                self.assertEqual({}, bridge._core_cache_identity(value))
+
+    def test_the_key_agrees(self):
+        identity = cache_core.identity_from_program(self.PROGRAM)
+        request = {"endpoint": "functions/0x1/decompile",
+                   "params": {"style": "normalize"}}
+        self.assertEqual(cache_core.cache_key(identity, "decompile", request),
+                         bridge._core_cache_key(identity, "decompile", request))
+
+    def test_a_different_program_is_a_different_key(self):
+        base = cache_core.identity_from_program(self.PROGRAM)
+        other = dict(base, programId="proj:/b.exe")
+        self.assertNotEqual(cache_core.cache_key(base, "decompile", {}),
+                            cache_core.cache_key(other, "decompile", {}))
+
+    def test_an_edited_program_is_a_different_key(self):
+        base = cache_core.identity_from_program(self.PROGRAM)
+        edited = cache_core.identity_from_program(dict(
+            self.PROGRAM, statistics={"symbolCount": 21}))
+        self.assertNotEqual(cache_core.cache_key(base, "decompile", {}),
+                            cache_core.cache_key(edited, "decompile", {}))
+
+    def test_a_different_question_is_a_different_key(self):
+        identity = cache_core.identity_from_program(self.PROGRAM)
+        self.assertNotEqual(cache_core.cache_key(identity, "decompile", {"page": 1}),
+                            cache_core.cache_key(identity, "decompile", {"page": 2}))
+
+
+class CacheDelegationTests(unittest.TestCase):
+    """The bridge delegates; the constants have one source."""
+
+    def test_the_bridge_key_is_the_core_key(self):
+        identity = {"programId": "p"}
+        request = {"endpoint": "x"}
+        self.assertEqual(bridge._core_cache_key(identity, "decompile", request),
+                         bridge._cache_key(identity, "decompile", request))
+
+    def test_the_version_constant_comes_from_the_core(self):
+        self.assertEqual(bridge._CORE_CACHE_VERSION, bridge._CACHE_VERSION)
+        self.assertEqual(cache_core.CACHE_VERSION, bridge._CORE_CACHE_VERSION)
+
+    def test_the_field_tuples_come_from_the_core(self):
+        self.assertEqual(cache_core.IDENTITY_FIELDS, bridge._CORE_CACHE_IDENTITY_FIELDS)
+        self.assertEqual(cache_core.STATISTIC_FIELDS, bridge._CORE_CACHE_STATISTIC_FIELDS)
+        self.assertIs(bridge._CACHE_IDENTITY_FIELDS, bridge._CORE_CACHE_IDENTITY_FIELDS)
+        self.assertIs(bridge._CACHE_STATISTIC_FIELDS, bridge._CORE_CACHE_STATISTIC_FIELDS)
+
+    def test_the_bridge_keeps_no_second_copy_of_the_identity_fields(self):
+        text = _bridge_text()
+        self.assertEqual(1, text.count('"programId", "path", "executablePath"'))
+
+
+class GeneratorGuardTests(unittest.TestCase):
+    """The generator refuses a region that would be a NameError at import."""
+
+    def test_the_bridge_imports_are_known(self):
+        available = gen_core._bridge_imports()
+        for name in ("json", "hashlib", "re", "os", "time"):
+            with self.subTest(name=name):
+                self.assertIn(name, available)
+
+    def test_an_import_the_bridge_lacks_is_reported(self):
+        with mock.patch.object(gen_core, "_imported_names",
+                               return_value={"mystery"}), \
+                mock.patch.object(gen_core, "_bridge_imports",
+                                  return_value={"json"}), \
+                mock.patch.dict(gen_core.CORE_RENAMES,
+                                {"ghydra/core/digest.py": {}}):
+            unresolved = gen_core._unresolved_imports(
+                "ghydra/core/digest.py",
+                "def f():\n    return mystery(1)\n")
+        self.assertEqual({"mystery"}, unresolved)
+
+    def test_an_import_the_bridge_has_is_allowed(self):
+        with mock.patch.object(gen_core, "_imported_names",
+                               return_value={"json"}), \
+                mock.patch.object(gen_core, "_bridge_imports",
+                                  return_value={"json"}), \
+                mock.patch.dict(gen_core.CORE_RENAMES,
+                                {"ghydra/core/digest.py": {}}):
+            self.assertEqual(set(), gen_core._unresolved_imports(
+                "ghydra/core/digest.py",
+                "def f(v):\n    return json.dumps(v)\n"))
+
+    def test_a_renamed_import_is_allowed(self):
+        with mock.patch.object(gen_core, "_imported_names",
+                               return_value={"digest"}), \
+                mock.patch.object(gen_core, "_bridge_imports",
+                                  return_value=set()), \
+                mock.patch.dict(gen_core.CORE_RENAMES,
+                                {"ghydra/core/digest.py": {"digest": "_core_digest"}}):
+            self.assertEqual(set(), gen_core._unresolved_imports(
+                "ghydra/core/digest.py", "def f(v):\n    return _core_digest(v)\n"))
+
+    def test_every_region_generates_without_a_guard_failure(self):
+        for module in gen_core.CORE_MODULES:
+            with self.subTest(module=module):
+                self.assertTrue(gen_core._region(module).startswith("# >>> generated"))
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ CORE_MODULES = (
     "ghydra/core/digest.py",
     "ghydra/core/runbook.py",
     "ghydra/core/hints.py",
+    "ghydra/core/cache.py",
 )
 
 #: Per module, the public name -> the private name the bridge uses.
@@ -51,6 +52,16 @@ CORE_RENAMES = {
         "BadSteps": "_CoreBadSteps",
         "BadEntry": "_CoreBadEntry",
         "validate_steps": "_core_validate_steps",
+    },
+    "ghydra/core/cache.py": {
+        "CACHE_VERSION": "_CORE_CACHE_VERSION",
+        "IDENTITY_FIELDS": "_CORE_CACHE_IDENTITY_FIELDS",
+        "STATISTIC_FIELDS": "_CORE_CACHE_STATISTIC_FIELDS",
+        "identity_from_program": "_core_cache_identity",
+        "cache_key": "_core_cache_key",
+        # Names the module imports (imports are stripped from the generated
+        # block, so the bridge's own generated name is used instead).
+        "digest": "_core_digest",
     },
     "ghydra/core/hints.py": {
         "HINT_PATTERNS": "_CORE_HINT_PATTERNS",
@@ -109,9 +120,68 @@ def _source_of(module_path: str) -> str:
     return "\n\n".join(ast.unparse(node) for node in body)
 
 
+def _imported_names(module_path: str) -> set[str]:
+    """The names a module imports (stripped from the generated block)."""
+    with open(os.path.join(ROOT, module_path), encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                names.add(alias.asname or alias.name)
+    return names
+
+
+def _bridge_imports() -> set[str]:
+    """The names the bridge itself imports at module level.
+
+    A generated body may use those: the region is spliced into the bridge, which
+    already has `json`, `hashlib`, `re` and friends. Only an import the bridge
+    lacks is a real error.
+    """
+    cached = getattr(_bridge_imports, "_cached", None)
+    if cached is not None:
+        return cached
+    with open(BRIDGE, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                names.add(alias.asname or alias.name)
+    _bridge_imports._cached = names
+    return names
+
+
+def _unresolved_imports(module_path: str, source: str) -> set[str]:
+    """Imported names the generated body still uses, and the bridge lacks."""
+    renames = CORE_RENAMES.get(module_path, {})
+    available = _bridge_imports()
+    imported = _imported_names(module_path)
+    used = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id in imported and node.id not in renames and node.id not in available:
+                used.add(node.id)
+    return used
+
+
 def _region(module_path: str) -> str:
     relative = module_path
     function_source = _source_of(module_path)
+    unresolved = _unresolved_imports(module_path, function_source)
+    if unresolved:
+        names = ", ".join(sorted(unresolved))
+        raise SystemExit(
+            f"{module_path}: the generated body uses imported name(s) {names}, "
+            f"which are stripped from the region. Add them to CORE_RENAMES "
+            f"[{module_path!r}] mapping each to the bridge's generated copy.")
     module_digest = hashlib.sha256(
         function_source.encode("utf-8")).hexdigest()[:16]
     return "\n".join([

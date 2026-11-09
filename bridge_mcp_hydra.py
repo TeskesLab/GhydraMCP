@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.12.1"
+BRIDGE_VERSION = "v3.13.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1171,6 +1171,43 @@ def _core_parse_goal(goal):
             hints[key] = match.group(1)
     return hints
 # <<< end generated from ghydra/core/hints.py
+
+
+# >>> generated from ghydra/core/cache.py (31fe133efb5705df) — edit the core, then run scripts/gen_core.py
+_CORE_CACHE_VERSION = 1
+
+_CORE_CACHE_IDENTITY_FIELDS = ('programId', 'path', 'executablePath', 'language', 'languageId', 'imageBase', 'creationDate')
+
+_CORE_CACHE_STATISTIC_FIELDS = ('functionCount', 'symbolCount', 'memoryBlockCount')
+
+def _core_cache_identity(program):
+    """The identity of a program, from the payload of ``/program``.
+
+    Args:
+        program: The ``result`` of ``/program`` (any shape; a non-dict is "no
+            identity", which the caller reports rather than keys on).
+
+    Returns:
+        dict: The identifying fields that were present, plus the statistics.
+              Empty when the program cannot be identified.
+    """
+    if not isinstance(program, dict):
+        return {}
+    identity = {key: program[key] for key in _CORE_CACHE_IDENTITY_FIELDS if program.get(key) is not None}
+    statistics = program.get('statistics')
+    if isinstance(statistics, dict):
+        identity['statistics'] = {key: statistics[key] for key in _CORE_CACHE_STATISTIC_FIELDS if statistics.get(key) is not None}
+    return identity
+
+def _core_cache_key(identity, kind, request):
+    """The key of one answer: the version, the kind, the program and the question.
+
+    Every part is load-bearing: the version lets a change to the format retire
+    the old entries, the kind keeps two sorts of answer apart, the program keeps
+    two binaries apart, and the request keeps two questions apart.
+    """
+    return _core_digest({'version': _CORE_CACHE_VERSION, 'kind': kind, 'program': identity, 'request': request})
+# <<< end generated from ghydra/core/cache.py
 
 
 def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
@@ -12239,12 +12276,13 @@ def mission_start(goal: str, max_calls: int = 60, max_tokens: int = 200000,
 # not import the ghydra package. test_cache.py asserts the two sides agree on
 # the identity, the key and the stored shape.
 
-_CACHE_VERSION = 1
+#: The version comes from the core (I1): one bump retires every entry.
+_CACHE_VERSION = _CORE_CACHE_VERSION
 _CACHE_DEFAULT_MAX_BYTES = 50_000_000
 _CACHE_DEFAULT_MAX_AGE = 24 * 60 * 60
-_CACHE_IDENTITY_FIELDS = ("programId", "path", "executablePath", "language",
-                          "languageId", "imageBase", "creationDate")
-_CACHE_STATISTIC_FIELDS = ("functionCount", "symbolCount", "memoryBlockCount")
+#: Both defined once, in the core (I1).
+_CACHE_IDENTITY_FIELDS = _CORE_CACHE_IDENTITY_FIELDS
+_CACHE_STATISTIC_FIELDS = _CORE_CACHE_STATISTIC_FIELDS
 
 
 def _cache_canonical(value: Any) -> str:
@@ -12268,23 +12306,15 @@ def _cache_entries_dir() -> str:
 
 
 def _cache_program_identity(port: int) -> dict:
+    """Delegates the identity's definition to the generated core (I1)."""
     response = safe_get(port, "program")
     payload = response.get("result") if isinstance(response, dict) else None
-    if not isinstance(payload, dict):
-        return {}
-    identity = {key: payload[key] for key in _CACHE_IDENTITY_FIELDS
-                if payload.get(key) is not None}
-    statistics = payload.get("statistics")
-    if isinstance(statistics, dict):
-        identity["statistics"] = {key: statistics[key]
-                                  for key in _CACHE_STATISTIC_FIELDS
-                                  if statistics.get(key) is not None}
-    return identity
+    return _core_cache_identity(payload)
 
 
 def _cache_key(identity: dict, kind: str, request: dict) -> str:
-    return _cache_digest({"version": _CACHE_VERSION, "kind": kind,
-                          "program": identity, "request": request})
+    """Delegates to the generated core (I1): same key on both surfaces."""
+    return _core_cache_key(identity, kind, request)
 
 
 def _cache_entry_path(key: str) -> str:

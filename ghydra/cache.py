@@ -27,14 +27,15 @@ import os
 import time
 from typing import Any, Dict, Optional, Tuple
 
+from .core import cache as core_identity
+
 CACHE_VERSION = 1
 DEFAULT_MAX_BYTES = 50_000_000
 DEFAULT_MAX_AGE_SECONDS = 24 * 60 * 60
 
-#: The fields of /program that name the program an answer belongs to.
-IDENTITY_FIELDS = ("programId", "path", "executablePath", "language",
-                   "languageId", "imageBase", "creationDate")
-STATISTIC_FIELDS = ("functionCount", "symbolCount", "memoryBlockCount")
+#: Defined once, in the core (I1).
+IDENTITY_FIELDS = core_identity.IDENTITY_FIELDS
+STATISTIC_FIELDS = core_identity.STATISTIC_FIELDS
 
 
 def cache_root() -> str:
@@ -68,21 +69,18 @@ def program_identity(client) -> Dict[str, Any]:
     except Exception:
         return {}
     payload = response.get("result") if isinstance(response, dict) else None
-    if not isinstance(payload, dict):
-        return {}
-    identity = {key: payload[key] for key in IDENTITY_FIELDS if payload.get(key) is not None}
-    statistics = payload.get("statistics")
-    if isinstance(statistics, dict):
-        identity["statistics"] = {key: statistics[key] for key in STATISTIC_FIELDS
-                                  if statistics.get(key) is not None}
-    return identity
+    # The fields that define the identity live in the core (I1).
+    return core_identity.identity_from_program(payload)
 
 
 def cache_key(identity: Dict[str, Any], kind: str,
               request: Dict[str, Any]) -> str:
-    """A key that changes when the program or the question changes."""
-    return digest({"version": CACHE_VERSION, "kind": kind,
-                   "program": identity, "request": request})
+    """A key that changes when the program or the question changes.
+
+    Delegates to the core (I1): the bridge computes the same key, so an entry
+    written by one surface is read by the other.
+    """
+    return core_identity.cache_key(identity, kind, request)
 
 
 def entry_path(key: str) -> str:
