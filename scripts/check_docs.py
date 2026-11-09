@@ -24,6 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 import os
+import glob
 
 ROOT = Path(__file__).resolve().parent.parent
 BRIDGE = ROOT / "bridge_mcp_hydra.py"
@@ -187,6 +188,51 @@ def duplicate_heading_problems() -> list:
     return problems
 
 
+def _load_script(name: str):
+    """Import a sibling script as a module, or return the failure."""
+    sys.path.insert(0, ROOT)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(ROOT, "scripts", name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def documented_commands_problems() -> list:
+    """Every `ghydra …` command a document shows must exist."""
+    try:
+        module = _load_script("check_doc_commands")
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load scripts/check_doc_commands.py: {failure}"]
+    problems = []
+    for path in sorted(glob.glob(os.path.join(ROOT, "*.md"))):
+        relative = os.path.basename(path)
+        with open(path, encoding="utf-8") as handle:
+            problems.extend(module.problems_in(relative, handle.read()))
+    return problems
+
+
+def cheatsheet_current_problems() -> list:
+    """The generated cheat sheet must match the CLI."""
+    try:
+        module = _load_script("gen_cheatsheet")
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load scripts/gen_cheatsheet.py: {failure}"]
+    try:
+        rendered = module.render()
+    except SystemExit as failure:
+        return [f"the cheat sheet names commands that no longer exist: {failure}"]
+    document = os.path.join(ROOT, "GHYDRA_CHEATSHEET.md")
+    if not os.path.exists(document):
+        return ["GHYDRA_CHEATSHEET.md is missing: run scripts/gen_cheatsheet.py"]
+    with open(document, encoding="utf-8") as handle:
+        current = handle.read()
+    if rendered != current:
+        return ["GHYDRA_CHEATSHEET.md is stale: run scripts/gen_cheatsheet.py"]
+    return []
+
+
 def errors_current_problems() -> list:
     """The generated error reference must be current."""
     sys.path.insert(0, ROOT)
@@ -286,6 +332,8 @@ def main() -> int:
     problems.extend(duplicate_heading_problems())
     problems.extend(index_current_problems())
     problems.extend(errors_current_problems())
+    problems.extend(documented_commands_problems())
+    problems.extend(cheatsheet_current_problems())
     if not version_copy_ok():
         problems.append(
             "ghydra/x64dbg.py must use __version__ (scripts/version.py's sixth copy)")

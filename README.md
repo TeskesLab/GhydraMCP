@@ -118,6 +118,7 @@ for which job, and the reading paths by audience.
 | [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) | Twelve jobs with their commands and traps |
 | [GHYDRA_TOOLS.md](GHYDRA_TOOLS.md) | **Generated** catalogue of the 134 tools |
 | [GHYDRA_ERRORS.md](GHYDRA_ERRORS.md) | **Generated** reference of every error code |
+| [GHYDRA_CHEATSHEET.md](GHYDRA_CHEATSHEET.md) | **Generated** one line per command |
 | [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md) | Symptom → cause → fix |
 | [GHYDRA_OUTPUT.md](GHYDRA_OUTPUT.md) | Text vs JSON vs table vs report, the envelope, exit codes |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The tiers, the single core, the rules that hold them |

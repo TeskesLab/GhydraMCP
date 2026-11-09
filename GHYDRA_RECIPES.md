@@ -27,13 +27,13 @@ think it is broken. Every command was run against Ghidra 12.2.
 ## 1. Triage a file you know nothing about
 
 ```bash
-ghydra triage ./sample                  # what it is, from the bytes (no Ghidra needed)
+ghydra inspect ./sample                # what it is, from the bytes (no Ghidra needed)
 ghydra headless start ./sample
 ghydra analysis overview                # size, counts, imports
 ghydra analysis capabilities-summary    # ATT&CK-style leads from imports and strings
 ```
 
-`triage` identifies PE/ELF/Mach-O/DEX/APK/WASM/EVM/firmware/Electron/core
+`inspect` identifies PE/ELF/Mach-O/DEX/APK/WASM/EVM/firmware/Electron/core
 dumps from the **bytes**, never the extension, and says which tool fits the file.
 
 **Trap:** `capabilities-summary` lists *leads*. Two imports that look alarming are
@@ -212,7 +212,7 @@ have reached the debugger. `X64DBG_UNCERTAIN` says exactly that.
 
 ```bash
 GHYDRA_READ_ONLY=1 ghydramcp               # server refuses every mutation
-ghydra --dry-run functions rename --address 0x401000 --name suspicious
+ghydra --dry-run functions rename --address 0x401000 --new-name suspicious
 ghydra audit                               # what was changed, locally
 ```
 

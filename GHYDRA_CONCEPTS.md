@@ -124,8 +124,11 @@ and call it done. The mission records *why* it stopped and leaves the rest as
 
 ```bash
 GHYDRA_TOOL_GROUPS=core,functions ghydramcp     # a profile fixed at startup
-ghydra tools groups                             # what is loaded (CLI/MCP)
 ```
+
+The `tools_*` group is an **MCP** surface (`tools_groups`, `tools_load_group`,
+`tools_search`): it manages the tool list a client sees, and the CLI has no
+command for it because the CLI does not carry a tool list.
 
 `tools_load_group` / `tools_unload_group` change it at runtime, and
 `tools_search` searches **the whole catalogue** (including unloaded tools) and
