@@ -31,6 +31,9 @@ The two debugger sides share one model of addresses, so a static address from Gh
 into a live one for x64dbg — and a breakpoint the assistant sets lands on the instruction the
 static analysis was talking about.
 
+Documentation is mapped in [DOCUMENTATION.md](DOCUMENTATION.md); the tool catalogue is
+generated, so it cannot fall behind the code.
+
 Neither of the two new integrations changes the Ghidra REST API: `API_VERSION` is still **3000**,
 and the plugin gains no endpoint. They are local — a plugin on this machine, and a CLI on this
 machine — and they work with any Ghidra version.
@@ -104,8 +107,18 @@ Measured numbers, not estimates: BSim ingest of `where.exe` — 94 functions in
 
 ## Documentation
 
+**Start at [DOCUMENTATION.md](DOCUMENTATION.md)** — it is the map: what to read
+for which job, and the reading paths by audience.
+
 | Document | What is in it |
 | --- | --- |
+| [DOCUMENTATION.md](DOCUMENTATION.md) | The map of all documentation |
+| [GHYDRA_GETTING_STARTED.md](GHYDRA_GETTING_STARTED.md) | Install → first dossier, with real output |
+| [GHYDRA_CONCEPTS.md](GHYDRA_CONCEPTS.md) | The mental model: surfaces, envelope, budgets, profiles |
+| [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) | Twelve jobs with their commands and traps |
+| [GHYDRA_TOOLS.md](GHYDRA_TOOLS.md) | **Generated** catalogue of the 134 tools |
+| [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md) | Symptom → cause → fix |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | The tiers, the single core, the rules that hold them |
 | [GHYDRA_CLI.md](GHYDRA_CLI.md) | The whole command-line surface, command by command |
 | [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) | The REST reference — 106 routes, `API_VERSION` 3000 |
 | [GHYDRA_BSIM.md](GHYDRA_BSIM.md) | Signature similarity: setup, building a corpus, querying, applying a match, comparing versions, and the traps measured on Ghidra 12.2 |

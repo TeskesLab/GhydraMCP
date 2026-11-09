@@ -23,6 +23,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+import os
 
 ROOT = Path(__file__).resolve().parent.parent
 BRIDGE = ROOT / "bridge_mcp_hydra.py"
@@ -106,6 +107,49 @@ def version_copy_ok() -> bool:
     return '"version": __version__' in text and '"version": "3.' not in text
 
 
+# --------------------------------------------------------------- catalogue
+def catalogue_problems() -> list:
+    """The generated tool catalogue must be current."""
+    sys.path.insert(0, ROOT)
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "gen_tools_doc", os.path.join(ROOT, "scripts", "gen_tools_doc.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as failure:  # noqa: BLE001 - the guard reports, it does not crash
+        return [f"cannot load scripts/gen_tools_doc.py: {failure}"]
+    try:
+        rendered = module.render(module.collect())
+    except Exception as failure:  # noqa: BLE001
+        return [f"the tool catalogue cannot be generated: {failure}"]
+    document = os.path.join(ROOT, "GHYDRA_TOOLS.md")
+    if not os.path.exists(document):
+        return ["GHYDRA_TOOLS.md is missing: run scripts/gen_tools_doc.py"]
+    with open(document, encoding="utf-8") as handle:
+        current = handle.read()
+    if rendered != current:
+        return ["GHYDRA_TOOLS.md is stale: run scripts/gen_tools_doc.py"]
+    return []
+
+
+# ------------------------------------------------------------------- links
+def index_link_problems() -> list:
+    """Every local document linked from the index must exist."""
+    index = os.path.join(ROOT, "DOCUMENTATION.md")
+    if not os.path.exists(index):
+        return ["DOCUMENTATION.md is missing: the documentation has no map"]
+    with open(index, encoding="utf-8") as handle:
+        text = handle.read()
+    problems = []
+    for target in sorted(set(re.findall(r"\]\(([^)#]+\.md)\)", text))):
+        if target.startswith(("http://", "https://")):
+            continue
+        if not os.path.exists(os.path.join(ROOT, target)):
+            problems.append(f"DOCUMENTATION.md links {target}, which does not exist")
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", action="store_true", help="print the counts")
@@ -121,6 +165,9 @@ def main() -> int:
         cwd=ROOT, capture_output=True, text=True)
     if check.returncode != 0:
         problems.append("scripts/version.py --check failed: " + check.stdout.strip())
+
+    problems.extend(catalogue_problems())
+    problems.extend(index_link_problems())
     if not version_copy_ok():
         problems.append(
             "ghydra/x64dbg.py must use __version__ (scripts/version.py's sixth copy)")

@@ -7,6 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The documentation set, and the guards that keep it true**: the tool became
+  wide enough that a reader could not find the answer, so the documentation is now
+  a set with a map rather than a pile of files:
+  [DOCUMENTATION.md](DOCUMENTATION.md) is the index (what to read for which job,
+  plus reading paths by audience), and five guides fill the gaps —
+  [GHYDRA_GETTING_STARTED.md](GHYDRA_GETTING_STARTED.md) (install to a first
+  dossier, with real output), [GHYDRA_CONCEPTS.md](GHYDRA_CONCEPTS.md) (the mental
+  model: three surfaces, the envelope, absence vs incompleteness, evidence
+  identity, budgets, tool profiles, what it is not),
+  [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) (twelve jobs with commands and the trap
+  each one hides), [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md)
+  (symptom → cause → fix, including the known drift) and
+  [ARCHITECTURE.md](ARCHITECTURE.md) (the tiers, the generated core, the rules).
+  The **tool catalogue is generated**: `scripts/gen_tools_doc.py` reads the tool
+  decorators, the docstring's first paragraph, the signature, the endpoint a body
+  names (following the helpers it calls), the workflow group and the real CLI path,
+  and writes [GHYDRA_TOOLS.md](GHYDRA_TOOLS.md) — 134 tools, 61 named routes, 16
+  composed, 15 routed by argument, 42 local. `scripts/check_docs.py` now also
+  fails when that catalogue is stale and when a local link in the index points at
+  nothing; both directions were verified by tampering.
 - **The BSim surface after an independent review: five real bugs, one of them
   mine to own**: a fresh-context review of the BSim and twin code found twelve
   issues. Five mattered enough to fix before anything else.
