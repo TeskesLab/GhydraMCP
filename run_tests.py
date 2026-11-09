@@ -951,12 +951,38 @@ def run_contract_tests():
         return False
 
 
+def run_mcp_config_tests():
+    """Run the combined MCP configuration suite — Phase 2, no services needed."""
+    print_header("Running MCP Configuration Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_mcp_config.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running MCP configuration tests: {e}")
+        return False
+
+
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
     "--capability-summary", "--tasks", "--errors", "--context-pack", "--tool-groups", "--telemetry",
     "--assertions", "--read-only", "--runbook", "--taint", "--mission", "--cache", "--fleet", "--core", "--twin", "--examples",
     "--contract",
+    "--mcp-config",
 )
 
 SUITES = {
@@ -994,6 +1020,7 @@ SUITES = {
     "--twin": run_twin_tests,
     "--examples": run_examples_tests,
     "--contract": run_contract_tests,
+    "--mcp-config": run_mcp_config_tests,
 }
 
 USAGE = (

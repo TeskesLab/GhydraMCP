@@ -10,6 +10,7 @@ A command-line interface for GhydraMCP that provides access to Ghidra's reverse 
 - [Quick Start](#quick-start)
 - [Global Options](#global-options)
 - [Agent / programmatic use](#agent-programmatic-use)
+- [The combined MCP client configuration](#the-combined-mcp-client-configuration)
 - [Configuration](#configuration)
 - [Implemented Command Groups](#implemented-command-groups)
   - [Instances Commands](#instances-commands)
@@ -125,6 +126,29 @@ For scripts and AI agents, prefer one of these so output is parse-clean:
 - `--no-color` (or `NO_COLOR=1`) forces plain output even in a terminal, if you want tables without ANSI styling.
 
 Earlier versions forced ANSI color codes on regardless of the output target, which corrupted hex-address parsing when an agent captured the output; that is fixed.
+
+## The combined MCP client configuration
+
+Phase 2 of the unification plan: one file that registers both servers, kept as
+separate entries so a client can enable or disable each.
+
+```bash
+ghydra mcp-config                          # print it (the debugger token is masked)
+ghydra mcp-config --groups core,functions  # a smaller tool list for the agent
+ghydra mcp-config -o claude_desktop.json   # write it for a client
+ghydra mcp-config --no-x64dbg              # only the Ghidra bridge
+```
+
+The two entries use the transports each server speaks: the bridge over **stdio**
+(`uv run --script bridge_mcp_hydra.py`, with `GHYDRA_TOOL_GROUPS` and
+`GHIDRA_HYDRA_HOST` in its environment), and the debugger over **HTTP** with its
+bearer token. When the token is not known the debugger entry is **left out with the
+reason** rather than written without an `Authorization` header — a server nobody can
+authenticate against is worse than one that says what is missing.
+
+The token is a secret and is handled like one: the printed configuration masks it
+(`--show-secrets` prints it), and a written file contains it — the command says so
+on stderr, because a bearer token with debugger control must not be committed.
 
 ## Configuration
 

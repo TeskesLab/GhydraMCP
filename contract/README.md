@@ -132,3 +132,46 @@ python scripts/gen_contract.py           # rewrite the two generated files
 python scripts/gen_contract.py --check   # fail when either is stale
 python run_tests.py --contract           # the conformance suite
 ```
+
+---
+
+## Phase 2 — the combined configuration
+
+The plan's second phase is "one agent surface": a single client configuration that
+registers both servers, with each side separately toggleable and the tool groups
+opt-in rather than all-or-nothing. That is `ghydra mcp-config`
+([`GHYDRA_CLI.md`](../docs/GHYDRA_CLI.md#the-combined-mcp-client-configuration)):
+
+```json
+{
+  "mcpServers": {
+    "ghydra": {
+      "command": "uv",
+      "args": ["run", "--script", "…/bridge_mcp_hydra.py"],
+      "env": {"GHYDRA_TOOL_GROUPS": "core,functions"}
+    },
+    "x64dbg": {
+      "type": "http",
+      "url": "http://127.0.0.1:9094/",
+      "headers": {"Authorization": "Bearer …"}
+    }
+  }
+}
+```
+
+Three rules keep it honest:
+
+- **the two servers stay separate entries** — the plan's mitigation for "165 tools
+  in one context degrades tool selection" is that the client can enable one without
+  the other;
+- **a missing token removes the entry and states the reason** — a configuration
+  that names a server nobody can authenticate against is a trap;
+- **only environment variables the bridge actually reads are set** — the
+  `--mcp-config` suite compares every name it writes against the bridge's own
+  source, which is how an invented `GHIDRA_HYDRA_PORT` was caught while this was
+  being written.
+
+The x64dbg side still answers free-form English instead of the codes rule 3 asks
+for, and its tools still lack the `x64dbg_` prefix (mistake 1 in its own vocabulary).
+The configuration registers it as a **separate** server, which is what makes that
+tolerable today and what the vocabulary change fixes tomorrow.

@@ -36,7 +36,7 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 
 ## Every command
 
-`149` commands in `38` groups.
+`150` commands in `39` groups.
 
 | Command | What it does |
 | --- | --- |
@@ -130,6 +130,7 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 | `ghydra kuna summary` | Summarize a binary: function count, entry point, reachability, size. |
 | `ghydra kuna unpack` | Unpack a UPX-packed executable with Kuna. |
 | `ghydra kuna xrefs` | Find the cross-references of a symbol or address with Kuna. |
+| `ghydra mcp-config` | Build the combined MCP client configuration. |
 | `ghydra memory disassemble` | Disassemble instructions at an arbitrary address. |
 | `ghydra memory read` | Read bytes from memory. |
 | `ghydra memory write` | Write bytes to memory (use with caution). |

@@ -313,3 +313,23 @@ own rule applies: do not entangle the repositories.
   run_to → decompile`. The `TargetDescriptor` is its first requirement and it now
   exists on this side; the gateway still needs the debugger's `module_base` and
   `module_path` from a second server, and the path-identity refusal it already has.
+
+### Phase 2 — one agent surface: done (2026-11-09)
+
+`ghydra mcp-config` builds the combined client configuration: the bridge over
+stdio and the debugger over HTTP, as **separate entries** so either can be disabled,
+with the tool groups opt-in (`--groups core,functions`) rather than all-or-nothing.
+The debugger entry is omitted, with the reason, when its token is unknown — a
+configuration that names a server nobody can authenticate against is worse than one
+that says what is missing.
+
+Proof: `tests/test_mcp_config.py` (`--mcp-config`), 19 tests. Two of them exist
+because of mistakes made while writing it: the configuration sets only variables
+`bridge_mcp_hydra.py` actually reads (an invented `GHIDRA_HYDRA_PORT` was caught),
+and the printed JSON is not wrapped by the terminal renderer — a wrapped Windows
+path is not JSON, and `ghydra mcp-config | jq` failed for no visible reason until
+the command wrote its output unwrapped.
+
+Phase 2 still depends on the x64dbg side for its *vocabulary*: the configuration
+registers that server separately, which is what makes the names tolerable until its
+tools carry the `x64dbg_` prefix.

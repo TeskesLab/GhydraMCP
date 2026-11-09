@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Phase 2 of the unification plan: one client configuration for both servers**
+  (`ghydra mcp-config`): one file in the shape MCP clients already read, with the
+  Ghidra bridge over **stdio** and the x64dbg MCP server over **HTTP + bearer token**
+  as separate entries, so a client can enable one without the other — the plan's
+  mitigation for "165 tools in one context degrades tool selection". The tool groups
+  are opt-in (`--groups core,functions`), the debugger entry is **left out with the
+  reason** when the token is unknown, and the token is treated as a secret: masked
+  in everything printed (`--show-secrets` to see it), real only inside a written
+  file, with the warning printed.
+  Two defects were caught by the suite while writing it, and both are now guards:
+  the configuration had set an **invented** `GHIDRA_HYDRA_PORT` (the bridge has no
+  port variable — it discovers instances), and the printed JSON was wrapped by the
+  terminal renderer, which broke `ghydra mcp-config | jq` on a long Windows path;
+  the command now writes its JSON unwrapped. `tests/test_mcp_config.py` (19 tests,
+  `--mcp-config`, in CI) checks the transports, the missing-token reason, the
+  masking on both paths, and that **every environment variable written is one
+  `bridge_mcp_hydra.py` actually reads**.
 - **The unification contract, and the address model that can refuse** (Phase 1 of
   `docs/UNIFICATION-PLAN.md`): the plan's verdict is that these two projects cannot
   share code — a Java plugin in Ghidra and a Zig DLL in x64dbg — only a

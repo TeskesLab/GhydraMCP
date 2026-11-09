@@ -88,6 +88,7 @@ python run_tests.py --core          # the single core and its generated copy (I1
 python run_tests.py --twin          # the digital twin: snapshots, offline queries, diff (R2)
 python run_tests.py --examples      # the examples really run (offline twin, asserts, index)
 python run_tests.py --contract      # the unification contract: vocabulary, address model, codes
+python run_tests.py --mcp-config   # the combined client configuration (Phase 2)
 python run_tests.py --no-ghidra     # ALL suites that need no Ghidra (CI's set)
 python run_tests.py --surface --scripts   # several flags can be combined
 ```
