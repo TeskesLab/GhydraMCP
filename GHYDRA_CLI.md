@@ -1484,6 +1484,26 @@ ghydra bsim ingest        # generate signatures for the open program and insert 
 ghydra bsim query         # which stored functions look like this one
 ghydra bsim apply-names   # name a function after its best match (dry run by default)
 ghydra bsim diff          # what changed between two versions, paired by signature
+
+### The digital twin (R2)
+
+A snapshot of a binary that answers questions with no Ghidra running — measured
+359x-8337x faster than the live API for the facts it holds
+(`scripts/bench_twin.py`).
+
+```bash
+ghydra twin build --name app-1.2      # snapshot the instance's program
+ghydra twin query app-1.2.json --kind functions --match str
+ghydra twin query app-1.2.json --kind function --match 0x140001010
+ghydra twin diff app-1.1.json app-1.2.json   # the analysis_diff shape, offline
+```
+
+The snapshot records its provenance (the executable md5, the source instance and
+the time) so a stale twin can be recognised instead of trusted, and it says when
+it is not complete — a capped snapshot, or one shorter than the API's own count,
+is marked `functions_complete: false`, because a diff over it would otherwise
+report phantom removals. It cannot decompile, read memory, or see a change made
+after it was taken.
 ghydra --json bsim status
 ```
 

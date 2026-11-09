@@ -7,6 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The digital twin (R2), and the measurement that keeps it honest**:
+  `ghydra twin build|query|diff` take a **snapshot** of a binary — program,
+  functions, imports, exports, strings, counts, with the executable md5 and the
+  source instance as provenance — and answer questions **with no Ghidra
+  running**. Measured with `scripts/bench_twin.py` on two real binaries, which is
+  the criterion R2 was accepted under: `where.exe` **715x** faster for a name
+  search and **7993x** for one function by address (0.23 ms against 3.80 ms even
+  when the file is read each time); `whoami.exe` **359x** and **8337x**. A
+  snapshot is 47 KB for 104 functions and builds in 66 ms. The offline demo is
+  the point: with the Ghidra process gone, `twin query` still answers the
+  overview, a function by address, and imports by substring, and `twin diff`
+  compares two builds using **the same comparison** as the live `analysis_diff`
+  (`ghydra/core/diff.py`), so "what changed" has one definition on line and
+  offline. Two facts the live runs forced: `/program` had no md5 (the one thing
+  that says "same binary" across instances), now exposed additively; and a
+  snapshot can be *shorter than the API's own count* (104 functions listed
+  against 198 counted), so a twin records `functions_complete: false` in that
+  case — otherwise a diff would report phantom removals. What a twin cannot do
+  is stated next to the answer: it cannot decompile, read memory, or see a change
+  made after it was taken.
 - **BSim diff (R1, slice 4b), validated against a live Ghidra 12.2**:
   `GET /bsim/diff`, `bsim_diff_versions` and `ghydra bsim diff` compare the open
   program with another version **paired by signature** instead of by address —
