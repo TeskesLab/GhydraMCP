@@ -7,7 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Read-only mode, dry-run and a local audit trail (I12)**: a Ghidra started
+- **Reproducible runbooks and `analysis_diff` (R6)**: `ghydra runbook
+  record -s steps.json` turns a sequence of API calls into a versionable JSONL
+  file (`<program>.ghydrarb.jsonl`) that records a digest of every answer;
+  `ghydra runbook replay` re-runs it and says which answers are identical,
+  which moved and which now fail (`--fail-on-change` makes it a CI gate), and
+  `ghydra runbook show` reads one without calling anything. `analysis_diff`
+  (CLI `ghydra analysis diff --a-port ... --b-port ...`, bridge
+  `analysis_diff`) compares two instances on the facts the API already returns
+  - program fingerprint, functions by address (a rename is not an add plus a
+  remove), imports and defined strings - so a patch diff or a firmware
+  regression becomes a report. A listing that could not be read to its end is
+  reported as a floor, never as a removal. The bridge duplicates the logic
+  (single-file rule); `test_runbook.py` asserts the two sides produce the same
+  digest, the same comparison view and the same diff.- **Read-only mode, dry-run and a local audit trail (I12)**: a Ghidra started
   with `-Dghidra.mcp.readOnly=true` or `GHYDRA_READ_ONLY=1` refuses every
   `POST`/`PUT`/`PATCH`/`DELETE` with `403 READ_ONLY_MODE` - one `before`
   handler, so a mutation endpoint added later is covered without anyone

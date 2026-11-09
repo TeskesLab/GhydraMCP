@@ -15,11 +15,11 @@ decompilation, annotation, and data manipulation.
   subsequent instances walk up to `MAX_PORT_ATTEMPTS` = 256 ports (8192–8447).
 - The bridge auto-discovers instances on startup and on a daemon timer, but `QUICK_DISCOVERY_RANGE`
   only scans **8192–8201**. Instances above 8202 need `instances_register` / the CLI.
-- 121 MCP tools in 31 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
+- 124 MCP tools in 32 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
   `doctor_*`, `evidence_*`, `functions_*`, `headless_*`, `inspect_*`, `instances_*`, `kuna_*`,
   `memory_*`, `namespaces_*`, `programs_*`, `project_*`, `projects_*`, `raw_image_*`, `scalars_*`,
   `scripts_*`, `segments_*`, `session_*`, `structs_*`, `symbols_*`, `tasks_*`, `telemetry_*`, `tools_*`, `ui_*`,
-  `variables_*`, `x64dbg_*`, `xrefs_*`.
+  `variables_*`, `x64dbg_*`, `runbook_*`, `xrefs_*`.
 - v3.0.0 migrated `HttpServer` → **Javalin** with service/DTO/resource layering. `API_VERSION` is
   **3000** (breaking: fully-qualified names everywhere).
 - The `kuna_*` namespace is **local**: it drives the Kuna decompiler CLI as a subprocess, so it

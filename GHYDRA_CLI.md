@@ -1361,3 +1361,26 @@ tool at `async_mode`.
 ## License
 
 Same as GhydraMCP project.
+
+## Reproducible runbooks and diffs (R6)
+
+A runbook is a sequence of API calls with a digest of every answer: recording it
+turns a session into a file that can be versioned, and replaying it says what
+changed.
+
+```bash
+ghydra runbook record -s steps.json -o sample.ghydrarb.jsonl
+ghydra runbook replay sample.ghydrarb.jsonl                  # what moved
+ghydra runbook replay sample.ghydrarb.jsonl --fail-on-change # CI gate
+ghydra runbook show sample.ghydrarb.jsonl                    # no calls made
+ghydra analysis diff --a-port 8192 --b-port 8193
+```
+
+`steps.json` is a list (or `{"steps": [...]}`) of
+`{"endpoint": "...", "method": "GET|POST|PATCH|PUT|DELETE", "params": {...}, "payload": {...}}`.
+
+`ghydra analysis diff` compares two instances on the program fingerprint, the
+functions (by address; a rename is reported as a rename), the imports and the
+defined strings. `--no-strings` skips the last comparison, and `--a-host`/
+`--b-host` reach instances on another machine. A listing that could not be read
+to its end is reported as a floor, never as a removal.

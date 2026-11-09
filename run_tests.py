@@ -713,11 +713,36 @@ def run_read_only_tests():
         return False
 
 
+def run_runbook_tests():
+    """Run the runbook and analysis_diff (R6) tests."""
+    print_header("Running Runbook and Diff Tests")
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "test_runbook.py"],
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running runbook tests: {e}")
+        return False
+
+
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
     "--capability-summary", "--tasks", "--errors", "--context-pack", "--tool-groups", "--telemetry",
-    "--assertions", "--read-only",
+    "--assertions", "--read-only", "--runbook",
 )
 
 SUITES = {
@@ -746,6 +771,7 @@ SUITES = {
     "--telemetry": run_telemetry_tests,
     "--assertions": run_assertions_tests,
     "--read-only": run_read_only_tests,
+    "--runbook": run_runbook_tests,
 }
 
 USAGE = (
@@ -753,7 +779,7 @@ USAGE = (
     "--comments | --port | --kuna | --x64dbg | --headless | --evidence | "
     "--triage | --rea | --surface | --capabilities | --scripts | "
     "--compatibility | --runner | --docs | --capability-summary | --tasks | --errors |"
-    " --context-pack | --assertions | --read-only | --require-live]"
+    " --context-pack | --assertions | --read-only | --runbook | --require-live]"
     "  (suite flags may be combined)"
 )
 

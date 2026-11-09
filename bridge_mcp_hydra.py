@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.2.0"
+BRIDGE_VERSION = "v3.3.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -3051,6 +3051,96 @@ def format_telemetry_summary(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_runbook_record(response: dict, **kwargs) -> str:
+    """A recorded runbook: where it went and which steps failed."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [f"Runbook recorded: {result.get('path', '?')} "
+             f"({result.get('steps', 0)} step(s))"]
+    for entry in result.get("failed") or []:
+        lines.append(f"  failed step {entry.get('step')}: "
+                     f"{entry.get('endpoint')} ({entry.get('code') or 'failed'})")
+    return "\n".join(lines)
+
+
+def format_runbook_replay(response: dict, **kwargs) -> str:
+    """A replayed runbook: what is identical, what moved, what failed."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [f"Replay: {result.get('total', 0)} step(s) - "
+             f"{result.get('identical', 0)} identical, "
+             f"{result.get('changed', 0)} changed, "
+             f"{result.get('failed', 0)} failed"]
+    if result.get("program_changed"):
+        lines.append("  note: the program fingerprint changed since the recording")
+    for item in result.get("steps") or []:
+        marker = {"identical": "SAME", "changed": "DIFF", "failed": "FAIL"}.get(
+            item.get("status"), "????")
+        line = f"  [{marker}] step {item.get('step')} {item.get('endpoint')}"
+        if item.get("code"):
+            line += f" ({item['code']})"
+        if item.get("reason"):
+            line += f" - {item['reason']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def format_analysis_diff(response: dict, **kwargs) -> str:
+    """Two snapshots compared: functions, imports and strings."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    summary = result.get("summary") or {}
+    functions = result.get("functions") or {}
+    lines = ["Diff" + (" - the program fingerprint changed"
+                       if result.get("program_changed")
+                       else " - same program fingerprint")]
+    if not functions.get("complete", True):
+        lines.append("  note: a function listing was truncated; the counts are a floor")
+    lines.append(f"  functions: +{summary.get('functions_added', 0)} "
+                 f"-{summary.get('functions_removed', 0)} "
+                 f"~{summary.get('functions_renamed', 0)} renamed "
+                 f"({functions.get('count_a', 0)} -> {functions.get('count_b', 0)})")
+    lines.append(f"  imports:   +{summary.get('imports_added', 0)} "
+                 f"-{summary.get('imports_removed', 0)}")
+    lines.append(f"  strings:   +{summary.get('strings_added', 0)} "
+                 f"-{summary.get('strings_removed', 0)}")
+
+    def section(title, rows, render):
+        if not rows:
+            return
+        lines.append("")
+        lines.append(f"{title}:")
+        for row in rows[:40]:
+            lines.append("  " + render(row))
+        if len(rows) > 40:
+            lines.append(f"  ... {len(rows) - 40} more")
+
+    section("functions added", functions.get("added") or [],
+            lambda row: f"+ {row.get('address')} {row.get('name') or '?'}")
+    section("functions removed", functions.get("removed") or [],
+            lambda row: f"- {row.get('address')} {row.get('name') or '?'}")
+    section("functions renamed", functions.get("renamed") or [],
+            lambda row: f"~ {row.get('address')} {row.get('from')} -> {row.get('to')}")
+    section("imports added", (result.get("imports") or {}).get("added") or [],
+            lambda row: f"+ {row}")
+    section("imports removed", (result.get("imports") or {}).get("removed") or [],
+            lambda row: f"- {row}")
+    section("strings added", (result.get("strings") or {}).get("added") or [],
+            lambda row: f"+ {str(row)[:100]}")
+    section("strings removed", (result.get("strings") or {}).get("removed") or [],
+            lambda row: f"- {str(row)[:100]}")
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -3178,6 +3268,9 @@ FORMATTERS = {
     "structs_create": format_generic_dict,
     "structs_delete": format_generic_dict,
     "structs_update_field": format_generic_dict,
+    "runbook_record": format_runbook_record,
+    "runbook_replay": format_runbook_replay,
+    "analysis_diff": format_analysis_diff,
 }
 
 
@@ -10944,6 +11037,384 @@ def tasks_cancel(task_id: str) -> dict:
 # or at runtime with tools_load_group). The four tools_* meta-tools are always
 # loaded, and the full catalogue stays searchable even when a tool is hidden.
 
+# ================= Reproducible runbooks and analysis diff (R6) =================
+# The bridge is a standalone script and must not import the ghydra package, so
+# the runbook and diff logic is duplicated from ghydra/runbook.py and
+# ghydra/diff.py. test_runbook.py asserts the two sides agree.
+
+RUNBOOK_VERSION = 1
+_RUNBOOK_VOLATILE_KEYS = ("id", "timestamp", "instance", "_links", "api_links")
+_DIFF_PAGE_LIMIT = 1000
+_DIFF_MAX_PAGES = 20
+_DIFF_PROGRAM_FIELDS = ("name", "executable_path", "image_base", "language", "compiler")
+
+
+def _runbook_canonical(value: Any) -> str:
+    """The text a digest is taken over: sorted keys, no separator noise."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"), default=str)
+
+
+def _runbook_digest(value: Any) -> str:
+    return hashlib.sha256(_runbook_canonical(value).encode("utf-8")).hexdigest()
+
+
+def _runbook_stable_result(envelope: Any) -> Any:
+    """The part of an answer a replay is compared on."""
+    if isinstance(envelope, dict):
+        payload = envelope.get("result", envelope)
+        if isinstance(payload, dict):
+            return {key: value for key, value in payload.items()
+                    if key not in _RUNBOOK_VOLATILE_KEYS}
+        return payload
+    return envelope
+
+
+def _runbook_load_steps(steps: str) -> list:
+    """The steps to record: JSON text, or the path of a JSON file.
+
+    A tool parameter that takes a nested object is declared as text because a
+    client flattens what is nested; the same rule makes a file path and an
+    inline document the same parameter.
+    """
+    text = (steps or "").strip()
+    if not text:
+        raise ValueError("steps is required")
+    if not text.startswith(("[", "{")):
+        try:
+            with open(text, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as exc:
+            raise ValueError(f"cannot read {steps}: {exc}") from exc
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise ValueError(f"steps is not valid JSON: {exc}") from exc
+    items = data.get("steps") if isinstance(data, dict) else data
+    if not isinstance(items, list) or not items:
+        raise ValueError("expected a non-empty list of steps or {'steps': [...]}")
+    validated = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(f"step #{index + 1} is not an object")
+        endpoint = item.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise ValueError(f"step #{index + 1}: 'endpoint' is required")
+        method = str(item.get("method") or "GET").upper()
+        if method not in ("GET", "POST", "PATCH", "PUT", "DELETE"):
+            raise ValueError(f"step #{index + 1}: unknown method {method!r}")
+        validated.append({"endpoint": endpoint.strip(), "method": method,
+                          "params": item.get("params") or None,
+                          "payload": item.get("payload") or None})
+    return validated
+
+
+def _runbook_program(port: int) -> dict:
+    response = safe_get(port, "program")
+    payload = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(payload, dict):
+        return {}
+    return {key: payload.get(key) for key in _DIFF_PROGRAM_FIELDS
+            if payload.get(key) is not None}
+
+
+def _runbook_call(port: int, step: dict) -> dict:
+    method = step["method"]
+    endpoint = step["endpoint"]
+    params = step.get("params")
+    payload = step.get("payload")
+    if method == "GET":
+        return safe_get(port, endpoint, params)
+    # safe_post/safe_patch/safe_put pop "headers" from the payload, so a copy
+    # goes in: the runbook must not lose what it recorded.
+    body = dict(payload) if isinstance(payload, dict) else (payload or {})
+    if method == "POST":
+        return safe_post(port, endpoint, body)
+    if method == "PATCH":
+        return safe_patch(port, endpoint, body)
+    if method == "PUT":
+        return safe_put(port, endpoint, body)
+    return safe_delete(port, endpoint)
+
+
+def _runbook_record(port: int, steps: list) -> dict:
+    header = {"runbook": RUNBOOK_VERSION, "created": int(time.time()),
+              "program": _runbook_program(port), "steps": len(steps)}
+    entries = []
+    for index, step in enumerate(steps, start=1):
+        response = _runbook_call(port, step)
+        ok = bool(isinstance(response, dict) and response.get("success", False))
+        code = None
+        if not ok and isinstance(response, dict):
+            error = response.get("error")
+            if isinstance(error, dict):
+                code = error.get("code")
+        entries.append({
+            "step": index,
+            "request": {key: step[key] for key in
+                        ("method", "endpoint", "params", "payload")
+                        if step.get(key) is not None},
+            "ok": ok, "code": code,
+            "digest": _runbook_digest(_runbook_stable_result(response)),
+        })
+    return {"header": header, "entries": entries}
+
+
+def _runbook_save(document: dict, path: str) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(_runbook_canonical(document["header"]) + "\n")
+        for entry in document["entries"]:
+            handle.write(_runbook_canonical(entry) + "\n")
+
+
+def _runbook_load(path: str) -> dict:
+    with open(path, encoding="utf-8") as handle:
+        lines = [line for line in handle.read().splitlines() if line.strip()]
+    if not lines:
+        raise ValueError(f"{path} is empty")
+    header = json.loads(lines[0])
+    if not isinstance(header, dict) or "runbook" not in header:
+        raise ValueError(f"{path}: the first line is not a runbook header")
+    if header.get("runbook") != RUNBOOK_VERSION:
+        raise ValueError(f"runbook version {header.get('runbook')!r} is not supported")
+    entries = []
+    for line in lines[1:]:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return {"header": header, "entries": entries}
+
+
+def _runbook_replay(port: int, document: dict) -> dict:
+    recorded = document.get("entries") or []
+    now = _runbook_program(port)
+    recorded_program = (document.get("header") or {}).get("program") or {}
+    program_changed = bool(recorded_program and now
+                           and _runbook_canonical(recorded_program)
+                           != _runbook_canonical(now))
+    results = []
+    for entry in recorded:
+        request = entry.get("request") or {}
+        step = {"method": request.get("method") or "GET",
+                "endpoint": request.get("endpoint") or "",
+                "params": request.get("params"), "payload": request.get("payload")}
+        response = _runbook_call(port, step)
+        ok = bool(isinstance(response, dict) and response.get("success", False))
+        if not ok:
+            error = response.get("error") if isinstance(response, dict) else None
+            results.append({"step": entry.get("step"),
+                            "endpoint": step["endpoint"], "status": "failed",
+                            "code": (error or {}).get("code") if isinstance(error, dict) else None,
+                            "reason": (error or {}).get("message") if isinstance(error, dict) else None})
+            continue
+        current = _runbook_digest(_runbook_stable_result(response))
+        results.append({
+            "step": entry.get("step"), "endpoint": step["endpoint"],
+            "status": "identical" if current == entry.get("digest") else "changed",
+            "digest_recorded": entry.get("digest"), "digest_current": current,
+        })
+    changed = [item for item in results if item["status"] == "changed"]
+    failed = [item for item in results if item["status"] == "failed"]
+    return {"success": True, "result": {
+        "steps": results, "total": len(results),
+        "identical": len(results) - len(changed) - len(failed),
+        "changed": len(changed), "failed": len(failed),
+        "program_changed": program_changed,
+        "recorded_program": recorded_program, "current_program": now,
+        "ok": not changed and not failed}}
+
+
+def _diff_page(port: int, endpoint: str, keys=("name", "value")) -> dict:
+    """A listing read to its end, saying whether it was read completely."""
+    items = []
+    complete = True
+    offset = 0
+    for _page_number in range(_DIFF_MAX_PAGES):
+        response = safe_get(port, endpoint, {"offset": offset, "limit": _DIFF_PAGE_LIMIT})
+        if not isinstance(response, dict) or not response.get("success", False):
+            return {"items": items, "complete": False, "error": True}
+        payload = response.get("result")
+        page = payload if isinstance(payload, list) else []
+        items.extend(page)
+        meta = response.get("meta") or {}
+        total = meta.get("total") if isinstance(meta, dict) else None
+        if not page or len(page) < _DIFF_PAGE_LIMIT:
+            break
+        if isinstance(total, int) and len(items) >= total:
+            break
+        offset += len(page)
+    else:
+        complete = False
+    names = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key in keys:
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                names.append(value)
+                break
+    return {"items": items, "complete": complete, "error": False, "names": names}
+
+
+def _diff_collect(port: int, include_strings: bool = True) -> dict:
+    program = {}
+    response = safe_get(port, "program")
+    payload = response.get("result") if isinstance(response, dict) else None
+    if isinstance(payload, dict):
+        program = {key: payload.get(key) for key in _DIFF_PROGRAM_FIELDS
+                   if payload.get(key) is not None}
+    functions_page = _diff_page(port, "functions")
+    functions = [{"address": str(item.get("address") or ""),
+                  "name": item.get("name"), "size": item.get("size")}
+                 for item in functions_page["items"] if isinstance(item, dict)]
+    imports_page = _diff_page(port, "symbols/imports", ("name", "label", "symbol"))
+    if include_strings:
+        strings_page = _diff_page(port, "strings", ("value", "name", "string"))
+    else:
+        strings_page = {"items": [], "complete": True, "error": False, "names": []}
+    return {"program": program, "functions": functions,
+            "functions_complete": functions_page["complete"],
+            "imports": sorted(set(imports_page["names"])),
+            "imports_complete": imports_page["complete"],
+            "strings": sorted(set(strings_page["names"])),
+            "strings_complete": strings_page["complete"]}
+
+
+def _diff_names(before: set, after: set) -> dict:
+    return {"added": sorted(after - before), "removed": sorted(before - after),
+            "count_a": len(before), "count_b": len(after)}
+
+
+def _diff_snapshots(a: dict, b: dict) -> dict:
+    by_addr_a = {fn["address"]: fn for fn in a.get("functions") or [] if fn.get("address")}
+    by_addr_b = {fn["address"]: fn for fn in b.get("functions") or [] if fn.get("address")}
+    added, removed, renamed = [], [], []
+    for address, fn in sorted(by_addr_b.items()):
+        if address not in by_addr_a:
+            added.append({"address": address, "name": fn.get("name")})
+        elif fn.get("name") != by_addr_a[address].get("name"):
+            renamed.append({"address": address,
+                            "from": by_addr_a[address].get("name"),
+                            "to": fn.get("name")})
+    for address, fn in sorted(by_addr_a.items()):
+        if address not in by_addr_b:
+            removed.append({"address": address, "name": fn.get("name")})
+    imports = _diff_names({v for v in (a.get("imports") or []) if v},
+                          {v for v in (b.get("imports") or []) if v})
+    strings = _diff_names({v for v in (a.get("strings") or []) if v},
+                          {v for v in (b.get("strings") or []) if v})
+    result = {
+        "program": {"a": a.get("program") or {}, "b": b.get("program") or {}},
+        "program_changed": (a.get("program") or {}) != (b.get("program") or {}),
+        "functions": {"added": added, "removed": removed, "renamed": renamed,
+                      "count_a": len(by_addr_a), "count_b": len(by_addr_b),
+                      "complete": bool(a.get("functions_complete", True))
+                                  and bool(b.get("functions_complete", True))},
+        "imports": imports, "strings": strings,
+    }
+    result["changed"] = bool(added or removed or renamed or imports["added"]
+                             or imports["removed"] or strings["added"]
+                             or strings["removed"] or result["program_changed"])
+    result["summary"] = {
+        "functions_added": len(added), "functions_removed": len(removed),
+        "functions_renamed": len(renamed),
+        "imports_added": len(imports["added"]), "imports_removed": len(imports["removed"]),
+        "strings_added": len(strings["added"]), "strings_removed": len(strings["removed"]),
+        "program_changed": result["program_changed"]}
+    return result
+
+
+@mcp.tool()
+@text_output
+def runbook_record(steps: str, output: str | None = None,
+                   port: int | None = None) -> dict:
+    """Record a reproducible sequence of API calls into a runbook file
+
+    Each step is called once and its answer digested, so a later replay can say
+    what changed. The runbook is JSONL and diffs well in git.
+
+    Args:
+        steps: JSON text (or the path of a JSON file) with the steps: a list of
+            {"endpoint": "...", "method": "GET|POST|PATCH|PUT|DELETE",
+             "params": {...}, "payload": {...}}
+        output: Where to write the runbook (default: CWD/runbook.ghydrarb.jsonl)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The path written, the step count and the steps that failed
+    """
+    port = _get_instance_port(port)
+    try:
+        parsed = _runbook_load_steps(steps)
+    except ValueError as exc:
+        return {"success": False, "error": {"code": "RUNBOOK_BAD_STEPS",
+                                            "message": str(exc)}}
+    document = _runbook_record(port, parsed)
+    target = output or os.path.join(os.getcwd(), "runbook.ghydrarb.jsonl")
+    try:
+        _runbook_save(document, target)
+    except OSError as exc:
+        return {"success": False, "error": {"code": "RUNBOOK_IO",
+                                            "message": f"cannot write {target}: {exc}"}}
+    failed = [{"step": entry["step"],
+               "endpoint": entry["request"].get("endpoint"),
+               "code": entry.get("code")}
+              for entry in document["entries"] if not entry.get("ok")]
+    return {"success": True, "result": {"path": target,
+                                        "steps": len(document["entries"]),
+                                        "failed": failed}}
+
+
+@mcp.tool()
+@text_output
+def runbook_replay(path: str, port: int | None = None) -> dict:
+    """Re-run a runbook and report which answers moved
+
+    Args:
+        path: The runbook file (.ghydrarb.jsonl) to replay
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Per-step identical/changed/failed, and whether the program changed
+    """
+    port = _get_instance_port(port)
+    try:
+        document = _runbook_load(path)
+    except (OSError, ValueError) as exc:
+        return {"success": False, "error": {"code": "RUNBOOK_BAD_FILE",
+                                            "message": str(exc)}}
+    return _runbook_replay(port, document)
+
+
+@mcp.tool()
+@text_output
+def analysis_diff(b_port: int, include_strings: bool = True,
+                  port: int | None = None) -> dict:
+    """Compare this instance with another one and report what changed
+
+    Composes the program fingerprint, the functions (by address, with renames
+    told apart from additions and removals), the imports and the defined
+    strings. A listing that could not be read to its end is reported as a
+    floor, never as a removal.
+
+    Args:
+        b_port: Port of the instance to compare against
+        include_strings: Compare the defined strings (default True)
+        port: Specific Ghidra instance port for the left side (optional)
+
+    Returns:
+        dict: Functions added/removed/renamed, imports and strings added/removed
+    """
+    port = _get_instance_port(port)
+    left = _diff_collect(port, include_strings=include_strings)
+    right = _diff_collect(int(b_port), include_strings=include_strings)
+    return {"success": True, "result": _diff_snapshots(left, right)}
+
+
 _TOOL_GROUPS = {
     "core": {"programs", "project", "projects", "instances", "ui", "doctor",
              "evidence", "session", "tasks", "tools"},
@@ -10955,6 +11426,7 @@ _TOOL_GROUPS = {
     "headless": {"headless"},
     "kuna": {"kuna"},
     "x64dbg": {"x64dbg"},
+    "runbook": {"runbook"},
 }
 
 _META_NAMESPACE = "tools"

@@ -530,3 +530,54 @@ def _collect_pages(client, endpoint, limit=1000, max_pages=20):
             break
         offset += len(page)
     return {'success': True, 'result': items}
+@analysis.command('diff')
+@click.option('--a-host', default=None, help='Host of the first instance (default: the CLI host)')
+@click.option('--a-port', type=int, default=None, help='Port of the first instance (default: the CLI port)')
+@click.option('--b-host', default=None, help='Host of the second instance (default: same as A)')
+@click.option('--b-port', type=int, required=True, help='Port of the second instance')
+@click.option('--no-strings', is_flag=True, help='Skip the defined-strings comparison')
+@click.pass_context
+def diff_cmd(ctx, a_host, a_port, b_host, b_port, no_strings):
+    """Compare two instances and report what changed (R6).
+
+    Compares the program fingerprint, the functions (by address, with renames
+    told apart from additions and removals), the imports and the defined
+    strings. A listing that could not be read to its end is reported as a
+    floor, never as a removal.
+
+    \b
+    Example:
+        ghydra analysis diff --a-port 8192 --b-port 8193
+        ghydra analysis diff --a-port 8192 --b-port 8193 --no-strings
+    """
+    from ..client.http_client import GhidraHTTPClient
+    from ..diff import collect_snapshot, diff_snapshots, to_text as render_text
+
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+    config = ctx.obj['config']
+
+    a = GhidraHTTPClient(host=a_host or client.host,
+                         port=a_port or client.port,
+                         timeout=config.timeout)
+    b = GhidraHTTPClient(host=b_host or a_host or client.host,
+                         port=b_port,
+                         timeout=config.timeout)
+
+    try:
+        snapshot_a = collect_snapshot(a, include_strings=not no_strings)
+        snapshot_b = collect_snapshot(b, include_strings=not no_strings)
+        report = diff_snapshots(snapshot_a, snapshot_b)
+    except GhidraError as exc:
+        error_output = formatter.format_error(exc)
+        rich_echo(error_output, err=True)
+        ctx.exit(1)
+
+    if ctx.obj.get('output_json'):
+        click.echo(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        output = render_text(report)
+        if should_page(config, ctx.obj['output_json']):
+            page_output(output, use_pager=config.page_output)
+        else:
+            click.echo(output)
