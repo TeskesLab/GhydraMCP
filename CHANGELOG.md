@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The BSim surface is documented where people look for it**: a new
+  `GHYDRA_BSIM.md` guide (setup, building a corpus, querying, applying a match,
+  comparing two versions, the five measured traps, and the commands that
+  reproduce every number), the five `/bsim/*` routes added to the HTTP reference
+  (§13) — they had no documentation at all — and `--twin` added to `TESTING.md`'s
+  suite list and its "runs without Ghidra" note. The features existed and were
+  validated; this makes them findable.
 - **The digital twin (R2), and the measurement that keeps it honest**:
   `ghydra twin build|query|diff` take a **snapshot** of a binary — program,
   functions, imports, exports, strings, counts, with the executable md5 and the

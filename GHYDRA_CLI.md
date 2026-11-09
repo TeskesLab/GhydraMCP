@@ -1485,6 +1485,8 @@ ghydra bsim query         # which stored functions look like this one
 ghydra bsim apply-names   # name a function after its best match (dry run by default)
 ghydra bsim diff          # what changed between two versions, paired by signature
 
+> The signature subsystem has its own guide: `GHYDRA_BSIM.md` (setup, corpus, the four traps).
+
 ### The digital twin (R2)
 
 A snapshot of a binary that answers questions with no Ghidra running — measured

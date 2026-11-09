@@ -1000,6 +1000,150 @@ Defines a `RawImage` data type at an address so a captured framebuffer renders i
 
   Errors: `400 BAD_REQUEST` if `address` is unparseable, or if data is defined there that is **not** a RawImage (the message names the actual type) — this guard prevents clearing an unrelated data item. An empty `addresses` array in single mode means nothing was defined at that address.
 
+### 13. BSim (signatures)
+
+Signature similarity across a corpus. BSim is a Ghidra **feature**, not a plugin
+API, so its availability is discovered by loading the class: a build may ship
+without it. The database is configuration — `-Dghydra.bsim.database=<path>` or
+`GHYDRA_BSIM_DATABASE=<path>` — and it is a **local H2 file**, created on first
+ingest. Nothing here talks to a server.
+
+`GET /capabilities` carries the flags this surface answers to: `features.bsim`
+(engine present), `features.bsim_ingest` (a database is named),
+`features.bsim_query` (the database exists), `features.bsim_apply_names`.
+
+#### `GET /bsim/status`
+
+- **`available`**: the signature engine is on this build's classpath.
+- **`database`**: the configured path, or `null`.
+- **`database_exists`**: the H2 file is on disk. Checked through the suffixes H2
+  actually uses — `<path>.mv.db` (and the older `.h2.db`) — because the bare path
+  a database is *named* by is never the file it lives in. Measured: a 120 KB
+  database created by an ingest was reported missing when only the bare path was
+  checked.
+- **`ready`**: a query is possible (engine + a named database).
+- **`can_ingest`**: an ingest is possible (engine + a named database; the file is
+  created if absent).
+- **`reason`**: what is missing, in the terms of the command that fixes it.
+
+```json
+"result": {
+  "available": true,
+  "database": "C:\\tmp\\sig.bsim",
+  "database_exists": true,
+  "ready": true,
+  "can_ingest": true,
+  "reason": null
+}
+```
+
+#### `POST /bsim/ingest`
+
+Generate signatures for the **open program** and insert them into the configured
+database, creating it when it does not exist.
+
+| Query parameter | Meaning |
+| --- | --- |
+| `max_functions` | How many functions to scan at most (0 or absent = all, cap 200 000) |
+| `track_call_graph` | `true` records the call graph. **Default `false`** — see the note below. |
+
+The answer reports `discovered_functions`, `scanned_functions`,
+`skipped_functions`, `described_functions`, `inserted_functions`,
+`inserted_executables`, `created` and `seconds`. Measured on Ghidra 12.2:
+`where.exe` → **94 functions inserted in 3.1 s** into a 120 KB database.
+
+Re-ingesting a program that is already there is **not a failure**: BSim
+deduplicates by executable fingerprint, and the answer says
+`success: true, already_present: true, inserted_functions: 0`.
+
+> **The call graph is off by default, deliberately.** Measured on Ghidra 12.2 / H2:
+> a database created with `trackcallgraph=true` rejects the insert with a
+> duplicate `callgraphtable(src,dest)` key on ordinary recursion. The signature
+> tables are what a similarity query needs, so the default is off; turning it on
+> is an explicit request and may fail that way.
+
+Failure codes: `BSIM_DISABLED`, `BSIM_NO_DATABASE`, `BSIM_NO_PROGRAM`,
+`BSIM_CREATE_FAILED`, `BSIM_INIT_FAILED`, `BSIM_SCAN_FAILED`,
+`BSIM_INSERT_FAILED`, `BSIM_INGEST_FAILED`.
+
+#### `GET /bsim/query`
+
+Which stored functions look like **one function of the open program**.
+
+| Query parameter | Meaning |
+| --- | --- |
+| `address` | The function address (one of `address`/`name`) |
+| `name` | The function name (when no address is given) |
+| `min_similarity` | Similarity floor 0..1 (absent = 0.7) |
+| `min_significance` | Significance floor (absent = 0) |
+| `max_matches` | How many matches to return (absent = 10, cap 200) |
+
+Each match carries `function`, `address`, `executable`, `path`, `similarity` and
+`significance` — **BSim's own numbers**, and the answer's `method` line says a
+match is a lead, not an identification. An empty answer states the threshold it
+used (`"no stored function is at least 0.8 similar (threshold used)"`), so
+"not in the corpus" cannot be mistaken for "the search was narrowed".
+
+Measured: `where.exe`'s `FUN_140001010` matched itself with **similarity 1.0 /
+significance 26.024 in 0.8 s** (0.2 s when asked by name).
+
+Failure codes: `BSIM_NO_FUNCTION`, `BSIM_NO_BODY` (a thunk or an external has no
+signature to make), plus the ingest codes above.
+
+#### `POST /bsim/apply-names`
+
+Name a function after the stored function it most resembles.
+
+| Query parameter | Meaning |
+| --- | --- |
+| `address` / `name` | Which function to rename |
+| `min_similarity` | The floor for applying (absent = 0.8) |
+| `dry_run` | **Default `true`**: report the change without making it |
+
+The rename happens inside a Ghidra transaction, so it is undoable like any other
+edit, and the answer carries the match's `similarity` and `significance` so the
+change can be judged later. A function that already carries the matched name is
+reported as `already_named` instead of rewritten.
+
+Failure codes add `BSIM_NO_MATCH` (nothing above the floor), `BSIM_BELOW_THRESHOLD`,
+`BSIM_NO_NAME`, `BSIM_RENAME_REFUSED`, `BSIM_RENAME_FAILED`.
+
+Measured end to end: a function renamed locally to `my_local_name` produced
+`would_rename` on the dry run (verified unchanged through
+`GET /functions/{address}`) and `applied: true` on `dry_run=false`, after which the
+API reported the matched name.
+
+#### `GET /bsim/diff`
+
+What changed between two versions, **paired by signature** rather than by
+address — the complement of `GET /analysis/diff`: a function that moved address
+(or lost its name in the rebuild) is reported as the same function relocated,
+instead of one removal plus one addition. Both versions must have been ingested.
+
+| Query parameter | Meaning |
+| --- | --- |
+| `other_executable` (**required**) | The executable name the database recorded for the other version |
+| `max_functions` | How many functions to compare (absent = 25, cap 500) |
+| `min_similarity` | The floor for calling two functions a pair (absent = 0.8) |
+
+Every row carries a `class`: `same` (paired at the same address), `moved` (paired
+at another address, with the pair's similarity), `not_found` (no function of the
+other version above the floor), or `no_signature` (the function has no body, so it
+could never be in the database). `query_failures` lists the queries that failed —
+kept apart from `not_found` on purpose, because "not in the other version" would
+be a lie about a function that was never ingested.
+
+The cost is one BSim query per function (measured at 0.2–0.8 s each), so the walk
+is bounded and the answer reports `not_compared`.
+
+Measured: `where.exe` against itself — **6 of 8 compared functions paired as
+`same` in 2.4 s**, and the two imported thunks came back `not_found` (they are
+not in the database: ingest stores functions with a body). Against an executable
+that is not in the database, every function answered `not_found` rather than an
+invented pair.
+
+Failure codes: `BSIM_NO_TARGET`, `BSIM_NO_DATABASE`, `BSIM_NO_PROGRAM`.
+
 ## Design Considerations for AI Usage
 
 - **Structured responses**: JSON format ensures predictable parsing by AI agents.
