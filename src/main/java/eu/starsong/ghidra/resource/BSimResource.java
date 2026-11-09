@@ -4,6 +4,7 @@ import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
 import eu.starsong.ghidra.server.Resource;
 import eu.starsong.ghidra.service.BSimIngestService;
+import eu.starsong.ghidra.service.BSimApplyService;
 import eu.starsong.ghidra.service.BSimQueryService;
 import eu.starsong.ghidra.service.BSimService;
 import io.javalin.Javalin;
@@ -27,6 +28,8 @@ public class BSimResource implements Resource {
         app.get("/bsim/status", ctx -> status(contextFactory.apply(ctx)));
         app.post("/bsim/ingest", ctx -> ingest(contextFactory.apply(ctx)));
         app.get("/bsim/query", ctx -> query(contextFactory.apply(ctx)));
+        app.post("/bsim/apply-names",
+            ctx -> applyNames(contextFactory.apply(ctx)));
     }
 
     /**
@@ -81,6 +84,30 @@ public class BSimResource implements Resource {
         ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
             .self("/bsim/query")
             .link("status", "/bsim/status")
+            .link("ingest", "/bsim/ingest")
+            .build());
+    }
+
+    /**
+     * Name a function after the stored one it most resembles.
+     *
+     * <p><b>Dry run by default.</b> A signature match is a heuristic, and a
+     * wrong rename is a wrong map of the program; the caller has to ask for the
+     * change with {@code dry_run=false}, and the answer carries the similarity
+     * that justified it so the edit can be judged (and undone) later.
+     */
+    private void applyNames(GhidraContext ctx) {
+        double minSimilarity = parseDouble(ctx, "min_similarity",
+            BSimApplyService.MIN_APPLY_SIMILARITY);
+        boolean dryRun = Boolean.parseBoolean(
+            ctx.ctx().queryParam("dry_run") == null ? "true"
+                : ctx.ctx().queryParam("dry_run").trim());
+        java.util.Map<String, Object> data = BSimApplyService.apply(
+            ctx.program(), ctx.ctx().queryParam("address"),
+            ctx.ctx().queryParam("name"), minSimilarity, dryRun);
+        ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
+            .self("/bsim/apply-names")
+            .link("query", "/bsim/query")
             .link("ingest", "/bsim/ingest")
             .build());
     }

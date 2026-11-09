@@ -178,3 +178,71 @@ def query_cmd(ctx, address, name, min_similarity, min_significance, max_matches)
                    f" in {where}" + (f" ({path})" if path else ""))
     if result.get('reason'):
         click.echo(f"  {result['reason']}")
+
+
+@bsim.command('apply-names')
+@click.option('--address', default=None, help='The function address to name')
+@click.option('--name', default=None, help='The function name to look up')
+@click.option('--min-similarity', type=float, default=0.0,
+              help='The floor for applying (0 = default 0.8)')
+@click.option('--dry-run/--apply', default=True,
+              help='Report the change without making it (default: dry run)')
+@click.pass_context
+def apply_names_cmd(ctx, address, name, min_similarity, dry_run):
+    """Name a function after the stored function it most resembles (R1).
+
+    Dry run by default: the command reports what it would do. Pass --apply to
+    rename. The match's similarity travels with the answer, because a signature
+    match is a heuristic.
+
+    \b
+    Example:
+        ghydra bsim apply-names --address 0x140001010 --apply
+    """
+    client = ctx.obj['client']
+    formatter = ctx.obj['formatter']
+
+    if not address and not name:
+        click.echo("give one of --address or --name", err=True)
+        ctx.exit(2)
+    params = {'dry_run': 'true' if dry_run else 'false'}
+    if address:
+        params['address'] = address
+    if name:
+        params['name'] = name
+    if min_similarity:
+        params['min_similarity'] = min_similarity
+    try:
+        response = client.post('bsim/apply-names', params=params)
+    except GhidraError as exc:
+        click.echo(formatter.format_error(exc), err=True)
+        ctx.exit(1)
+
+    result = response.get('result') if isinstance(response, dict) else None
+    if not isinstance(result, dict):
+        click.echo(str(response), err=True)
+        ctx.exit(1)
+
+    if ctx.obj.get('output_json'):
+        click.echo(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+
+    if result.get('already_named'):
+        click.echo(f"BSim apply: {result.get('from')} already carries the "
+                   f"matched name")
+        click.echo(f"  database: {result.get('database')}")
+        return
+    match = result.get('match') or {}
+    click.echo(f"BSim apply: {result.get('from')} -> {result.get('to')}")
+    click.echo(f"  database: {result.get('database')}")
+    click.echo(f"  from: {match.get('executable') or '?'}"
+               f" {match.get('function')} @ {match.get('address')}")
+    click.echo(f"  similarity: {match.get('similarity')}"
+               f" (significance {match.get('significance')})")
+    click.echo(f"  floor: {result.get('min_similarity')}")
+    if result.get('applied'):
+        click.echo("  applied: yes (undo in Ghidra if the match is wrong)")
+    elif result.get('would_rename'):
+        click.echo("  applied: no (dry run) — pass --apply to rename")
+    if result.get('reason') and not result.get('applied'):
+        click.echo(f"  {result['reason']}")

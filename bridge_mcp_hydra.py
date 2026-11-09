@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.22.0"
+BRIDGE_VERSION = "v3.23.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -4026,6 +4026,34 @@ def format_bsim_query(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_bsim_apply_names(response: dict, **kwargs) -> str:
+    """What apply-names did, or would do, with the match that justified it."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    if result.get("already_named"):
+        return "\n".join([
+            f"BSim apply: {result.get('from')} already carries the matched name",
+            f"  database: {result.get('database')}"])
+    match = result.get("match") or {}
+    lines = [f"BSim apply: {result.get('from')} -> {result.get('to')}",
+             f"  database: {result.get('database')}",
+             f"  from: {match.get('executable') or '?'}"
+             f" {match.get('function')} @ {match.get('address')}",
+             f"  similarity: {match.get('similarity')}"
+             f" (significance {match.get('significance')})",
+             f"  floor: {result.get('min_similarity')}"]
+    if result.get("applied"):
+        lines.append("  applied: yes (undo in Ghidra if the match is wrong)")
+    elif result.get("would_rename"):
+        lines.append("  applied: no (dry run) — pass dry_run=False to rename")
+    if result.get("reason") and not result.get("applied"):
+        lines.append(f"  {result['reason']}")
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -4164,6 +4192,7 @@ FORMATTERS = {
     "bsim_status": format_bsim_status,
     "bsim_ingest": format_bsim_ingest,
     "bsim_query": format_bsim_query,
+    "bsim_apply_names": format_bsim_apply_names,
 }
 
 
@@ -13056,6 +13085,45 @@ def bsim_query(address: str = "", name: str = "", min_similarity: float = 0.0,
     if max_matches:
         params["max_matches"] = int(max_matches)
     return simplify_response(safe_get(port, "bsim/query", params=params or None))
+
+
+
+@mcp.tool()
+@text_output
+def bsim_apply_names(address: str = "", name: str = "", min_similarity: float = 0.0,
+                     dry_run: bool = True, port: int | None = None) -> dict:
+    """Name a function after the stored function it most resembles
+
+    Queries the signature database for this function's best match and renames it
+    to the matched name — **only when asked**: `dry_run` is true by default, so
+    the call reports what it would do and changes nothing. The answer always
+    carries the match's similarity and significance, because a signature match is
+    a heuristic and the rename has to be judgeable (and undoable in Ghidra).
+
+    Nothing is applied below `min_similarity` (default 0.8), and a function that
+    already carries the matched name is reported instead of rewritten.
+
+    Args:
+        address: The function address to name
+        name: The function name to look up (when no address is given)
+        min_similarity: The floor for applying (0 = default 0.8)
+        dry_run: Report the change without making it (default True)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: from/to, whether the rename was applied (or would be), the match
+              with its similarity, and the reason when nothing was applied
+    """
+    port = _get_instance_port(port)
+    params = {"dry_run": "false" if not dry_run else "true"}
+    if address:
+        params["address"] = address
+    if name:
+        params["name"] = name
+    if min_similarity:
+        params["min_similarity"] = min_similarity
+    return simplify_response(
+        safe_post(port, "bsim/apply-names", params=params))
 
 
 

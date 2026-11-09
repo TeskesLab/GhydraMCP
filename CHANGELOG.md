@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **BSim apply-names (R1, slice 4a), validated against a live Ghidra 12.2**:
+  `POST /bsim/apply-names`, `bsim_apply_names` and `ghydra bsim apply-names` name
+  a function after the stored function it most resembles. **The default is a dry
+  run** — the answer says `would_rename` and the program is untouched — and the
+  rename only happens with an explicit `dry_run=false`, through a
+  `TransactionHelper` transaction so it is undoable in Ghidra. Nothing is applied
+  below the similarity floor (default 0.8), a function already carrying the
+  matched name is reported instead of rewritten, and the match's similarity and
+  significance travel with the answer because the match is a heuristic.
+  Validated end to end: a function renamed locally to `my_local_name` produced
+  `would_rename` on the dry run (verified unchanged through `/functions/{addr}`)
+  and `applied: true` on the real call, after which the API reported the matched
+  name. Checks also found: `TransactionHelper` wraps refusals into a
+  `RuntimeException` (so the catch is one clause, with the reason read from the
+  cause), and its home is `eu.starsong.ghidra.util`, not the framework package.
 - **BSim query (R1, slice 3), validated against a live Ghidra 12.2**:
   `GET /bsim/query`, `bsim_query` and `ghydra bsim query` ask the signature
   database which stored functions look like one function of the open program,

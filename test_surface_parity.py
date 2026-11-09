@@ -330,6 +330,79 @@ class BSimQueryTests(unittest.TestCase):
                       if "method" in self.RESULT["result"] else
                       "a match is a lead, not an identification")
 
+class BSimApplyNamesTests(unittest.TestCase):
+    """BSim apply-names (R1, slice 4a): the tool, the formatter and the CLI.
+
+    Validated live against Ghidra 12.2: a function renamed locally to
+    `my_local_name` was reported by a dry run as `would_rename` (program
+    untouched), and with `dry_run=false` it was renamed back to
+    `FUN_140001010`, similarity 1.0, and the rename was verified through
+    `/functions/{address}`. What can be pinned down without a Ghidra is the
+    safety contract: **the default must never write**.
+    """
+
+    MATCH = {"function": "FUN_140001010", "address": "0x140001010",
+             "executable": "where.exe", "path": None,
+             "similarity": 1.0, "significance": 26.024}
+
+    def _result(self, **overrides):
+        payload = {"database": "/tmp/sig.bsim", "function": "my_local_name",
+                   "address": "140001010", "from": "my_local_name",
+                   "to": "FUN_140001010", "min_similarity": 0.8,
+                   "dry_run": True, "match": self.MATCH, "success": True}
+        payload.update(overrides)
+        return {"success": True, "result": payload}
+
+    def test_the_tool_is_registered_with_a_formatter(self):
+        tools = set(getattr(bridge.mcp._tool_manager, "_tools", {}))
+        self.assertIn("bsim_apply_names", tools)
+        self.assertIn("bsim_apply_names", bridge.FORMATTERS)
+
+    def test_it_is_part_of_the_analysis_workflow(self):
+        self.assertEqual("functions", bridge._tool_group("bsim_apply_names"))
+
+    def test_the_default_is_a_dry_run(self):
+        """The one property that matters: calling it without asking changes nothing."""
+        tool = next(item for item in bridge.mcp._tool_manager.list_tools()
+                    if item.name == "bsim_apply_names")
+        properties = (getattr(tool, "parameters", None) or {}).get("properties", {})
+        self.assertTrue(properties["dry_run"].get("default", True))
+        self.assertNotIn("arguments", properties)
+
+    def test_a_dry_run_says_it_did_not_apply(self):
+        text = bridge.format_bsim_apply_names(
+            self._result(would_rename=True, applied=False))
+        self.assertIn("my_local_name -> FUN_140001010", text)
+        self.assertIn("applied: no (dry run)", text)
+        self.assertIn("similarity: 1.0 (significance 26.024)", text)
+
+    def test_an_applied_rename_says_it_was_applied(self):
+        text = bridge.format_bsim_apply_names(
+            self._result(applied=True, similarity=1.0))
+        self.assertIn("applied: yes", text)
+        self.assertIn("undo in Ghidra", text)
+
+    def test_an_already_named_function_is_not_rewritten(self):
+        text = bridge.format_bsim_apply_names({"success": True, "result": {
+            "already_named": True, "from": "FUN_1", "database": "/tmp/sig"}})
+        self.assertIn("already carries the matched name", text)
+        self.assertNotIn("->", text)
+
+    def test_a_refused_apply_keeps_the_reason(self):
+        text = bridge.format_bsim_apply_names({"success": False, "error": {
+            "code": "BSIM_NO_MATCH",
+            "message": "no stored function is at least 0.8 similar"}})
+        self.assertIn("no stored function is at least 0.8 similar", text)
+
+    def test_the_cli_command_is_dry_run_by_default_and_can_apply(self):
+        from ghydra.cli.main import cli
+        command = cli.commands["bsim"].commands["apply-names"]
+        options = {param.name: param for param in command.params}
+        self.assertIn("address", options)
+        self.assertIn("name", options)
+        self.assertIn("dry_run", options)
+        self.assertTrue(options["dry_run"].default)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
