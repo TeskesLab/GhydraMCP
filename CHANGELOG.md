@@ -7,7 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **The `--scripts` suite no longer flakes on its own fixture**: the fixture
+- **`mission_start` on the bridge**: mission mode now has a tool as well as a
+  CLI, so the three surfaces agree. `mission_start(goal, max_calls, max_tokens,
+  output, verify)` runs the same plan through the bridge's own primitives, writes
+  the dossier to `~/.ghydra/missions/<id>.md` and answers with it. The bridge
+  version is stateless (no checkpoint/resume — that is the CLI's), and the
+  parity test asserts both sides produce the same hints, the same findings, the
+  same skipped steps and the same stop on a spent budget. The `mission`
+  namespace joins the `core` group, so it is always visible.- **The `--scripts` suite no longer flakes on its own fixture**: the fixture
   handed its port to a test before `serve_forever()` was accepting connections,
   and every immediate retry landed in that same closed window - which read as an
   unretryable `CONNECTION_ERROR` in roughly two runs out of five on this

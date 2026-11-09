@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.5.0"
+BRIDGE_VERSION = "v3.6.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -3173,6 +3173,16 @@ def format_analysis_taint(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_mission_start(response: dict, **kwargs) -> str:
+    """A mission dossier: findings, verification and what was not determined."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    return str(result.get("dossier") or "")
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -3304,6 +3314,7 @@ FORMATTERS = {
     "runbook_replay": format_runbook_replay,
     "analysis_diff": format_analysis_diff,
     "analysis_taint": format_analysis_taint,
+    "mission_start": format_mission_start,
 }
 
 
@@ -11668,9 +11679,362 @@ def analysis_taint(source: str, sink: str, max_depth: int = 8,
             "result": _taint_find_hypotheses(port, source, sink, max_depth)}
 
 
+# ================= Mission mode (R8) =================
+# Duplicated from ghydra/mission.py: the bridge is a standalone script and must
+# not import the ghydra package. test_mission.py asserts the two sides agree on
+# the hints, the findings and the budget.
+
+_MISSION_VERSION = 1
+_MISSION_HINT_PATTERNS = {
+    "source": r"\b(?:de|from|entrada|enters?|input)\s+[`\"']?([A-Za-z_][\w.]*)",
+    "sink": (r"\b(?:para|to|ate|até|into|sink|reach(?:es)?|alcanc[ae]|alcança|"
+             r"chega(?:r)?)\s+[`\"']?([A-Za-z_][\w.]*)"),
+    "address": r"\b(0x[0-9A-Fa-f]+)\b",
+    "function": r"\b(?:funcao|função|function)\s+[`\"']?([A-Za-z_]\w*)",
+}
+
+
+def _mission_parse_goal(goal: str) -> dict:
+    hints = {}
+    for key, pattern in _MISSION_HINT_PATTERNS.items():
+        match = re.search(pattern, str(goal or ""), re.IGNORECASE)
+        if match:
+            hints[key] = match.group(1)
+    return hints
+
+
+def _mission_dir() -> str:
+    base = os.environ.get("GHYDRA_STATE_DIR")
+    root = base if base else os.path.join(os.path.expanduser("~"), ".ghydra")
+    path = os.path.join(root, "missions")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+class _MissionBudget:
+    def __init__(self, max_calls: int, max_tokens: int):
+        self.max_calls = max(1, int(max_calls))
+        self.max_tokens = max(1, int(max_tokens))
+        self.calls = 0
+        self.tokens = 0
+        self.started = time.time()
+
+    def exhausted(self):
+        if self.calls >= self.max_calls:
+            return f"the call budget ({self.max_calls}) is spent"
+        if self.tokens >= self.max_tokens:
+            return f"the token budget ({self.max_tokens}) is spent"
+        return None
+
+    def spend(self, payload) -> None:
+        self.calls += 1
+        text = json.dumps(payload, default=str) if payload is not None else ""
+        self.tokens += max(1, len(text) // 4)
+
+    def as_dict(self) -> dict:
+        return {"calls": self.calls, "max_calls": self.max_calls,
+                "tokens": self.tokens, "max_tokens": self.max_tokens,
+                "seconds": round(time.time() - self.started, 1)}
+
+
+class _Mission:
+    """The state a bridge-side mission carries."""
+
+    def __init__(self, goal: str, budget: _MissionBudget, port: int):
+        self.goal = goal
+        self.id = f"m{int(time.time())}"
+        self.budget = budget
+        self.port = port
+        self.hints = _mission_parse_goal(goal)
+        self.findings = []
+        self.steps = []
+        self.skipped = []
+        self.program = {}
+        self.failed = None
+
+    def add_finding(self, kind: str, title: str, detail: str = "",
+                    confidence: str = "medium", evidence=None,
+                    status: str = "open") -> dict:
+        finding = {"id": f"EV-{len(self.findings) + 1:04d}", "kind": kind,
+                   "title": title, "detail": detail, "confidence": confidence,
+                   "status": status, "evidence": evidence or []}
+        self.findings.append(finding)
+        return finding
+
+    def add_unknown(self, question: str, reason: str) -> dict:
+        return self.add_finding("unknown", question, reason,
+                                confidence="low", status="unknown")
+
+    def evidence(self, endpoint: str, payload, params=None) -> dict:
+        return {"endpoint": endpoint, "params": params,
+                "digest": _runbook_digest(_runbook_stable_result(payload))}
+
+    def as_dict(self) -> dict:
+        return {"mission": _MISSION_VERSION, "id": self.id, "goal": self.goal,
+                "hints": self.hints, "program": self.program,
+                "findings": self.findings, "steps": self.steps,
+                "skipped": self.skipped, "failed": self.failed,
+                "budget": self.budget.as_dict()}
+
+
+def _mission_get(mission: _Mission, endpoint: str, params=None):
+    reason = mission.budget.exhausted()
+    if reason:
+        raise _MissionBudgetSpent(reason)
+    response = safe_get(mission.port, endpoint, params)
+    mission.budget.spend(response)
+    return response
+
+
+class _MissionBudgetSpent(Exception):
+    pass
+
+
+def _mission_result(envelope):
+    if isinstance(envelope, dict) and envelope.get("success", False):
+        return envelope.get("result")
+    return None
+
+
+def _mission_error_code(envelope) -> str:
+    if isinstance(envelope, dict):
+        error = envelope.get("error")
+        if isinstance(error, dict):
+            return str(error.get("code") or "UNKNOWN")
+    return "UNKNOWN"
+
+
+def _mission_step_overview(mission: _Mission) -> None:
+    envelope = _mission_get(mission, "program")
+    payload = _mission_result(envelope)
+    if not isinstance(payload, dict):
+        mission.failed = "MISSION_NO_PROGRAM"
+        mission.add_unknown("What is this binary?",
+                            f"the program could not be read ({_mission_error_code(envelope)})")
+        return
+    mission.program = {key: payload.get(key) for key in
+                       ("name", "executable_path", "image_base", "language")
+                       if payload.get(key) is not None}
+    mission.add_finding("data", "Program fingerprint",
+                        json.dumps(mission.program, ensure_ascii=False),
+                        confidence="high",
+                        evidence=[mission.evidence("program", envelope)])
+
+
+def _mission_step_capabilities(mission: _Mission) -> None:
+    imports_envelope = _mission_get(mission, "symbols/imports", {"limit": 1000})
+    strings_envelope = _mission_get(mission, "strings", {"limit": 1000})
+    report = build_capability_report({"success": True, "result": mission.program},
+                                    imports_envelope, strings_envelope,
+                                    include_strings=True)
+    leads = report.get("findings") or []
+    if not isinstance(leads, list) or not leads:
+        mission.add_unknown("What does this binary do?",
+                            "no ATT&CK/MBC lead matched the imports or strings")
+        return
+    for lead in leads[:10]:
+        if not isinstance(lead, dict):
+            continue
+        mission.add_finding(
+            "data", str(lead.get("technique") or lead.get("name") or "capability lead"),
+            json.dumps(lead.get("evidence") or lead, ensure_ascii=False),
+            confidence=str(lead.get("confidence") or "medium"),
+            evidence=[mission.evidence("symbols/imports", imports_envelope),
+                      mission.evidence("strings", strings_envelope)])
+
+
+def _mission_step_taint(mission: _Mission) -> None:
+    source = mission.hints.get("source")
+    sink = mission.hints.get("sink")
+    if not source or not sink:
+        mission.add_unknown(
+            "Does untrusted data reach a dangerous sink?",
+            "the goal names no source and sink, so no hypothesis was formed")
+        return
+    report = _taint_find_hypotheses(mission.port, source, sink)
+    hypotheses = report.get("hypotheses") or []
+    if not hypotheses:
+        mission.add_unknown(
+            f"Does data from {source} reach {sink}?",
+            "no source-to-sink path was found; the search is linear and "
+            "bounded, so this is not proof of safety")
+        return
+    for hypothesis in hypotheses[:10]:
+        mission.add_finding(
+            "vulnerability",
+            f"{source} -> {sink} ({hypothesis.get('confidence')})",
+            str(hypothesis.get("reason") or ""),
+            confidence="high" if hypothesis.get("confidence") == "direct" else "medium",
+            evidence=[mission.evidence("analysis/call-path",
+                                       {"path": hypothesis.get("hops")},
+                                       {"from": source, "to": sink})])
+
+
+def _mission_step_address(mission: _Mission) -> None:
+    address = mission.hints.get("address")
+    if not address:
+        return
+    envelope = _mission_get(mission, f"inspect/address/{address}")
+    payload = _mission_result(envelope)
+    if not isinstance(payload, dict):
+        mission.add_unknown(f"What is at {address}?",
+                            f"the address could not be inspected ({_mission_error_code(envelope)})")
+        return
+    mission.add_finding("xref", f"Address context at {address}",
+                        json.dumps(payload, ensure_ascii=False)[:2000],
+                        confidence="high",
+                        evidence=[mission.evidence(f"inspect/address/{address}", envelope)])
+
+
+_MISSION_STEPS = (
+    ("overview", _mission_step_overview),
+    ("capabilities", _mission_step_capabilities),
+    ("taint", _mission_step_taint),
+    ("address", _mission_step_address),
+)
+
+
+def _mission_run(mission: _Mission) -> _Mission:
+    for index, (name, step) in enumerate(_MISSION_STEPS):
+        if mission.failed:
+            mission.skipped.extend(other for other, _ in _MISSION_STEPS[index:])
+            break
+        reason = mission.budget.exhausted()
+        if reason:
+            mission.skipped.extend(other for other, _ in _MISSION_STEPS[index:])
+            mission.add_unknown("Was the whole plan run?",
+                                f"{reason}; the steps "
+                                f"{', '.join(other for other, _ in _MISSION_STEPS[index:])} "
+                                f"were not run")
+            break
+        try:
+            step(mission)
+            mission.steps.append({"step": name, "status": "done"})
+        except _MissionBudgetSpent as exc:
+            mission.skipped.append(name)
+            mission.add_unknown("Was the whole plan run?", str(exc))
+            break
+    return mission
+
+
+def _mission_verify(mission: _Mission) -> dict:
+    checked = 0
+    for finding in mission.findings:
+        if finding.get("status") == "unknown" or not finding.get("evidence"):
+            continue
+        verified = True
+        for item in finding["evidence"]:
+            if item.get("endpoint") == "analysis/call-path":
+                continue
+            checked += 1
+            response = safe_get(mission.port, item["endpoint"], item.get("params"))
+            current = _runbook_digest(_runbook_stable_result(response))
+            if current != item.get("digest"):
+                verified = False
+        finding["status"] = "verified" if verified else "unverified"
+    unverified = [f["id"] for f in mission.findings if f["status"] == "unverified"]
+    return {"checked": checked,
+            "verified": sum(1 for f in mission.findings if f["status"] == "verified"),
+            "unverified": unverified, "ok": not unverified}
+
+
+def _mission_markdown(mission: _Mission, verification) -> str:
+    lines = [f"# Mission: {mission.goal}", "",
+             f"- id: `{mission.id}`",
+             f"- program: `{mission.program.get('name') or '?'}` "
+             f"({mission.program.get('executable_path') or 'no path'})",
+             f"- hints: {json.dumps(mission.hints, ensure_ascii=False)}",
+             f"- budget: {mission.budget.calls}/{mission.budget.max_calls} calls, "
+             f"~{mission.budget.tokens} tokens, "
+             f"{mission.budget.as_dict()['seconds']}s", ""]
+    if mission.failed:
+        lines.extend([f"**The mission stopped: {mission.failed}**", ""])
+    if mission.skipped:
+        lines.extend([f"Skipped steps: {', '.join(mission.skipped)}", ""])
+    lines.extend(["## Findings", ""])
+    if not mission.findings:
+        lines.append("_No finding was recorded._")
+    for finding in mission.findings:
+        lines.append(f"### {finding['id']} — {finding['title']}")
+        lines.append("")
+        lines.append(f"- kind: `{finding.get('kind')}`  "
+                     f"confidence: `{finding.get('confidence')}`  "
+                     f"status: `{finding.get('status')}`")
+        if finding.get("detail"):
+            lines.extend(["", "```", str(finding["detail"])[:2000], "```"])
+        for item in finding.get("evidence") or []:
+            lines.append(f"- evidence: `{item.get('endpoint')}` "
+                         f"(digest `{(item.get('digest') or '')[:16]}`)")
+        lines.append("")
+    if verification is not None:
+        lines.extend(["## Verification", "",
+                      f"- evidence items re-read: {verification['checked']}",
+                      f"- findings verified: {verification['verified']}"])
+        if verification["unverified"]:
+            lines.append(f"- **unverified: {', '.join(verification['unverified'])}** "
+                         f"(their evidence moved or could not be re-read)")
+        else:
+            lines.append("- every conclusion still holds against its evidence")
+        lines.append("")
+    unknowns = [f for f in mission.findings if f.get("status") == "unknown"]
+    lines.extend(["## Not determined", ""])
+    if not unknowns:
+        lines.append("_Nothing was left undetermined._")
+    for item in unknowns:
+        lines.append(f"- {item['id']}: {item['title']} — "
+                     f"{item.get('detail') or ''}".rstrip())
+    lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@text_output
+def mission_start(goal: str, max_calls: int = 60, max_tokens: int = 200000,
+                  output: str | None = None, verify: bool = True,
+                  port: int | None = None) -> dict:
+    """Run an objective against the binary and produce an auditable dossier
+
+    Runs a plan - program fingerprint, capability leads, source-to-sink
+    hypotheses, address context - against a hard budget. It asks nothing: a
+    doubt becomes an ``unknown`` finding. Before keeping a conclusion it
+    re-reads its evidence and compares the digests, so a finding whose evidence
+    moved is reported as ``unverified``.
+
+    Args:
+        goal: The objective, in words (source, sink, address and function hints
+            are read from the text)
+        max_calls: How many API calls the mission may spend (default 60)
+        max_tokens: Approximate token budget for the answers (default 200000)
+        output: Write the dossier here (default: ~/.ghydra/missions/<id>.md)
+        verify: Re-read the evidence before keeping a conclusion (default True)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The dossier text, where it was written, and the verification
+    """
+    port = _get_instance_port(port)
+    mission = _Mission(str(goal or ""), _MissionBudget(max_calls, max_tokens), port)
+    _mission_run(mission)
+    verification = _mission_verify(mission) if verify else None
+    dossier = _mission_markdown(mission, verification)
+    target = output or os.path.join(_mission_dir(), f"{mission.id}.md")
+    try:
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write(dossier)
+    except OSError as exc:
+        return {"success": False,
+                "error": {"code": "MISSION_IO",
+                          "message": f"cannot write {target}: {exc}"}}
+    return {"success": True,
+            "result": {"id": mission.id, "dossier": dossier, "path": target,
+                       "verification": verification,
+                       "unverified": (verification or {}).get("unverified") or [],
+                       "mission": mission.as_dict()}}
+
+
 _TOOL_GROUPS = {
     "core": {"programs", "project", "projects", "instances", "ui", "doctor",
-             "evidence", "session", "tasks", "tools"},
+             "evidence", "session", "tasks", "tools", "mission"},
     "functions": {"functions", "analysis", "inspect", "variables", "memory"},
     "data": {"data", "xrefs", "scalars", "comments", "segments"},
     "types": {"structs", "datatypes", "classes", "raw", "symbols",

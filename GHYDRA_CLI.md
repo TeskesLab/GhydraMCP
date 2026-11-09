@@ -1427,3 +1427,5 @@ Three promises the tests enforce:
 
 The state is checkpointed after every step, and `resume` keeps what was spent
 while allowing the limits to be raised.
+
+O mesmo plano existe como tool no bridge (mission_start), sem checkpoint — o bridge é stateless; esume é da CLI.

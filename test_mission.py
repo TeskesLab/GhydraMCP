@@ -19,6 +19,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import bridge_mcp_hydra as bridge  # noqa: E402
 from ghydra import mission as M  # noqa: E402
 from ghydra.cli.mission_cmd import mission as mission_cmd  # noqa: E402
 
@@ -364,6 +365,137 @@ class CliTests(unittest.TestCase):
     def test_a_missing_checkpoint_exits_two(self):
         result = self._invoke(["resume", os.path.join(self.tmp.name, "nope.json")])
         self.assertEqual(2, result.exit_code)
+
+class BridgeParityTests(unittest.TestCase):
+    """The bridge duplicates the plan; both sides must report the same thing."""
+
+    def _bridge_run(self, client, goal="what does this binary do", **budget):
+        with mock.patch.object(
+                bridge, "safe_get",
+                side_effect=lambda port, endpoint, params=None: client.get(
+                    endpoint, params)), \
+                mock.patch.object(bridge, "_get_instance_port",
+                                  side_effect=lambda port=None: 8192), \
+                mock.patch.object(bridge, "_mission_dir",
+                                  return_value=tempfile.gettempdir()):
+            mission = bridge._Mission(
+                goal,
+                bridge._MissionBudget(budget.get("max_calls", 60),
+                                      budget.get("max_tokens", 200000)),
+                8192)
+            bridge._mission_run(mission)
+            return mission
+
+    def _cli_run(self, client, goal="what does this binary do", **budget):
+        current = M.Mission(goal, budget=M.Budget(
+            budget.get("max_calls", 60), budget.get("max_tokens", 200000)))
+        with mock.patch.object(M, "mission_path",
+                               return_value=os.path.join(tempfile.gettempdir(),
+                                                         "mission-parity.json")):
+            M.run(client, current)
+        return current
+
+    def test_the_hints_agree(self):
+        for goal in ("does data from recv reach system?",
+                     "what is at 0x401000",
+                     "o que faz esta funcao main",
+                     "what does this binary do"):
+            with self.subTest(goal=goal):
+                self.assertEqual(M.parse_goal(goal), bridge._mission_parse_goal(goal))
+
+    def test_the_findings_agree(self):
+        cli = self._cli_run(FakeClient())
+        br = self._bridge_run(FakeClient())
+        self.assertEqual([(f["kind"], f["title"], f["confidence"]) for f in cli.findings],
+                         [(f["kind"], f["title"], f["confidence"]) for f in br.findings])
+        self.assertEqual(cli.program, br.program)
+
+    def test_a_goal_without_hints_leaves_the_same_unknown(self):
+        cli = self._cli_run(FakeClient())
+        br = self._bridge_run(FakeClient())
+        cli_unknowns = [f["title"] for f in cli.findings if f["status"] == "unknown"]
+        br_unknowns = [f["title"] for f in br.findings if f["status"] == "unknown"]
+        self.assertEqual(cli_unknowns, br_unknowns)
+
+    def test_the_budget_stops_both_at_the_same_step(self):
+        cli = self._cli_run(FakeClient(), max_calls=1)
+        br = self._bridge_run(FakeClient(), max_calls=1)
+        self.assertEqual(cli.skipped, br.skipped)
+
+    def test_a_failed_program_stops_both(self):
+        cli = self._cli_run(FakeClient(fail={"program"}))
+        br = self._bridge_run(FakeClient(fail={"program"}))
+        self.assertEqual(cli.failed, br.failed)
+
+    def test_the_taint_finding_agrees(self):
+        goal = "does data from recv reach system?"
+        client = lambda: FakeClient(taint_client=TaintClient())
+        cli = self._cli_run(client(), goal)
+        br = self._bridge_run(client(), goal)
+        self.assertEqual(
+            [f["title"] for f in cli.findings if f["kind"] == "vulnerability"],
+            [f["title"] for f in br.findings if f["kind"] == "vulnerability"])
+
+
+class BridgeToolTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.target = os.path.join(self.tmp.name, "dossier.md")
+
+    def _invoke(self, client, goal="what does this binary do", **kwargs):
+        with mock.patch.object(
+                bridge, "safe_get",
+                side_effect=lambda port, endpoint, params=None: client.get(
+                    endpoint, params)), \
+                mock.patch.object(bridge, "_get_instance_port",
+                                  side_effect=lambda port=None: 8192):
+            return bridge.mission_start.__wrapped__(goal, **kwargs)
+
+    def test_the_tool_is_registered_with_a_formatter_in_core(self):
+        tools = set(getattr(bridge.mcp._tool_manager, "_tools", {}))
+        self.assertIn("mission_start", tools)
+        self.assertIn("mission_start", bridge.FORMATTERS)
+        self.assertEqual("core", bridge._tool_group("mission_start"))
+
+    def test_the_tool_writes_a_dossier_and_reports_verification(self):
+        result = self._invoke(FakeClient(), output=self.target)
+        self.assertTrue(result["success"], result)
+        self.assertTrue(result["result"]["verification"]["ok"])
+        text = open(self.target, encoding="utf-8").read()
+        self.assertIn("# Mission:", text)
+        self.assertIn("## Verification", text)
+        self.assertIn("EV-0001", text)
+
+    def test_a_moved_evidence_is_unverified_and_reported(self):
+        client = FakeClient()
+        with mock.patch.object(
+                bridge, "safe_get",
+                side_effect=lambda port, endpoint, params=None: client.get(
+                    endpoint, params)), \
+                mock.patch.object(bridge, "_get_instance_port",
+                                  side_effect=lambda port=None: 8192):
+            mission = bridge._Mission("goal", bridge._MissionBudget(60, 200000), 8192)
+            bridge._mission_run(mission)
+            client.program = {"name": "rewritten.exe"}
+            verification = bridge._mission_verify(mission)
+        self.assertFalse(verification["ok"])
+        self.assertTrue(verification["unverified"])
+
+    def test_verify_can_be_skipped(self):
+        result = self._invoke(FakeClient(), output=self.target, verify=False)
+        self.assertIsNone(result["result"]["verification"])
+
+    def test_the_formatter_renders_the_dossier(self):
+        result = self._invoke(FakeClient(), output=self.target)
+        rendered = bridge.format_mission_start(result)
+        self.assertIn("# Mission:", rendered)
+        self.assertIn("## Not determined", rendered)
+
+    def test_an_error_answer_renders_as_the_error(self):
+        failure = {"success": False,
+                   "error": {"code": "MISSION_IO", "message": "no disk"}}
+        self.assertIn("MISSION_IO", bridge.format_mission_start(failure))
 
 
 if __name__ == "__main__":
