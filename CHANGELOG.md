@@ -1295,3 +1295,10 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
   `release` file, a malformed properties file is not fatal, the requested JDK
   wins, an environment JDK that is too old is a place the search moves on from,
   and a Windows path still has a file name on POSIX.
+
+- **A step that failed said "done".** The progress reporter wrote "done in 1.2s"
+  from a `finally`, so a step that raised looked exactly like a step that
+  succeeded — and the person waiting, who cannot tell a step that hung from one
+  that failed, had a third thing to be misled by. It says it failed, and how
+  long it lasted, and it re-raises. The reporter had no test at all; it has one
+  now, and the package has no module left that no test reaches.

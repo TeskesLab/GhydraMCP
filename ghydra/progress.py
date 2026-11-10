@@ -38,7 +38,14 @@ class Progress:
 
     @contextmanager
     def step(self, message: str) -> Iterator[None]:
-        """One step, said before and after."""
+        """One step, said before and after.
+
+        A step that raised did not finish, so it does not say "done": it says it
+        failed, and how long it lasted before it did. The whole reason this
+        reporter exists is that the person waiting cannot tell a step that hung
+        from one that failed — and a step that says "done" after failing is the
+        third thing, and the most misleading one.
+        """
         if not self.enabled:
             yield
             return
@@ -47,7 +54,12 @@ class Progress:
         self._write(f"  [{self.steps}] {message} ...")
         try:
             yield
-        finally:
+        except BaseException:
+            took = time.time() - start
+            self.elapsed += took
+            self._write(f"      failed after {took:.1f}s")
+            raise
+        else:
             took = time.time() - start
             self.elapsed += took
             self._write(f"      done in {took:.1f}s")

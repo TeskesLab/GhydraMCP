@@ -1016,6 +1016,31 @@ def run_target_tests():
     return passed
 
 
+def run_progress_tests():
+    """Run the progress reporter suite — what a long step is doing."""
+    print_header("Running Progress Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_progress.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running progress tests: {e}")
+        return False
+
+
 def run_launcher_tests():
     """Run the launcher suite — the JDK, the installation and the command."""
     print_header("Running Launcher Tests")
@@ -1102,6 +1127,7 @@ NO_GHIDRA_SUITES = (
     "--gateway",
     "--doctor",
     "--launcher",
+    "--progress",
 )
 
 SUITES = {
@@ -1143,6 +1169,7 @@ SUITES = {
     "--target": run_target_tests,
     "--doctor": run_doctor_tests,
     "--launcher": run_launcher_tests,
+    "--progress": run_progress_tests,
     "--gateway": run_gateway_tests,
 }
 
