@@ -511,14 +511,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/launcher.py:362`"
+      "origin": "`ghydra/launcher.py:339`"
     },
     {
       "code": "LAUNCHER_NO_UTILITY",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/launcher.py:448`"
+      "origin": "`ghydra/launcher.py:462`"
     },
     {
       "code": "MISSING_PARAMETER",

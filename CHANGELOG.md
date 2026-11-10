@@ -1277,3 +1277,21 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
   other. They are merged in `fix/all-defects`, with the namespaced commands and
   the lock and the overflow guard all in force — 56 tests green under Zig 0.14.0
   and 0.17.0. The rename table is generated from the merged branch.
+
+- **An explicitly requested JDK was silently replaced by a different one.** The
+  launcher tries its layers — what the caller asked for, the configuration file,
+  `JAVA_HOME`, Ghidra's own choice, the installed JDKs — and the code treated
+  them all alike: a JDK the caller **asked for** which was older than the
+  installation needs was added to the rejected list and the search carried on.
+  The answer was another JDK, with no word about it, although the launcher's own
+  docstring and `AGENTS.md` both say that an explicit one is an error while a
+  JDK the environment merely points at is "only a place the search did not
+  stop". The explicit layer is now answered on its own.
+- **The launcher had no test of its own.** It is what the headless runner and
+  the doctor both stand on: it finds the installation, reads the JDK version the
+  installation asks for, picks a JDK that is new enough, and builds the JVM
+  invocation. Nothing exercised it. A new suite pins the properties that matter:
+  the required JDK comes from `application.java.min`, the version comes from the
+  `release` file, a malformed properties file is not fatal, the requested JDK
+  wins, an environment JDK that is too old is a place the search moves on from,
+  and a Windows path still has a file name on POSIX.

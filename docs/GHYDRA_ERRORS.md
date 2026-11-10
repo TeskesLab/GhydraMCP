@@ -238,8 +238,8 @@ user meets.
 | `INVALID_RESPONSE` | Python | — | — | `bridge_mcp_hydra.py:4888` |
 | `INVALID_TARGETS` | Python | — | — | `bridge_mcp_hydra.py:5895` |
 | `LAUNCHER_NO_GHIDRA` | Python | — | — | `ghydra/launcher.py:125` |
-| `LAUNCHER_NO_JDK` | Python | — | — | `ghydra/launcher.py:362` |
-| `LAUNCHER_NO_UTILITY` | Python | — | — | `ghydra/launcher.py:448` |
+| `LAUNCHER_NO_JDK` | Python | — | — | `ghydra/launcher.py:339` |
+| `LAUNCHER_NO_UTILITY` | Python | — | — | `ghydra/launcher.py:462` |
 | `MISSING_PARAMETER` | Python | — | — | `bridge_mcp_hydra.py:5026` |
 | `NON_JSON_RESPONSE` | Python | — | — | `bridge_mcp_hydra.py:1028` |
 | `NO_PROGRAM_LOADED` | Java | — | (computed) | `src/main/java/eu/starsong/ghidra/server/GhydraServer.java:166` |

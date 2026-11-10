@@ -1016,6 +1016,31 @@ def run_target_tests():
     return passed
 
 
+def run_launcher_tests():
+    """Run the launcher suite — the JDK, the installation and the command."""
+    print_header("Running Launcher Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_launcher.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running launcher tests: {e}")
+        return False
+
+
 def run_doctor_tests():
     """Run the doctor suite — the command that says what is wrong here."""
     print_header("Running Doctor Tests")
@@ -1076,6 +1101,7 @@ NO_GHIDRA_SUITES = (
     "--target",
     "--gateway",
     "--doctor",
+    "--launcher",
 )
 
 SUITES = {
@@ -1116,6 +1142,7 @@ SUITES = {
     "--mcp-config": run_mcp_config_tests,
     "--target": run_target_tests,
     "--doctor": run_doctor_tests,
+    "--launcher": run_launcher_tests,
     "--gateway": run_gateway_tests,
 }
 
