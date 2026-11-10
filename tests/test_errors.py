@@ -126,10 +126,20 @@ class CliEntrypointTests(unittest.TestCase):
         if env_extra:
             env.update(env_extra)
         return subprocess.run(
-            [sys.executable, "-m", "ghydra.cli.main", *args],
+            # The package's own entry, not the module: `ghydra/cli/__init__.py`
+            # imports `main`, so `-m ghydra.cli.main` runs it twice and Python
+            # warns about it on stderr.
+            [sys.executable, "-m", "ghydra.cli", *args],
             cwd=ROOT, capture_output=True, text=True, env=env,
             encoding="utf-8", errors="replace", timeout=120,
         )
+
+    def test_the_module_entry_prints_no_warning(self):
+        """The double execution used to warn on every run."""
+        result = self._run("version")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("RuntimeWarning", result.stderr)
+        self.assertNotIn("sys.modules", result.stderr)
 
     def test_help_survives_a_cp1252_stream(self):
         result = self._run("--help")
