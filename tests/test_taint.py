@@ -23,9 +23,19 @@ from ghydra.cli.analysis import taint_cmd  # noqa: E402
 
 
 def call(at, target):
-    """A CALL pcode operation aimed at a target."""
-    return {"address": at, "opcode": 57, "output": "",
+    """A CALL pcode operation aimed at a target.
+
+    `PcodeOp.CALL` is 7 (verified with `javap -p -constants` against the committed
+    `SoftwareModeling.jar`). The fixture used 57, which is `FLOAT_CEIL`: it
+    reproduced the mistake in the code instead of the wire contract.
+    """
+    return {"address": at, "opcode": 7, "output": "",
             "inputs": [target, "1"]}
+
+
+def float_op(at, opcode):
+    """A floating-point pcode operation, which is not a call."""
+    return {"address": at, "opcode": opcode, "output": "fVar1", "inputs": ["0x1"]}
 
 
 def other(at):
@@ -55,7 +65,14 @@ class FakeClient:
         if endpoint.startswith("xrefs/to-name/"):
             name = endpoint.rsplit("/", 1)[-1]
             entry = self.names.get(name) or {}
-            return {"success": True, "result": entry.get("refs") or []}
+            references = entry.get("refs") or []
+            # `XrefResource.getRefsToName()` answers this map, not a list.
+            return {"success": True,
+                    "result": {"name": name,
+                               "symbols": [{"name": name,
+                                            "address": entry.get("address")}],
+                               "references": references,
+                               "total": len(references)}}
         if endpoint.endswith("/pcode"):
             address = endpoint.split("/")[1]
             return {"success": True,
@@ -77,8 +94,11 @@ def direct_client():
     """The source and the sink are called in the same function, in order."""
     return FakeClient(
         names={"recv": {"address": "0x5000",
-                        "refs": [{"from_address": "0x401010",
-                                  "function": "0x401000"}]},
+                        "refs": [{"fromAddress": "0x401010",
+                                  "toAddress": "0x5000",
+                                  "refType": "UNCONDITIONAL_CALL",
+                                  "fromFunction": "caller",
+                                  "fromFunctionAddress": "0x401000"}]},
                "system": {"address": "0x6000",
                           "refs": [{"from_address": "0x401020",
                                     "function": "0x401000"}]}},

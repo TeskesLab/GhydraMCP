@@ -76,6 +76,19 @@ def _fail(ctx, exc):
     ctx.exit(1)
 
 
+def _dry_run(ctx):
+    """Whether the root command asked for a preview rather than a change."""
+    return bool((ctx.obj or {}).get("dry_run"))
+
+
+def _preview(ctx, kind, data):
+    """Report what would have been called, and stop without calling it."""
+    payload = dict(data)
+    payload["dry_run"] = True
+    _emit(ctx, "dry_run", payload)
+    ctx.exit(0)
+
+
 def _client(ctx, timeout: float = X64DBG_DEFAULT_TIMEOUT):
     """A client for the x64dbg MCP server.
 
@@ -252,6 +265,15 @@ def call(ctx, tool, args, json_args, timeout):
         key, _, value = pair.partition("=")
         arguments[key.strip()] = value.strip()
 
+    if _dry_run(ctx):
+        # The plugin marks every tool with `readOnlyHint`, and a read-only tool
+        # changes nothing, so a preview may run it. Anything else - including a
+        # tool the catalogue does not know, where the hint cannot be read - is
+        # described instead of called.
+        if not client.is_read_only(tool):
+            _preview(ctx, "call", {"tool": tool, "arguments": arguments})
+            return
+
     try:
         text = client.call_tool(tool, arguments)
     except x64dbg_helper.X64dbgError as exc:
@@ -342,6 +364,17 @@ def breakpoint(ctx, address):
 
     runtime = x64dbg_helper.to_runtime(
         static_address, program["image_base"], module["base"])
+    if _dry_run(ctx):
+        _preview(ctx, "breakpoint_at", {
+            "static_address": hex(static_address),
+            "runtime_address": hex(runtime),
+            "image_base": hex(program["image_base"]),
+            "module_base": hex(module["base"]),
+            "binary": program.get("path") or "",
+            "tool": "SetBreakpoint",
+            "arguments": {"target": hex(runtime)},
+        })
+        return
     try:
         text = client.call_tool("SetBreakpoint", {"target": hex(runtime)})
     except x64dbg_helper.X64dbgError as exc:
@@ -388,6 +421,15 @@ def go_to(ctx, address):
 
     runtime = x64dbg_helper.to_runtime(
         static_address, program["image_base"], module["base"])
+    if _dry_run(ctx):
+        _preview(ctx, "go_to", {
+            "static_address": hex(static_address),
+            "runtime_address": hex(runtime),
+            "binary": program.get("path") or "",
+            "tool": "SetRegister",
+            "arguments": {"register": "cip", "value": hex(runtime)},
+        })
+        return
     try:
         # "cip" is the x64dbg name for the instruction pointer, in a 64-bit
         # debuggee and in a 32-bit one alike; the plugin turns it into

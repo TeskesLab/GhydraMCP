@@ -352,5 +352,52 @@ class TwinPathTests(unittest.TestCase):
             os.unlink(legacy)
 
 
+class PaddedAddressTests(unittest.TestCase):
+    """Ghidra writes `00401000`; a caller writes `0x401000`; it is one address.
+
+    The helper that stripped only the prefix left `00401000 != 401000`, so a
+    twin built from an API-shaped listing could not be queried with the address
+    a caller naturally writes.
+    """
+
+    def _document(self):
+        return snapshot(functions=[
+            {"name": "start", "address": "00401000", "return_type": "void"}])
+
+    def test_the_padded_address_is_found_by_the_prefixed_one(self):
+        answer = twin.query(self._document(), "function", "0x401000")
+        self.assertEqual(1, answer["matched"])
+        self.assertEqual("start", answer["function"]["name"])
+
+    def test_the_padded_address_is_found_by_its_own_spelling(self):
+        answer = twin.query(self._document(), "function", "00401000")
+        self.assertEqual(1, answer["matched"])
+
+    def test_the_bare_hexadecimal_spelling_is_found_too(self):
+        answer = twin.query(self._document(), "function", "401000")
+        self.assertEqual(1, answer["matched"])
+
+    def test_a_different_address_is_not_found(self):
+        answer = twin.query(self._document(), "function", "0x402000")
+        self.assertEqual(0, answer["matched"])
+
+    def test_an_address_space_stays_a_different_place(self):
+        """`ram:401000` and `00401000` are different addresses."""
+        document = snapshot(functions=[
+            {"name": "start", "address": "ram:00401000",
+             "return_type": "void"}])
+        self.assertEqual(1, twin.query(document, "function", "ram:401000")["matched"])
+        self.assertEqual(0, twin.query(document, "function", "0x401000")["matched"])
+
+    def test_a_capped_string_listing_is_not_complete(self):
+        capped = snapshot(truncated={"functions": False, "strings": True})
+        self.assertFalse(twin.as_diff_snapshot(capped)["strings_complete"])
+
+    def test_the_overall_verdict_covers_the_strings(self):
+        capped = snapshot(truncated={"functions": False, "strings": True})
+        report = twin.diff(capped, snapshot())
+        self.assertFalse(report["complete"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

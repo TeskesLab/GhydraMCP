@@ -71,22 +71,36 @@ def resolve_name(client, name: str) -> Dict[str, Any]:
 
     xrefs = _result(_get(client, f"xrefs/to-name/{_quote(name)}",
                          {"limit": PAGE_LIMIT}))
-    if isinstance(xrefs, list):
-        for item in xrefs:
-            if not isinstance(item, dict):
-                continue
-            reference = {
-                "from_address": item.get("from_address") or item.get("fromAddress"),
-                "to_address": item.get("to_address") or item.get("toAddress"),
-                "type": item.get("type") or item.get("ref_type"),
-                "function": item.get("function") or item.get("from_function"),
-            }
-            references.append(reference)
-            if reference["to_address"]:
-                addresses.append(str(reference["to_address"]))
+    for item in _references_of(xrefs):
+        reference = {
+            "from_address": item.get("fromAddress") or item.get("from_address"),
+            "to_address": item.get("toAddress") or item.get("to_address"),
+            "type": (item.get("refType") or item.get("type")
+                     or item.get("ref_type")),
+            "function": item.get("fromFunction") or item.get("function"),
+            "function_address": (item.get("fromFunctionAddress")
+                                 or item.get("from_function_address")),
+        }
+        references.append(reference)
+        if reference["to_address"]:
+            addresses.append(str(reference["to_address"]))
 
     return {"name": name, "addresses": list(dict.fromkeys(addresses)),
             "references": references}
+
+
+def _references_of(xrefs: Any) -> List[Dict[str, Any]]:
+    """The reference records out of the endpoint's answer.
+
+    The live endpoint answers `{name, symbols, references, total}`. A bare list is
+    accepted as well: it is the shape the first fixtures assumed, and an answer
+    cached in that shape should still be readable.
+    """
+    if isinstance(xrefs, dict):
+        xrefs = xrefs.get("references")
+    if not isinstance(xrefs, list):
+        return []
+    return [item for item in xrefs if isinstance(item, dict)]
 
 
 def calls_in_function(client, function_address: str) -> List[Dict[str, Any]]:
@@ -216,12 +230,17 @@ def _functions_referencing(client, info: Dict[str, Any],
         address = reference.get("from_address")
         if not address:
             continue
-        function = reference.get("function")
-        if isinstance(function, dict):
-            function_address = (function.get("address")
-                                or function.get("entry"))
-        else:
-            function_address = function
+        # The DTO carries the caller's address, so the containing-function
+        # lookup is only needed when the answer does not.
+        function_address = reference.get("function_address")
+        if not function_address:
+            function = reference.get("function")
+            if isinstance(function, dict):
+                function_address = (function.get("address")
+                                    or function.get("entry"))
+            elif isinstance(function, str) and core_taint.looks_like_address(
+                    function):
+                function_address = function
         if not function_address:
             containing = _function_of(client, str(address))
             function_address = containing.get("address") or containing.get("entry")

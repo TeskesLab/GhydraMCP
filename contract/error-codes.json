@@ -12,7 +12,7 @@
     "success_field": "success"
   },
   "counts": {
-    "codes": 118,
+    "codes": 119,
     "families": 37
   },
   "codes": [
@@ -71,6 +71,13 @@
       "http_status": "503",
       "message": "(computed)",
       "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:165`"
+    },
+    {
+      "code": "BSIM_INCOMPLETE_INGEST",
+      "side": "Java",
+      "http_status": "409",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:272`"
     },
     {
       "code": "BSIM_INGEST_FAILED",
@@ -196,14 +203,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11399`"
+      "origin": "`bridge_mcp_hydra.py:11462`"
     },
     {
       "code": "EVIDENCE_IO",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11504`"
+      "origin": "`bridge_mcp_hydra.py:11567`"
     },
     {
       "code": "EVIDENCE_NO_FILE",
@@ -224,28 +231,28 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:13014`"
+      "origin": "`bridge_mcp_hydra.py:13090`"
     },
     {
       "code": "FLEET_MISSING_TARGET",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:13021`"
+      "origin": "`bridge_mcp_hydra.py:13097`"
     },
     {
       "code": "FLEET_UNKNOWN_KIND",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:12962`"
+      "origin": "`bridge_mcp_hydra.py:13038`"
     },
     {
       "code": "FUNCTION_NOT_FOUND",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:4959`"
+      "origin": "`bridge_mcp_hydra.py:5022`"
     },
     {
       "code": "HEADLESS_ALREADY_RUNNING",
@@ -266,21 +273,21 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11046`"
+      "origin": "`bridge_mcp_hydra.py:11109`"
     },
     {
       "code": "HEADLESS_DIED",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11091`"
+      "origin": "`bridge_mcp_hydra.py:11154`"
     },
     {
       "code": "HEADLESS_LAUNCH",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11054`"
+      "origin": "`bridge_mcp_hydra.py:11117`"
     },
     {
       "code": "HEADLESS_LIMITATION",
@@ -294,21 +301,21 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11019`"
+      "origin": "`bridge_mcp_hydra.py:11082`"
     },
     {
       "code": "HEADLESS_NO_GHIDRA",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11026`"
+      "origin": "`bridge_mcp_hydra.py:11089`"
     },
     {
       "code": "HEADLESS_NO_JDK",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11032`"
+      "origin": "`bridge_mcp_hydra.py:11095`"
     },
     {
       "code": "HEADLESS_NO_LAUNCHER",
@@ -329,21 +336,21 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11133`"
+      "origin": "`bridge_mcp_hydra.py:11196`"
     },
     {
       "code": "HEADLESS_PORT_IN_USE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11036`"
+      "origin": "`bridge_mcp_hydra.py:11099`"
     },
     {
       "code": "HEADLESS_TIMEOUT",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11104`"
+      "origin": "`bridge_mcp_hydra.py:11167`"
     },
     {
       "code": "INCOMPATIBLE_GHIDRA_BUILD",
@@ -364,21 +371,21 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:6314`"
+      "origin": "`bridge_mcp_hydra.py:6377`"
     },
     {
       "code": "INVALID_DIMENSIONS",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:10311`"
+      "origin": "`bridge_mcp_hydra.py:10374`"
     },
     {
       "code": "INVALID_HEX",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:6324`"
+      "origin": "`bridge_mcp_hydra.py:6387`"
     },
     {
       "code": "INVALID_JSON",
@@ -392,21 +399,21 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:4802`"
+      "origin": "`bridge_mcp_hydra.py:4865`"
     },
     {
       "code": "INVALID_TARGETS",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:5809`"
+      "origin": "`bridge_mcp_hydra.py:5872`"
     },
     {
       "code": "KUNA_BAD_ARTIFACT",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:7935`"
+      "origin": "`bridge_mcp_hydra.py:7998`"
     },
     {
       "code": "KUNA_DISABLED",
@@ -427,14 +434,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:7706`"
+      "origin": "`bridge_mcp_hydra.py:7769`"
     },
     {
       "code": "KUNA_LAUNCH",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:7764`"
+      "origin": "`bridge_mcp_hydra.py:7827`"
     },
     {
       "code": "KUNA_MISSING",
@@ -448,7 +455,7 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:7868`"
+      "origin": "`bridge_mcp_hydra.py:7931`"
     },
     {
       "code": "KUNA_NO_FILE",
@@ -462,14 +469,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:7960`"
+      "origin": "`bridge_mcp_hydra.py:8023`"
     },
     {
       "code": "KUNA_NO_INDEX",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:7911`"
+      "origin": "`bridge_mcp_hydra.py:7974`"
     },
     {
       "code": "KUNA_NO_JSON",
@@ -518,14 +525,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:4940`"
+      "origin": "`bridge_mcp_hydra.py:5003`"
     },
     {
       "code": "MISSION_IO",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:12601`"
+      "origin": "`bridge_mcp_hydra.py:12677`"
     },
     {
       "code": "NON_JSON_RESPONSE",
@@ -602,21 +609,21 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:12075`"
+      "origin": "`bridge_mcp_hydra.py:12141`"
     },
     {
       "code": "RUNBOOK_BAD_STEPS",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:12041`"
+      "origin": "`bridge_mcp_hydra.py:12107`"
     },
     {
       "code": "RUNBOOK_IO",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:12048`"
+      "origin": "`bridge_mcp_hydra.py:12114`"
     },
     {
       "code": "SAVE_FAILED",
@@ -637,7 +644,7 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11623`"
+      "origin": "`bridge_mcp_hydra.py:11686`"
     },
     {
       "code": "SESSION_BAD_NAME",
@@ -651,14 +658,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11684`"
+      "origin": "`bridge_mcp_hydra.py:11747`"
     },
     {
       "code": "SESSION_NO_SUCH",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11696`"
+      "origin": "`bridge_mcp_hydra.py:11759`"
     },
     {
       "code": "SHUTDOWN_DISABLED",
@@ -679,70 +686,70 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/target.py:210`"
+      "origin": "`ghydra/target.py:217`"
     },
     {
       "code": "TARGET_NOT_FOUND",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/target.py:208`"
+      "origin": "`ghydra/target.py:215`"
     },
     {
       "code": "TARGET_NOT_LOADED",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/target.py:207`"
+      "origin": "`ghydra/target.py:214`"
     },
     {
       "code": "TARGET_NOT_SAME_BINARY",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/target.py:209`"
+      "origin": "`ghydra/target.py:216`"
     },
     {
       "code": "TARGET_NO_CODE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/target.py:211`"
+      "origin": "`ghydra/target.py:218`"
     },
     {
       "code": "TARGET_NO_PROGRAM",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/target.py:206`"
+      "origin": "`ghydra/target.py:213`"
     },
     {
       "code": "TASK_NOT_FOUND",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11735`"
+      "origin": "`bridge_mcp_hydra.py:11798`"
     },
     {
       "code": "TOOL_GROUP_CORE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:13442`"
+      "origin": "`bridge_mcp_hydra.py:13518`"
     },
     {
       "code": "TOOL_GROUP_UNAVAILABLE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:13302`"
+      "origin": "`bridge_mcp_hydra.py:13378`"
     },
     {
       "code": "TOOL_GROUP_UNKNOWN",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:13294`"
+      "origin": "`bridge_mcp_hydra.py:13370`"
     },
     {
       "code": "TRANSACTION_FAILED",
@@ -756,14 +763,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:10612`"
+      "origin": "`bridge_mcp_hydra.py:10675`"
     },
     {
       "code": "TRIAGE_NO_FILE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:10606`"
+      "origin": "`bridge_mcp_hydra.py:10669`"
     },
     {
       "code": "UNEXPECTED_ERROR",
@@ -784,7 +791,7 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:9087`"
+      "origin": "`bridge_mcp_hydra.py:9150`"
     },
     {
       "code": "X64DBG_DISABLED",
@@ -798,7 +805,7 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:9127`"
+      "origin": "`bridge_mcp_hydra.py:9190`"
     },
     {
       "code": "X64DBG_MISSING",

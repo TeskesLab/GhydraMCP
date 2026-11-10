@@ -84,15 +84,31 @@ def twin_path(name: str) -> str:
 
 
 def _bare_address(value: Any) -> str:
-    """An address without its 0x, in lower case, for comparing.
+    """An address in a form two spellings of the same address agree on.
 
     ``str.lstrip("0x")`` is not this: it removes the *characters* 0 and x from
     the left, so it mangles an address that starts with a zero in another way.
+
+    Ghidra writes an address as unprefixed, zero-padded hexadecimal
+    (``00401000``) and a caller writes ``0x401000``; comparing the text leaves
+    ``00401000 != 401000`` for the same address. So the value is compared as the
+    number it is, and the address space is kept apart: ``ram:401000`` and
+    ``00401000`` are different places.
     """
     text = str(value or "").strip().lower()
+    space = ""
+    if ":" in text:
+        space, _, text = text.rpartition(":")
+        text = text.strip()
     if text.startswith("0x"):
-        return text[2:]
-    return text
+        text = text[2:]
+    if not text:
+        return space
+    try:
+        return space + format(int(text, 16), "x")
+    except ValueError:
+        # Not an address: compare it as the text it is.
+        return space + text
 
 
 def _result(envelope: Any) -> Any:
@@ -319,7 +335,8 @@ def as_diff_snapshot(document: Dict[str, Any]) -> Dict[str, Any]:
     two twins on disk, which is the point of putting the comparison in the core.
     """
     counts = document.get("counts") or {}
-    capped = bool((document.get("truncated") or {}).get("functions"))
+    truncated = document.get("truncated") or {}
+    capped = bool(truncated.get("functions"))
     total = counts.get("functions_total")
     # A snapshot can be short for two reasons: the cap was hit, or the listing
     # returned fewer functions than the program's own statistics claim (measured
@@ -332,12 +349,25 @@ def as_diff_snapshot(document: Dict[str, Any]) -> Dict[str, Any]:
         complete = False
     else:
         complete = not capped and total <= (counts.get("functions") or 0)
+    # The strings and the imports of a snapshot can be capped too, and the
+    # comparison needs to know: without this a capped string listing produced
+    # false differences against a whole one.
+    strings_total = counts.get("strings_total")
+    if isinstance(strings_total, int):
+        strings_complete = (not truncated.get("strings")
+                            and strings_total <= (counts.get("strings") or 0))
+    else:
+        strings_complete = not truncated.get("strings")
+    # The imports have no total of their own, so the cap flag is all there is.
+    imports_complete = not truncated.get("imports")
     return {
         "program": document.get("program") or {},
         "functions": document.get("functions") or [],
         "imports": document.get("imports") or [],
         "strings": document.get("strings") or [],
         "functions_complete": complete,
+        "imports_complete": imports_complete,
+        "strings_complete": strings_complete,
     }
 
 
@@ -352,6 +382,7 @@ def diff(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
     }
     report["same_binary"] = fingerprint(left) == fingerprint(right)
     # A comparison over a snapshot that is not complete is not a complete
-    # comparison: say it once, in the report, so a reader cannot miss it.
-    report["complete"] = bool(report.get("functions", {}).get("complete", True))
+    # comparison: say it once, in the report, so a reader cannot miss it. The
+    # verdict covers every section — the functions alone used to decide it.
+    report["complete"] = bool(report.get("complete", True))
     return report

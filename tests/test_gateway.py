@@ -35,7 +35,9 @@ NAME_PATTERN = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)+$")
 
 class FakeGhidra:
     def __init__(self, path=r"C:\bin\sample.exe"):
-        self.program = {"path": path, "image_base": hex(IMAGE_BASE),
+        # The shape `ProgramResource.getCurrentProgram()` emits: `imageBase`,
+        # from `Address.toString()`, which is unprefixed hexadecimal.
+        self.program = {"path": path, "imageBase": f"{IMAGE_BASE:x}",
                         "language": "x86:LE:64:default"}
         self.calls = []
 
@@ -46,16 +48,16 @@ class FakeGhidra:
         if endpoint.endswith("/decompile"):
             return {"success": True,
                     "result": {"functionName": "main",
-                               "functionAddress": "0x140001234",
+                               "functionAddress": "140001234",
                                "decompilation": "int main(void) { return 0; }"}}
         if endpoint.startswith("functions/by-name/"):
             if endpoint.rsplit("/", 1)[-1] == "main":
                 return {"success": True,
-                        "result": {"name": "main", "address": "0x140001234",
+                        "result": {"name": "main", "address": "140001234",
                                    "signature": "int main(void)"}}
             return {"success": False, "result": None}
         return {"success": True,
-                "result": {"name": "main", "address": "0x140001234",
+                "result": {"name": "main", "address": "140001234",
                            "signature": "int main(void)"}}
 
 

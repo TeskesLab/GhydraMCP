@@ -28,8 +28,12 @@ PAGE_LIMIT = 1000
 #: A listing that never ends must stop somewhere.
 MAX_PAGES = 5
 
-#: Ghidra's CALL-family pcode opcodes (CALL=57, CALLIND=58 in PcodeOp).
-CALL_OPCODES = {57, 58}
+#: Ghidra's CALL-family pcode opcodes, read from `PcodeOp` with
+#: `javap -p -constants` against the committed `SoftwareModeling.jar`:
+#: `CALL = 7`, `CALLIND = 8`. The first version of this constant said 57 and 58,
+#: which are `FLOAT_CEIL` and `FLOAT_FLOOR` - so every real call was discarded and
+#: the pass could never find a source-to-sink pair.
+CALL_OPCODES = {7, 8}
 
 CONFIDENCE_DIRECT = "direct"
 CONFIDENCE_REACHABLE = "reachable"
@@ -40,6 +44,23 @@ DISCLAIMER = (
     "exploitability. Branches are not modelled; a 'direct' finding means the "
     "sink call appears after the source call in the same function."
 )
+
+
+def looks_like_address(text: Any) -> bool:
+    """Whether a string is an address rather than a name.
+
+    Ghidra writes an address as unprefixed hexadecimal (`00401000`, `140001234`),
+    and every hex digit is also a legal character in a symbol name - so this is a
+    heuristic, used only to decide whether a value that arrived in the `function`
+    field can be read as an address. A name that is all hex digits is rare enough
+    that the alternative (a wasted containing-function lookup) is worse.
+    """
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if value.lower().startswith("0x"):
+        value = value[2:]
+    return bool(value) and all(char in "0123456789abcdefABCDEF" for char in value)
 
 
 def result_of(envelope: Any) -> Any:

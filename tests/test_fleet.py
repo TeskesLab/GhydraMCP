@@ -54,7 +54,15 @@ class Member:
         if endpoint == "strings":
             return self._page([{"value": value} for value in self.strings], params)
         if endpoint.startswith("xrefs/to-name/"):
-            return {"success": True, "result": [{"address": "0x1"}] * self.xrefs,
+            # The live endpoint answers `{name, symbols, references, total}`,
+            # not a bare list.
+            return {"success": True, "result": {
+                "name": endpoint.rsplit("/", 1)[-1],
+                "symbols": [], "total": self.xrefs,
+                "references": [{"fromAddress": "0x1", "toAddress": "0x2",
+                                "refType": "UNCONDITIONAL_CALL",
+                                "fromFunction": "caller",
+                                "fromFunctionAddress": "0x1"}] * self.xrefs},
                     "meta": {"total": self.xrefs}}
         return {"success": True, "result": {}}
 

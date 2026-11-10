@@ -31,13 +31,15 @@ class FakeGhidra:
 
     def __init__(self, path=r"C:\bin\sample.exe", image_base=IMAGE_BASE,
                  functions=None):
+        # The shape `ProgramResource.getCurrentProgram()` actually emits:
+        # `imageBase`, from `Address.toString()`, which is unprefixed hexadecimal.
         self.program = {"path": path, "name": os.path.basename(path),
-                        "image_base": hex(image_base),
+                        "imageBase": f"{image_base:x}",
                         "language": "x86:LE:64:default"}
         self.functions = functions if functions is not None else {
-            "by-name:main": {"name": "main", "address": "0x140001234",
+            "by-name:main": {"name": "main", "address": "140001234",
                              "signature": "int main(void)"},
-            "address": {"name": "main", "address": "0x140001234",
+            "address": {"name": "main", "address": "140001234",
                         "signature": "int main(void)"},
         }
         self.lookups = []
@@ -49,7 +51,7 @@ class FakeGhidra:
         if endpoint.endswith("/decompile"):
             return {"success": True,
                     "result": {"functionName": "main",
-                               "functionAddress": "0x140001234",
+                               "functionAddress": "140001234",
                                "decompilation": "int main(void) { return 0; }",
                                "success": True}}
         if endpoint.startswith("functions/by-name/"):
@@ -105,6 +107,74 @@ class DescribeTests(unittest.TestCase):
         with self.assertRaises(TargetError) as caught:
             target.describe(Broken(), FakeDebugger())
         self.assertEqual(target.ERROR_NO_PROGRAM, caught.exception.code)
+
+
+class WireFormatTests(unittest.TestCase):
+    """The producer's wire format, which the first fixtures did not use.
+
+    `ProgramResource` emits `imageBase` and `FunctionDto` emits
+    `getEntryPoint().toString()`: both are **unprefixed hexadecimal**. Fixtures
+    written with `image_base` and `0x` made the code pass against a shape no
+    instance ever sends.
+    """
+
+    def test_the_image_base_comes_from_the_camel_case_field(self):
+        descriptor = target.describe(FakeGhidra(), FakeDebugger())
+        self.assertEqual(IMAGE_BASE, descriptor.image_base)
+        self.assertTrue(descriptor.correlatable())
+
+    def test_a_64_bit_address_is_hexadecimal_not_decimal(self):
+        """`140001234` as base 0 is decimal 140001234, i.e. `0x8583FD2`."""
+        found = target.locate(FakeGhidra(), "main")
+        self.assertEqual("0x140001234", found["static_address"])
+        self.assertNotEqual("0x8583fd2", found["static_address"])
+
+    def test_a_32_bit_address_keeps_its_leading_zeros_and_still_parses(self):
+        """`00401000` is not a Python literal: `int(text, 0)` rejects it."""
+        functions = {
+            "by-name:start": {"name": "start", "address": "00401000",
+                              "signature": "void start(void)"},
+            "address": {"name": "start", "address": "00401000",
+                        "signature": "void start(void)"},
+        }
+        found = target.locate(FakeGhidra(functions=functions), "start")
+        self.assertEqual("0x401000", found["static_address"])
+
+    def test_an_address_with_a_letter_in_it_parses(self):
+        functions = {
+            "address": {"name": "f", "address": "14000abcd",
+                        "signature": "void f(void)"},
+        }
+        found = target.locate(FakeGhidra(functions=functions), "0x14000abcd")
+        self.assertEqual("0x14000abcd", found["static_address"])
+
+    def test_an_address_space_prefix_keeps_the_offset(self):
+        functions = {
+            "by-name:ext": {"name": "ext", "address": "EXTERNAL:00000010",
+                            "signature": "void ext(void)"},
+            "address": {"name": "ext", "address": "EXTERNAL:00000010",
+                        "signature": "void ext(void)"},
+        }
+        found = target.locate(FakeGhidra(functions=functions), "ext")
+        self.assertEqual("0x10", found["static_address"])
+
+    def test_a_caller_may_write_the_address_with_or_without_the_prefix(self):
+        ghidra = FakeGhidra()
+        for written in ("0x140001234", "140001234"):
+            found = target.locate(ghidra, written)
+            self.assertEqual("address", found["matched_by"], written)
+            self.assertEqual("0x140001234", found["static_address"], written)
+
+    def test_the_breakpoint_translates_the_real_wire_address(self):
+        """The P1 in full: a real-shaped payload used to refuse every breakpoint."""
+        debugger = FakeDebugger()
+        result = target.breakpoint(FakeGhidra(), debugger, "main")
+        self.assertEqual("0x140001234", result["static_address"])
+        self.assertEqual(hex(0x140001234 - IMAGE_BASE + MODULE_BASE),
+                         result["runtime_address"])
+        self.assertEqual([("ListModules", None),
+                          ("SetBreakpoint", {"target": result["runtime_address"]})],
+                         debugger.calls)
 
 
 class LocateTests(unittest.TestCase):
@@ -246,6 +316,42 @@ class RunToTests(unittest.TestCase):
         with self.assertRaises(TargetError) as caught:
             target.run_to(FakeGhidra(), FakeDebugger(), "main", timeout_ms=0)
         self.assertEqual(target.ERROR_BAD_ADDRESS, caught.exception.code)
+
+
+class DryRunWorkflowTests(unittest.TestCase):
+    """The workflow itself stops before the write, not only the command."""
+
+    def test_breakpoint_does_not_write_but_still_translates(self):
+        debugger = FakeDebugger()
+        result = target.breakpoint(FakeGhidra(), debugger, "main", dry_run=True)
+        self.assertEqual([("ListModules", None)], debugger.calls)
+        self.assertTrue(result["dry_run"])
+        self.assertEqual("SetBreakpoint", result["plan"]["tool"])
+        self.assertEqual(hex(0x140001234 - IMAGE_BASE + MODULE_BASE),
+                         result["plan"]["arguments"]["target"])
+
+    def test_breakpoint_writes_without_the_flag(self):
+        debugger = FakeDebugger()
+        result = target.breakpoint(FakeGhidra(), debugger, "main")
+        self.assertFalse(result["dry_run"])
+        self.assertIn("SetBreakpoint", [name for name, _ in debugger.calls])
+
+    def test_run_to_does_not_resume_under_the_flag(self):
+        debugger = FakeDebugger()
+        result = target.run_to(FakeGhidra(), debugger, "main", dry_run=True)
+        names = [name for name, _ in debugger.calls]
+        self.assertNotIn("RunToAddress", names)
+        self.assertNotIn("GetAllRegisters", names)
+        self.assertIsNone(result["registers"])
+        self.assertEqual("RunToAddress", result["plan"]["tool"])
+
+    def test_a_dry_run_still_refuses_a_different_build(self):
+        """The refusal is about identity, so it comes before the flag matters."""
+        debugger = FakeDebugger(path=r"D:\builds\sample.exe")
+        with self.assertRaises(TargetError) as caught:
+            target.breakpoint(FakeGhidra(), debugger, "main", dry_run=True)
+        self.assertEqual(target.ERROR_NOT_SAME_BINARY, caught.exception.code)
+        self.assertEqual([("ListModules", None)], debugger.calls)
 
 
 if __name__ == "__main__":

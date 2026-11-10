@@ -50,7 +50,15 @@ class FakeClient:
                                                     "address": "0x401000"}}
             raise _NotFound("FUNCTION_NOT_FOUND")
         if endpoint.startswith("xrefs/to-name/"):
-            return {"success": True, "result": [{"address": "0x1"}] * self.xrefs,
+            # The live endpoint answers `{name, symbols, references, total}`,
+            # not a bare list.
+            return {"success": True, "result": {
+                "name": endpoint.rsplit("/", 1)[-1],
+                "symbols": [], "total": self.xrefs,
+                "references": [{"fromAddress": "0x1", "toAddress": "0x2",
+                                "refType": "UNCONDITIONAL_CALL",
+                                "fromFunction": "caller",
+                                "fromFunctionAddress": "0x1"}] * self.xrefs},
                     "meta": {"total": self.xrefs}}
         if endpoint == "analysis/call-path":
             return {"success": True, "result": {"path": self.path,

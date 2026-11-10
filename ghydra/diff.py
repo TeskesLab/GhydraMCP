@@ -147,6 +147,12 @@ def to_text(report: Dict[str, Any]) -> str:
                        if report.get("program_changed") else " — same program fingerprint")]
     if not functions.get("complete", True):
         lines.append("  note: a function listing was truncated; the counts are a floor")
+    # A section that was not read to its end supports no removal claim, and the
+    # reader has to know which ones those were.
+    for section_name in ("imports", "strings"):
+        if not (report.get(section_name) or {}).get("complete", True):
+            lines.append(f"  note: the {section_name} listing was truncated; no "
+                         f"removal is claimed from it")
     lines.append(f"  functions: +{summary.get('functions_added', 0)} "
                  f"-{summary.get('functions_removed', 0)} "
                  f"~{summary.get('functions_renamed', 0)} renamed "
@@ -179,4 +185,12 @@ def to_text(report: Dict[str, Any]) -> str:
             lambda row: f"+ {row[:100]}")
     section("strings removed", (report.get("strings") or {}).get("removed") or [],
             lambda row: f"- {row[:100]}")
+    # What was not seen, kept apart from what is known to be gone.
+    for section_name in ("imports", "strings"):
+        rows = (report.get(section_name) or {}).get("removed_not_seen") or []
+        if rows:
+            lines.append(f"\n{section_name} not seen in the second listing "
+                         f"(the listing was not read to its end):")
+            for row in rows[:40]:
+                lines.append(f"  ? {row[:100]}")
     return "\n".join(lines)

@@ -94,7 +94,14 @@ class TargetDescriptor:
         """Build one from a Ghidra `/program` payload and an x64dbg module."""
         program = program or {}
         module = module or {}
-        image_base = _as_int(program.get("image_base"))
+        # `ProgramResource.getCurrentProgram()` emits `imageBase`, as
+        # `program.getImageBase().toString()`: unprefixed hexadecimal. Reading only
+        # `image_base` left the descriptor at 0, `correlatable()` refused it, and
+        # every breakpoint and run-to failed with TARGET_NOT_SAME_BINARY even when
+        # both paths matched.
+        image_base = _ghidra_int(program.get("imageBase"))
+        if image_base is None:
+            image_base = _ghidra_int(program.get("image_base"))
         module_base = _as_int(module.get("base"))
         return cls(
             binary=str(program.get("path") or program.get("name") or ""),
@@ -249,7 +256,7 @@ def _function(ghidra_client, target: str) -> Dict[str, Any]:
     text = str(target or "").strip()
     if not text:
         raise TargetError("no function was named", ERROR_NOT_FOUND)
-    address = _as_int(text)
+    address = _parse_address(text)
     endpoint = (f"functions/{text}" if address is not None
                 else f"functions/by-name/{quote(text, safe='')}")
     try:
@@ -290,7 +297,8 @@ def describe(ghidra_client, debugger_client) -> TargetDescriptor:
 def locate(ghidra_client, target: str) -> Dict[str, Any]:
     """`function_locate`: the static address of a function, by name or address."""
     function = _function(ghidra_client, target)
-    address = _as_int(function.get("address"))
+    # `FunctionDto` serialises `getEntryPoint().toString()`: unprefixed hexadecimal.
+    address = _ghidra_int(function.get("address"))
     if address is None:
         raise TargetError(f"{target!r} resolved to an address that cannot be read",
                           ERROR_BAD_ADDRESS)
@@ -298,19 +306,25 @@ def locate(ghidra_client, target: str) -> Dict[str, Any]:
         "name": function.get("name"),
         "signature": function.get("signature"),
         "static_address": hex(address),
-        "matched_by": ("address" if _as_int(target) is not None else "name"),
+        "matched_by": ("address" if _parse_address(target) is not None else "name"),
         # The API's function detail carries no size; saying so is better than a
         # number nobody measured.
         "size": None,
     }
 
 
-def breakpoint(ghidra_client, debugger_client, target: str) -> Dict[str, Any]:
+def breakpoint(ghidra_client, debugger_client, target: str,
+               dry_run: bool = False) -> Dict[str, Any]:
     """`breakpoint_set`: locate statically, translate, set it in the debugger.
 
     Refuses with `TARGET_NOT_SAME_BINARY` — **before** touching the debugger —
     when the two sides are not the same file: a breakpoint at a translated address
     of another build is a breakpoint in the wrong place.
+
+    With `dry_run`, everything except the write happens: the address is located
+    and translated, and the answer says what would have been set. A preview that
+    skips the reads could not name the address, and one that skips only the write
+    cannot change anything.
     """
     descriptor = describe(ghidra_client, debugger_client)
     identity = descriptor.identity()
@@ -320,15 +334,19 @@ def breakpoint(ghidra_client, debugger_client, target: str) -> Dict[str, Any]:
             ERROR_NOT_SAME_BINARY)
 
     found = locate(ghidra_client, target)
-    static_address = _as_int(found["static_address"])
+    static_address = _ghidra_int(found["static_address"])
     runtime = descriptor.to_runtime(static_address)
-    debugger_client.call_tool("SetBreakpoint", {"target": hex(runtime)})
+    plan = {"tool": "SetBreakpoint", "arguments": {"target": hex(runtime)}}
+    if not dry_run:
+        debugger_client.call_tool(plan["tool"], plan["arguments"])
     return {
         "function": found["name"],
         "static_address": hex(static_address),
         "runtime_address": hex(runtime),
         "delta": hex(descriptor.delta()) if descriptor.delta() is not None else None,
         "identity": identity,
+        "dry_run": bool(dry_run),
+        "plan": plan,
     }
 
 
@@ -361,21 +379,31 @@ def decompile(ghidra_client, target: str, style: str = "normalize") -> Dict[str,
         raise TargetError(
             result.get("errorMessage")
             or f"the decompiler returned no code for {address}", ERROR_NO_CODE)
+    # `functionAddress` arrives in Ghidra's own form (`140001234`); every other
+    # address this module answers with is `0x`-prefixed, so a caller can compare
+    # the two without knowing which endpoint produced each one.
+    reported = _ghidra_int(result.get("functionAddress"))
     return {
         "function": result.get("functionName") or found["name"],
-        "static_address": result.get("functionAddress") or address,
+        "static_address": hex(reported) if reported is not None else address,
         "style": style,
         "code": code,
     }
 
 
 def run_to(ghidra_client, debugger_client, target: str,
-           timeout_ms: int = RUN_TO_TIMEOUT_MS) -> Dict[str, Any]:
+           timeout_ms: int = RUN_TO_TIMEOUT_MS,
+           dry_run: bool = False) -> Dict[str, Any]:
     """`run_to`: run the debuggee to a function, and report the registers at the stop.
 
     Refuses with `TARGET_NOT_SAME_BINARY` before resuming anything when the two
     sides are not the same file — resuming a different build is worse than setting a
     breakpoint in it.
+
+    With `dry_run`, the debuggee is **not resumed**: the address is located and
+    translated, and the answer says what would have been run to. Resuming is the
+    most expensive thing this workflow does, so it is the last thing a preview
+    should do.
     """
     if int(timeout_ms) <= 0:
         raise TargetError("the timeout must be positive", ERROR_BAD_ADDRESS)
@@ -387,13 +415,16 @@ def run_to(ghidra_client, debugger_client, target: str,
             ERROR_NOT_SAME_BINARY)
 
     found = locate(ghidra_client, target)
-    static_address = _as_int(found["static_address"])
+    static_address = _ghidra_int(found["static_address"])
     runtime = descriptor.to_runtime(static_address)
-    debugger_client.call_tool(
-        "RunToAddress",
-        {"address": hex(runtime), "timeoutMs": int(timeout_ms)})
-    # Read-only, and it cannot change the debuggee: the state is read after the stop.
-    registers = debugger_client.call_tool("GetAllRegisters")
+    plan = {"tool": "RunToAddress",
+            "arguments": {"address": hex(runtime), "timeoutMs": int(timeout_ms)}}
+    registers = None
+    if not dry_run:
+        debugger_client.call_tool(plan["tool"], plan["arguments"])
+        # Read-only, and it cannot change the debuggee: the state is read after the
+        # stop. A preview has no stop to read.
+        registers = debugger_client.call_tool("GetAllRegisters")
     return {
         "function": found["name"],
         "static_address": hex(static_address),
@@ -401,11 +432,18 @@ def run_to(ghidra_client, debugger_client, target: str,
         "timeout_ms": int(timeout_ms),
         "registers": registers,
         "identity": identity,
+        "dry_run": bool(dry_run),
+        "plan": plan,
     }
 
 
 def _as_int(value: Any) -> Optional[int]:
-    """An integer out of a number or a `0x` string."""
+    """An integer out of a number or a `0x` string.
+
+    For fields that really are numbers: the debugger's `ListModules` parses its
+    base and size into `int` already, and the CLI's own output is `0x`-prefixed.
+    **Not** for Ghidra's wire addresses — see `_ghidra_int`.
+    """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -417,6 +455,54 @@ def _as_int(value: Any) -> Optional[int]:
         return int(text, 0)
     except ValueError:
         return None
+
+
+def _ghidra_int(value: Any) -> Optional[int]:
+    """An integer out of Ghidra's own address text.
+
+    Ghidra serialises an address with `Address.toString()` and the program payload's
+    `imageBase` the same way: **unprefixed hexadecimal** (`00401000`, `140000000`).
+    `int(text, 0)` is the wrong parser for that — it reads `140001234` as decimal
+    (returning `0x8583FD2`) and rejects `00401000` outright as a bad octal literal.
+    A value that carries an address space (`ram:00401000`) keeps the offset.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if ":" in text:
+        # `Address.toString()` prefixes the space only when it is not the default
+        # one: `ram:00401000`. The offset is what the arithmetic needs.
+        text = text.rsplit(":", 1)[-1].strip()
+    if text.lower().startswith("0x"):
+        text = text[2:]
+    try:
+        return int(text, 16)
+    except ValueError:
+        return None
+
+
+def _parse_address(value: Any) -> Optional[int]:
+    """The value of an address a caller typed, or None when it is a name.
+
+    A caller writes `0x401000`, `401000` or `00401000`; Ghidra's API reads a bare
+    address as hexadecimal, so this does too. Only the *decision* uses this — the
+    endpoint keeps the text the caller wrote, because that is what the API parses.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.lower().startswith("0x"):
+        try:
+            return int(text, 16)
+        except ValueError:
+            return None
+    return _ghidra_int(text)
 
 
 def _hex(value: Optional[int]) -> Optional[str]:

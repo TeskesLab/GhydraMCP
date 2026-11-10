@@ -451,5 +451,163 @@ class CliTests(unittest.TestCase):
         self.assertEqual(2, result.exit_code)
 
 
+class RunbookWireFormatTests(unittest.TestCase):
+    """The step goes out as it was recorded: JSON body, query parameters kept.
+
+    `GhidraHTTPClient.post(data=...)` form-encodes a dictionary, so the recorded
+    `POST /functions` went out as `address=00401000&name=test` while
+    `FunctionResource.create()` parses a JSON `CreateRequest`. The same call
+    dropped `step['params']`, so a POST BSim step lost its address and its
+    dry-run arguments.
+
+    These tests look at the **prepared request**, not at a fake client's return
+    value: the defect was in how the request was built.
+    """
+
+    def _client(self):
+        from ghydra.client.http_client import GhidraHTTPClient
+        client = GhidraHTTPClient("localhost", 8192)
+        return client
+
+    def test_a_post_body_is_json_and_not_form_data(self):
+        from unittest import mock
+
+        client = self._client()
+        with mock.patch.object(client.session, "post",
+                               return_value=mock.Mock(
+                                   status_code=200,
+                                   json=lambda: {"success": True},
+                                   text="")) as sender:
+            rb._call(client, {"method": "POST", "endpoint": "functions",
+                               "payload": {"address": "00401000",
+                                           "name": "test"}})
+        _, kwargs = sender.call_args
+        self.assertEqual({"address": "00401000", "name": "test"},
+                         kwargs.get("json"))
+        self.assertIsNone(kwargs.get("data"),
+                          "the body must not be form-encoded as well")
+
+    def test_a_post_keeps_the_query_parameters(self):
+        from unittest import mock
+
+        client = self._client()
+        with mock.patch.object(client.session, "post",
+                               return_value=mock.Mock(
+                                   status_code=200,
+                                   json=lambda: {"success": True},
+                                   text="")) as sender:
+            rb._call(client, {"method": "POST",
+                               "endpoint": "bsim/query",
+                               "params": {"address": "0x401000",
+                                          "dryRun": "true"},
+                               "payload": {}})
+        _, kwargs = sender.call_args
+        self.assertEqual({"address": "0x401000", "dryRun": "true"},
+                         kwargs.get("params"))
+
+    def test_a_patch_keeps_the_query_parameters(self):
+        from unittest import mock
+
+        client = self._client()
+        with mock.patch.object(client.session, "patch",
+                               return_value=mock.Mock(
+                                   status_code=200,
+                                   json=lambda: {"success": True},
+                                   text="")) as sender:
+            rb._call(client, {"method": "PATCH", "endpoint": "functions/0x1",
+                               "params": {"dryRun": "true"},
+                               "payload": {"name": "x"}})
+        _, kwargs = sender.call_args
+        self.assertEqual({"dryRun": "true"}, kwargs.get("params"))
+
+    def test_a_delete_keeps_the_query_parameters(self):
+        from unittest import mock
+
+        client = self._client()
+        with mock.patch.object(client.session, "delete",
+                               return_value=mock.Mock(
+                                   status_code=200,
+                                   json=lambda: {"success": True},
+                                   text="")) as sender:
+            rb._call(client, {"method": "DELETE", "endpoint": "functions/0x1",
+                               "params": {"force": "true"}})
+        _, kwargs = sender.call_args
+        self.assertEqual({"force": "true"}, kwargs.get("params"))
+
+    def test_the_bridge_sends_the_same_way(self):
+        """The bridge had it right for the body and wrong for the parameters."""
+        from unittest import mock
+
+        with mock.patch.object(bridge, "_make_request",
+                               return_value={"success": True}) as sender:
+            bridge._runbook_call(8192, {
+                "method": "POST", "endpoint": "functions",
+                "params": {"dryRun": "true"},
+                "payload": {"address": "00401000", "name": "test"}})
+        _, kwargs = sender.call_args
+        self.assertEqual({"dryRun": "true"}, kwargs.get("params"))
+        self.assertEqual({"address": "00401000", "name": "test"},
+                         kwargs.get("json_data"))
+
+
+class DiffCompletenessTests(unittest.TestCase):
+    """A listing that was not read to its end cannot support a removal.
+
+    The collectors already record `imports_complete` and `strings_complete`, and
+    the comparison threw those flags away: a failed listing on one side
+    produced a definite "these imports were removed" — an absence claim against
+    a list that was never read.
+    """
+
+    def test_an_incomplete_imports_listing_makes_no_removal_claim(self):
+        a = {"program": {"name": "a.exe"}, "functions": [],
+             "imports": ["recv"], "strings": [],
+             "functions_complete": True, "imports_complete": True,
+             "strings_complete": True}
+        b = {"program": {"name": "a.exe"}, "functions": [],
+             "imports": [], "strings": [],
+             "functions_complete": True, "imports_complete": False,
+             "strings_complete": True}
+        report = diff_helper.diff_snapshots(a, b)
+        self.assertEqual([], report["imports"]["removed"],
+                         "a removal was claimed against a list that was not read")
+        self.assertEqual(["recv"], report["imports"]["removed_not_seen"])
+        self.assertFalse(report["imports"]["complete"])
+
+    def test_an_incomplete_strings_listing_makes_no_removal_claim(self):
+        a = {"program": {"name": "a.exe"}, "functions": [],
+             "imports": [], "strings": ["password"],
+             "functions_complete": True, "imports_complete": True,
+             "strings_complete": True}
+        b = {"program": {"name": "a.exe"}, "functions": [],
+             "imports": [], "strings": [],
+             "functions_complete": True, "imports_complete": True,
+             "strings_complete": False}
+        report = diff_helper.diff_snapshots(a, b)
+        self.assertEqual([], report["strings"]["removed"])
+        self.assertEqual(["password"], report["strings"]["removed_not_seen"])
+
+    def test_the_overall_verdict_covers_every_section(self):
+        a = {"program": {"name": "a.exe"}, "functions": [],
+             "imports": [], "strings": [],
+             "functions_complete": True, "imports_complete": True,
+             "strings_complete": True}
+        b = {"program": {"name": "a.exe"}, "functions": [],
+             "imports": [], "strings": [],
+             "functions_complete": True, "imports_complete": False,
+             "strings_complete": True}
+        report = diff_helper.diff_snapshots(a, b)
+        self.assertFalse(report["complete"])
+        self.assertEqual(["imports"], report["incomplete_sections"])
+
+    def test_a_complete_pair_is_still_complete(self):
+        a = {"program": {"name": "a.exe"}, "functions": [], "imports": ["x"],
+             "strings": [], "functions_complete": True,
+             "imports_complete": True, "strings_complete": True}
+        report = diff_helper.diff_snapshots(a, a)
+        self.assertTrue(report["complete"])
+        self.assertEqual([], report["incomplete_sections"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

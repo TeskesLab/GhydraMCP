@@ -118,6 +118,13 @@ def program_fingerprint(client) -> Dict[str, Any]:
 
 
 def _call(client, step: Dict[str, Any]) -> Any:
+    """Run one step exactly as it was recorded.
+
+    The body goes as **JSON**: `post(data=...)` form-encodes a dictionary, and
+    the API parses a JSON body (`FunctionResource.create()` reads a
+    `CreateRequest`). The query parameters travel with the step, because a
+    POST BSim step carries its address and its dry-run arguments there.
+    """
     method = step["method"]
     endpoint = step["endpoint"]
     params = step.get("params")
@@ -125,12 +132,12 @@ def _call(client, step: Dict[str, Any]) -> Any:
     if method == "GET":
         return client.get(endpoint, params=params)
     if method == "POST":
-        return client.post(endpoint, data=payload)
+        return client.post(endpoint, json_data=payload, params=params)
     if method == "PATCH":
-        return client.patch(endpoint, data=payload)
+        return client.patch(endpoint, data=payload, params=params)
     if method == "PUT":
-        return client.put(endpoint, data=payload)
-    return client.delete(endpoint)
+        return client.put(endpoint, data=payload, params=params)
+    return client.delete(endpoint, params=params)
 
 
 def record(client, steps: List[Dict[str, Any]]) -> Dict[str, Any]:

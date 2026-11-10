@@ -39,6 +39,11 @@ def _fail(ctx, exc):
     ctx.exit(1)
 
 
+def _dry_run(ctx):
+    """Whether the root command asked for a preview rather than a change."""
+    return bool((ctx.obj or {}).get("dry_run"))
+
+
 def _emit(context, document):
     # Unwrapped, for the same reason as `mcp-config`: a rendered line break in the
     # middle of a path is not JSON any more.
@@ -108,9 +113,10 @@ def breakpoint(ctx, name):
         ghydra target breakpoint 0x140001234
     """
     ghidra = ctx.obj['client']
+    dry = _dry_run(ctx)
     try:
         debugger = _debugger(ctx)
-        document = target_helper.breakpoint(ghidra, debugger, name)
+        document = target_helper.breakpoint(ghidra, debugger, name, dry_run=dry)
     except (target_helper.TargetError, GhidraError) as exc:
         _fail(ctx, exc)
         return
@@ -118,8 +124,9 @@ def breakpoint(ctx, name):
         _fail(ctx, exc)
         return
     _emit(ctx, document)
-    rich_echo(f"breakpoint {document['function']}: {document['static_address']}"
-              f" (static) -> {document['runtime_address']} (runtime)", err=True)
+    rich_echo(f"{'would set' if dry else 'breakpoint'} {document['function']}: "
+              f"{document['static_address']} (static) -> "
+              f"{document['runtime_address']} (runtime)", err=True)
 
 
 @target_group.command('decompile')
@@ -165,10 +172,11 @@ def run_to(ctx, name, timeout_ms):
         ghydra target run-to main
     """
     ghidra = ctx.obj['client']
+    dry = _dry_run(ctx)
     try:
         debugger = _debugger(ctx)
         document = target_helper.run_to(ghidra, debugger, name,
-                                        timeout_ms=timeout_ms)
+                                        timeout_ms=timeout_ms, dry_run=dry)
     except (target_helper.TargetError, GhidraError) as exc:
         _fail(ctx, exc)
         return
@@ -176,5 +184,5 @@ def run_to(ctx, name, timeout_ms):
         _fail(ctx, exc)
         return
     _emit(ctx, document)
-    rich_echo(f"ran to {document['function']} at {document['runtime_address']}"
-              f" (runtime)", err=True)
+    rich_echo(f"{'would run to' if dry else 'ran to'} {document['function']} at "
+              f"{document['runtime_address']} (runtime)", err=True)

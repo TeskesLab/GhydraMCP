@@ -7,6 +7,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The cross-tool workflow read a program shape no instance sends.** The Ghidra
+  API emits `imageBase` and serialises every address with `Address.toString()` —
+  **unprefixed hexadecimal** (`00401000`, `140000000`). The target workflow read
+  only `image_base` and parsed addresses with `int(text, 0)`, so the image base
+  stayed `0` (and `correlatable()` refused it: every breakpoint and run-to
+  failed with `TARGET_NOT_SAME_BINARY` even when both paths matched), while
+  `140001234` was read as **decimal** 140001234 — the wrong address, silently.
+  Both sides now read the wire format, an address space prefix keeps its
+  meaning, and the fixtures use the producer's shape rather than a friendly one.
+- **`--dry-run` reached only the Ghidra client.** The flag is attached to
+  `GhidraHTTPClient`, and the x64dbg and target commands build a client of their
+  own — so `ghydra --dry-run x64dbg call Run` **called the debugger's `Run`
+  tool**: a user asking for a preview could resume or modify the debuggee. The
+  flag now reaches every mutating path; a read-only tool (the plugin says so
+  itself) may still run under a preview, and the preview names the tool and the
+  address it would have used.
+- **The taint pass read an envelope that was never sent.**
+  `XrefResource.getRefsToName()` answers `{name, symbols, references, total}`,
+  and the DTO's fields are `fromAddress`/`toAddress`/`refType`/`fromFunction` —
+  the code tested `isinstance(xrefs, list)` and looked for snake_case names, so
+  every real reference was skipped and the pass lost its source and sink call
+  sites before it could read their pcode. Both surfaces now read the producer's
+  shape.
+- **The taint pass looked for the wrong pcode opcodes.** `PcodeOp.CALL` is
+  **7** and `CALLIND` is **8** (read with `javap -p -constants` against the
+  committed `SoftwareModeling.jar`); 57 and 58 are `FLOAT_CEIL` and
+  `FLOAT_FLOOR`. The constant named the floating-point opcodes, so every real
+  call was discarded and no source-to-sink pair could ever be found. The test
+  fixture manufactured opcode 57 — reproducing the mistake instead of the wire
+  contract — and now uses the real ones.
+- **A diff claimed removals against a listing that was never read.** The
+  collectors record `imports_complete` and `strings_complete`, and the
+  comparison threw those flags away: a failed or capped listing on one side
+  produced a definite "these imports were removed" — an absence claim against a
+  list that was never read. Each section now carries its own verdict, what was
+  only *not seen* is kept apart from what is known to be gone, and the overall
+  answer says which sections were incomplete.
+- **A twin could not be queried with the address its own listing holds.** Ghidra
+  writes an address zero-padded and unprefixed (`00401000`) and a caller writes
+  `0x401000`; the comparison removed only the prefix, so `00401000 != 401000` and
+  the function was "not found". The value is compared as the number it is, and an
+  address space keeps its meaning. The twin's overall completeness also covers
+  the strings and the imports, which the functions alone used to decide.
+- **A runbook replayed a step differently from the way it was recorded.**
+  `GhidraHTTPClient.post(data=...)` form-encodes a dictionary, so a recorded
+  `POST /functions` went out as `application/x-www-form-urlencoded` while
+  `FunctionResource.create()` parses a JSON `CreateRequest` — the CLI's
+  record/replay of a mutation failed on a step the bridge sends correctly as
+  JSON. The body goes as JSON now, and the step's query parameters travel with
+  it on every method that can carry them (a POST BSim step was losing its
+  address and its dry-run arguments).
 - **`mcp-config --gateway --groups` is refused instead of ignored.** The gateway
   serves a fixed set of five tools and reads no group list, so the combination wrote
   a `GHYDRA_TOOL_GROUPS` that the server never looked at — a setting that does

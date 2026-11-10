@@ -957,5 +957,155 @@ class ConfigSectionTests(unittest.TestCase):
         self.assertEqual(config.x64dbg_section(), again.x64dbg_section())
 
 
+class DryRunTests(unittest.TestCase):
+    """`--dry-run` has to reach the debugger, not only the Ghidra client."""
+
+    PROGRAM = {"path": r"C:\bin\sample.exe", "name": "sample.exe",
+               "imageBase": "140000000", "language": "x86:LE:64:default"}
+
+    def _fake_client(self, read_only=()):
+        calls = []
+
+        class FakeClient:
+            def __init__(self, *arguments, **keywords):
+                pass
+
+            def call_tool(self, name, arguments=None):
+                calls.append((name, arguments))
+                if name == "ListModules":
+                    return r"0x7FF7A1230000 | 0x25000 | C:\bin\sample.exe"
+                if name == "GetAllRegisters":
+                    return "RAX=0x1"
+                return "[state] ok"
+
+            def is_read_only(self, name):
+                return name in read_only
+
+        return FakeClient, calls
+
+    def _invoke(self, arguments, read_only=(), program=None):
+        from click.testing import CliRunner
+        from ghydra.cli.main import cli
+
+        fake, calls = self._fake_client(read_only)
+        payload = program if program is not None else self.PROGRAM
+
+        def answer(endpoint, params=None):
+            # The Ghidra client writes its endpoints with a leading slash.
+            route = str(endpoint).lstrip("/")
+            if route == "program":
+                return {"success": True, "result": payload}
+            if route.startswith("functions/by-name/"):
+                return {"success": True,
+                        "result": {"name": "main", "address": "140001234",
+                                   "signature": "int main(void)"}}
+            return {"success": True, "result": {"name": "main",
+                                                "address": "140001234"}}
+
+        with mock.patch.object(x64dbg_helper, "resolve_config", return_value={
+                "host": "127.0.0.1", "port": 9094, "token": "t", "path": ""}):
+            with mock.patch.object(x64dbg_helper, "discover", return_value={
+                    "host": "127.0.0.1", "port": 9094, "token": "t", "path": "",
+                    "unauthorized": False}):
+                with mock.patch.object(x64dbg_helper, "Client", fake):
+                    with mock.patch("ghydra.client.http_client.GhidraHTTPClient.get",
+                                    side_effect=answer):
+                        result = CliRunner().invoke(cli, arguments)
+        return result, calls
+
+    # ---------------------------------------------------------------- x64dbg call
+    def test_a_mutating_tool_is_not_called_under_the_flag(self):
+        result, calls = self._invoke(["--dry-run", "x64dbg", "call", "Run"])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn("Run", [name for name, _ in calls],
+                         "the debuggee was resumed by a preview")
+        self.assertIn("dry run", result.output.lower())
+
+    def test_the_same_tool_is_called_without_the_flag(self):
+        """Without this the test above would pass on a command that never calls."""
+        result, calls = self._invoke(["x64dbg", "call", "Run"])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("Run", [name for name, _ in calls])
+
+    def test_a_read_only_tool_may_run_under_the_flag(self):
+        """It changes nothing, so a preview may answer instead of describing."""
+        result, calls = self._invoke(["--dry-run", "x64dbg", "call",
+                                      "GetAllRegisters"],
+                                     read_only=("GetAllRegisters",))
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("GetAllRegisters", [name for name, _ in calls])
+
+    def test_a_tool_the_catalogue_does_not_know_is_not_called(self):
+        """The hint cannot be read, and an unknown tool is not assumed safe."""
+        result, calls = self._invoke(["--dry-run", "x64dbg", "call",
+                                      "SomethingUnknown"])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn("SomethingUnknown", [name for name, _ in calls])
+
+    def test_the_preview_names_the_tool_and_its_arguments(self):
+        result, _ = self._invoke(["--dry-run", "x64dbg", "call", "Run",
+                                  "--arg", "mode=1"])
+        self.assertIn("Run", result.output)
+        self.assertIn("mode", result.output)
+
+    # ------------------------------------------------------------ x64dbg breakpoint
+    def test_a_breakpoint_is_not_set_under_the_flag(self):
+        result, calls = self._invoke(["--dry-run", "x64dbg", "breakpoint",
+                                      "0x140001234"])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn("SetBreakpoint", [name for name, _ in calls])
+        # The preview still does the read-only work, so it can name the address.
+        self.assertIn("ListModules", [name for name, _ in calls])
+        self.assertIn("dry run", result.output.lower())
+
+    def test_the_breakpoint_is_set_without_the_flag(self):
+        result, calls = self._invoke(["x64dbg", "breakpoint", "0x140001234"])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("SetBreakpoint", [name for name, _ in calls])
+
+    def test_go_to_does_not_move_the_pointer_under_the_flag(self):
+        result, calls = self._invoke(["--dry-run", "x64dbg", "go-to",
+                                      "0x140001234"])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn("SetRegister", [name for name, _ in calls])
+
+    # --------------------------------------------------------------- target side
+    def test_target_breakpoint_is_not_set_under_the_flag(self):
+        result, calls = self._invoke(["--dry-run", "target", "breakpoint", "main"])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertNotIn("SetBreakpoint", [name for name, _ in calls])
+        self.assertIn("would set", result.output)
+
+    def test_target_breakpoint_is_set_without_the_flag(self):
+        result, calls = self._invoke(["target", "breakpoint", "main"])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("SetBreakpoint", [name for name, _ in calls])
+
+    def test_target_run_to_resumes_nothing_under_the_flag(self):
+        result, calls = self._invoke(["--dry-run", "target", "run-to", "main"])
+        self.assertEqual(0, result.exit_code, result.output)
+        names = [name for name, _ in calls]
+        self.assertNotIn("RunToAddress", names, "the debuggee was resumed")
+        self.assertNotIn("GetAllRegisters", names, "a preview has no stop to read")
+        self.assertIn("would run to", result.output)
+
+    def test_target_run_to_resumes_without_the_flag(self):
+        result, calls = self._invoke(["target", "run-to", "main"])
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("RunToAddress", [name for name, _ in calls])
+
+    def test_the_plan_is_in_the_json_answer(self):
+        """A machine reading the answer still learns what would have been sent."""
+        import json as json_module
+        result, _ = self._invoke(["--json", "--dry-run", "target",
+                                  "breakpoint", "main"])
+        self.assertEqual(0, result.exit_code, result.output)
+        # CliRunner mixes the streams, and the command also writes a human line
+        # to stderr: decode the JSON document and ignore what follows it.
+        document, _ = json_module.JSONDecoder().raw_decode(result.output)
+        self.assertTrue(document["dry_run"])
+        self.assertEqual("SetBreakpoint", document["plan"]["tool"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

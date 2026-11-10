@@ -45,6 +45,41 @@ def diff_names(before: Set[str], after: Set[str]) -> Dict[str, Any]:
             "count_a": len(before), "count_b": len(after)}
 
 
+def _section_diff(before: Set[str], after: Set[str],
+                  before_complete: bool, after_complete: bool) -> Dict[str, Any]:
+    """The names added and removed between two listings, and how sure we are.
+
+    A removal is a claim about the *second* listing: "this name is not in B". If
+    B was never read to its end, the name may simply not have been read — so the
+    removal is reported as "not seen in B", and the section says it is
+    incomplete. The same reasoning applies to an addition against A.
+
+    Args:
+        before: The names of the first listing.
+        after: The names of the second one.
+        before_complete: Whether the first listing was read to its end.
+        after_complete: Whether the second listing was read to its end.
+
+    Returns:
+        dict: ``added``, ``removed`` (each with a ``seen`` variant), the counts
+              and ``complete``.
+    """
+    added = sorted(after - before)
+    removed = sorted(before - after)
+    # An addition claims "not in A"; a removal claims "not in B".
+    added_certain = added if before_complete else []
+    removed_certain = removed if after_complete else []
+    return {
+        "added": added_certain,
+        "removed": removed_certain,
+        # What was not seen, kept apart from what is known to be gone.
+        "added_not_seen": [] if before_complete else added,
+        "removed_not_seen": [] if after_complete else removed,
+        "count_a": len(before), "count_b": len(after),
+        "complete": before_complete and after_complete,
+    }
+
+
 def diff_snapshots(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     """What changed between two snapshots, section by section.
 
@@ -76,10 +111,14 @@ def diff_snapshots(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
         if address not in by_addr_b:
             removed.append({"address": address, "name": fn.get("name")})
 
-    imports = diff_names(name_set(a.get("imports") or []),
-                         name_set(b.get("imports") or []))
-    strings = diff_names(name_set(a.get("strings") or []),
-                         name_set(b.get("strings") or []))
+    imports = _section_diff(
+        name_set(a.get("imports") or []), name_set(b.get("imports") or []),
+        bool(a.get("imports_complete", True)),
+        bool(b.get("imports_complete", True)))
+    strings = _section_diff(
+        name_set(a.get("strings") or []), name_set(b.get("strings") or []),
+        bool(a.get("strings_complete", True)),
+        bool(b.get("strings_complete", True)))
 
     result: Dict[str, Any] = {
         "program": {"a": a.get("program") or {}, "b": b.get("program") or {}},
@@ -93,9 +132,20 @@ def diff_snapshots(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
         "imports": imports,
         "strings": strings,
     }
+    # A difference that was only *not seen* is not a change that happened: the
+    # listing was incomplete, so the answer cannot claim it either way.
     result["changed"] = bool(
         added or removed or renamed or imports["added"] or imports["removed"]
         or strings["added"] or strings["removed"] or result["program_changed"])
+    # The overall verdict: a comparison over an incomplete listing is not a
+    # complete comparison, and the reader has to be told.
+    result["complete"] = bool(
+        result["functions"]["complete"] and imports["complete"]
+        and strings["complete"])
+    result["incomplete_sections"] = [
+        name for name, section in (("functions", result["functions"]),
+                                   ("imports", imports), ("strings", strings))
+        if not section.get("complete", True)]
     result["summary"] = {
         "functions_added": len(added), "functions_removed": len(removed),
         "functions_renamed": len(renamed),

@@ -119,6 +119,10 @@ def cli(ctx, host, port, output_json, dry_run, no_color, verbose):
     ctx.obj['client'] = client
     ctx.obj['formatter'] = formatter
     ctx.obj['output_json'] = output_json
+    # The debugger and target commands build their own clients, so the flag has to
+    # be in the context as well: attaching it to `GhidraHTTPClient` alone left
+    # `ghydra --dry-run x64dbg call Run` calling the debugger's Run tool.
+    ctx.obj['dry_run'] = dry_run
 
 
 # Import and register command groups

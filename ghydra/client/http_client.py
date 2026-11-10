@@ -177,13 +177,15 @@ class GhidraHTTPClient:
     def patch(
         self,
         endpoint: str,
-        data: Optional[Dict[str, Any]] = None
+        data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Make PATCH request to API.
 
         Args:
             endpoint: API endpoint path
             data: Optional JSON payload
+            params: Optional query string
 
         Returns:
             Parsed JSON response data
@@ -205,6 +207,7 @@ class GhidraHTTPClient:
         try:
             response = self.session.patch(
                 url,
+                params=params,
                 json=data,
                 headers=headers,
                 timeout=self.timeout
@@ -222,13 +225,15 @@ class GhidraHTTPClient:
     def put(
         self,
         endpoint: str,
-        data: Optional[Dict[str, Any]] = None
+        data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Make PUT request to API.
 
         Args:
             endpoint: API endpoint path
             data: Optional JSON payload
+            params: Optional query string
 
         Returns:
             Parsed JSON response data
@@ -250,6 +255,7 @@ class GhidraHTTPClient:
         try:
             response = self.session.put(
                 url,
+                params=params,
                 json=data,
                 headers=headers,
                 timeout=self.timeout
@@ -264,11 +270,13 @@ class GhidraHTTPClient:
         except requests.exceptions.RequestException as e:
             raise GhidraConnectionError(f"Request failed: {e}") from e
 
-    def delete(self, endpoint: str) -> Dict[str, Any]:
+    def delete(self, endpoint: str,
+               params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Make DELETE request to API.
 
         Args:
             endpoint: API endpoint path
+            params: Optional query string
 
         Returns:
             Parsed JSON response data
@@ -289,6 +297,7 @@ class GhidraHTTPClient:
         try:
             response = self.session.delete(
                 url,
+                params=params,
                 headers=headers,
                 timeout=self.timeout
             )

@@ -262,6 +262,17 @@ public class BSimResource implements Resource {
                     .self(self)
                     .build());
                 return;
+            case "BSIM_INCOMPLETE_INGEST":
+                // The database holds a partial ingest of this executable and
+                // BSim keys an executable by its fingerprint, so the request
+                // cannot be completed as it stands: 409 says "the current state
+                // forbids this", which is what it is. The reason says what the
+                // store holds and how to get past it.
+                ctx.status(409);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_INCOMPLETE_INGEST", reason)
+                    .self(self)
+                    .build());
+                return;
             default:
                 ctx.status(500);
                 ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_INGEST_FAILED",

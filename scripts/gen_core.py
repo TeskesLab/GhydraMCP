@@ -121,6 +121,7 @@ CORE_RENAMES = {
         "site_for": "_core_taint_site_for",
         "address_key": "_core_taint_address_key",
         "summarize": "_core_taint_summarize",
+        "looks_like_address": "_core_taint_looks_like_address",
     },
     "ghydra/core/mission.py": {
         "MISSION_VERSION": "_CORE_MISSION_VERSION",

@@ -80,17 +80,33 @@ class TaintClient:
         if endpoint == "functions/by-name/system":
             return {"success": True, "result": {"name": "system", "address": "0x6000"}}
         if endpoint == "xrefs/to-name/recv":
-            return {"success": True, "result": [
-                {"from_address": "0x401010", "to_address": "0x5000",
-                 "function": "0x401000"}]}
+            # The live endpoint answers `{name, symbols, references, total}`,
+            # and the DTO's fields are camelCase.
+            return {"success": True, "result": {
+                "name": "recv", "symbols": [{"name": "recv",
+                                             "address": "0x5000"}],
+                "references": [{"fromAddress": "0x401010",
+                                "toAddress": "0x5000",
+                                "refType": "UNCONDITIONAL_CALL",
+                                "fromFunction": "caller",
+                                "fromFunctionAddress": "0x401000"}],
+                "total": 1}}
         if endpoint == "xrefs/to-name/system":
-            return {"success": True, "result": [
-                {"from_address": "0x401020", "to_address": "0x6000",
-                 "function": "0x401000"}]}
+            return {"success": True, "result": {
+                "name": "system", "symbols": [{"name": "system",
+                                               "address": "0x6000"}],
+                "references": [{"fromAddress": "0x401020",
+                                "toAddress": "0x6000",
+                                "refType": "UNCONDITIONAL_CALL",
+                                "fromFunction": "caller",
+                                "fromFunctionAddress": "0x401000"}],
+                "total": 1}}
         if endpoint == "functions/0x401000/pcode":
+            # `PcodeOp.CALL` is 7 (verified with `javap -p -constants` against
+            # the committed SoftwareModeling.jar); 57 is `FLOAT_CEIL`.
             return {"success": True, "result": {"operations": [
-                {"address": "0x401010", "opcode": 57, "inputs": ["recv", "1"]},
-                {"address": "0x401020", "opcode": 57, "inputs": ["system", "1"]}]}}
+                {"address": "0x401010", "opcode": 7, "inputs": ["recv", "1"]},
+                {"address": "0x401020", "opcode": 7, "inputs": ["system", "1"]}]}}
         if endpoint == "analysis/call-path":
             return {"success": True, "result": {"path": ["0x401000"]}}
         return {"success": True, "result": []}

@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.36.1"
+BRIDGE_VERSION = "v3.36.2"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1210,7 +1210,7 @@ def _core_cache_key(identity, kind, request):
 # <<< end generated from ghydra/core/cache.py
 
 
-# >>> generated from ghydra/core/diff.py (668f5590de331024) — edit the core, then run scripts/gen_core.py
+# >>> generated from ghydra/core/diff.py (1c3f14292fe3b30e) — edit the core, then run scripts/gen_core.py
 _CORE_DIFF_PROGRAM_FIELDS = ('name', 'executable_path', 'image_base', 'language', 'compiler')
 
 def _core_diff_name_set(values):
@@ -1229,6 +1229,30 @@ def _core_diff_names(before, after):
               both counts.
     """
     return {'added': sorted(after - before), 'removed': sorted(before - after), 'count_a': len(before), 'count_b': len(after)}
+
+def _section_diff(before, after, before_complete, after_complete):
+    """The names added and removed between two listings, and how sure we are.
+
+    A removal is a claim about the *second* listing: "this name is not in B". If
+    B was never read to its end, the name may simply not have been read — so the
+    removal is reported as "not seen in B", and the section says it is
+    incomplete. The same reasoning applies to an addition against A.
+
+    Args:
+        before: The names of the first listing.
+        after: The names of the second one.
+        before_complete: Whether the first listing was read to its end.
+        after_complete: Whether the second listing was read to its end.
+
+    Returns:
+        dict: ``added``, ``removed`` (each with a ``seen`` variant), the counts
+              and ``complete``.
+    """
+    added = sorted(after - before)
+    removed = sorted(before - after)
+    added_certain = added if before_complete else []
+    removed_certain = removed if after_complete else []
+    return {'added': added_certain, 'removed': removed_certain, 'added_not_seen': [] if before_complete else added, 'removed_not_seen': [] if after_complete else removed, 'count_a': len(before), 'count_b': len(after), 'complete': before_complete and after_complete}
 
 def _core_diff_snapshots(a, b):
     """What changed between two snapshots, section by section.
@@ -1256,10 +1280,12 @@ def _core_diff_snapshots(a, b):
     for address, fn in sorted(by_addr_a.items()):
         if address not in by_addr_b:
             removed.append({'address': address, 'name': fn.get('name')})
-    imports = _core_diff_names(_core_diff_name_set(a.get('imports') or []), _core_diff_name_set(b.get('imports') or []))
-    strings = _core_diff_names(_core_diff_name_set(a.get('strings') or []), _core_diff_name_set(b.get('strings') or []))
+    imports = _section_diff(_core_diff_name_set(a.get('imports') or []), _core_diff_name_set(b.get('imports') or []), bool(a.get('imports_complete', True)), bool(b.get('imports_complete', True)))
+    strings = _section_diff(_core_diff_name_set(a.get('strings') or []), _core_diff_name_set(b.get('strings') or []), bool(a.get('strings_complete', True)), bool(b.get('strings_complete', True)))
     result: Dict[str, Any] = {'program': {'a': a.get('program') or {}, 'b': b.get('program') or {}}, 'program_changed': (a.get('program') or {}) != (b.get('program') or {}), 'functions': {'added': added, 'removed': removed, 'renamed': renamed, 'count_a': len(by_addr_a), 'count_b': len(by_addr_b), 'complete': bool(a.get('functions_complete', True)) and bool(b.get('functions_complete', True))}, 'imports': imports, 'strings': strings}
     result['changed'] = bool(added or removed or renamed or imports['added'] or imports['removed'] or strings['added'] or strings['removed'] or result['program_changed'])
+    result['complete'] = bool(result['functions']['complete'] and imports['complete'] and strings['complete'])
+    result['incomplete_sections'] = [name for name, section in (('functions', result['functions']), ('imports', imports), ('strings', strings)) if not section.get('complete', True)]
     result['summary'] = {'functions_added': len(added), 'functions_removed': len(removed), 'functions_renamed': len(renamed), 'imports_added': len(imports['added']), 'imports_removed': len(imports['removed']), 'strings_added': len(strings['added']), 'strings_removed': len(strings['removed']), 'program_changed': result['program_changed']}
     return result
 # <<< end generated from ghydra/core/diff.py
@@ -1553,20 +1579,36 @@ def _core_telemetry_summarize(entries, days=7, path=''):
 # <<< end generated from ghydra/core/telemetry.py
 
 
-# >>> generated from ghydra/core/taint.py (8602ed1a558df9b7) — edit the core, then run scripts/gen_core.py
+# >>> generated from ghydra/core/taint.py (17452e5035c8dd11) — edit the core, then run scripts/gen_core.py
 _CORE_TAINT_PROGRAM_FIELDS = ('name', 'executable_path', 'image_base')
 
 _CORE_TAINT_PAGE_LIMIT = 1000
 
 _CORE_TAINT_MAX_PAGES = 5
 
-_CORE_TAINT_CALL_OPCODES = {57, 58}
+_CORE_TAINT_CALL_OPCODES = {7, 8}
 
 _CORE_TAINT_CONFIDENCE_DIRECT = 'direct'
 
 _CORE_TAINT_CONFIDENCE_REACHABLE = 'reachable'
 
 _CORE_TAINT_DISCLAIMER = "These are hypotheses from pcode and the call graph, not proof of exploitability. Branches are not modelled; a 'direct' finding means the sink call appears after the source call in the same function."
+
+def _core_taint_looks_like_address(text):
+    """Whether a string is an address rather than a name.
+
+    Ghidra writes an address as unprefixed hexadecimal (`00401000`, `140001234`),
+    and every hex digit is also a legal character in a symbol name - so this is a
+    heuristic, used only to decide whether a value that arrived in the `function`
+    field can be read as an address. A name that is all hex digits is rare enough
+    that the alternative (a wasted containing-function lookup) is worse.
+    """
+    value = str(text or '').strip()
+    if not value:
+        return False
+    if value.lower().startswith('0x'):
+        value = value[2:]
+    return bool(value) and all((char in '0123456789abcdefABCDEF' for char in value))
 
 def _core_taint_result_of(envelope):
     """The payload of a successful envelope, or ``None``.
@@ -1757,12 +1799,15 @@ def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
     """Make GET request to Ghidra instance"""
     return _make_request("GET", port, endpoint, params=params)
 
-def safe_put(port: int, endpoint: str, data: dict) -> dict:
+def safe_put(port: int, endpoint: str, data: dict,
+             params: dict | None = None) -> dict:
     """Make PUT request to Ghidra instance with JSON payload"""
     headers = data.pop("headers", None) if isinstance(data, dict) else None
-    return _make_request("PUT", port, endpoint, json_data=data, headers=headers)
+    return _make_request("PUT", port, endpoint, params=params,
+                         json_data=data, headers=headers)
 
-def safe_post(port: int, endpoint: str, data: Union[dict, str]) -> dict:
+def safe_post(port: int, endpoint: str, data: Union[dict, str],
+              params: dict | None = None) -> dict:
     """Perform a POST request to a specific Ghidra instance with JSON or text payload"""
     headers = None
     json_payload = None
@@ -1774,16 +1819,19 @@ def safe_post(port: int, endpoint: str, data: Union[dict, str]) -> dict:
     else:
         text_payload = data
 
-    return _make_request("POST", port, endpoint, json_data=json_payload, data=text_payload, headers=headers)
+    return _make_request("POST", port, endpoint, params=params,
+                         json_data=json_payload, data=text_payload, headers=headers)
 
-def safe_patch(port: int, endpoint: str, data: dict) -> dict:
+def safe_patch(port: int, endpoint: str, data: dict,
+               params: dict | None = None) -> dict:
     """Perform a PATCH request to a specific Ghidra instance with JSON payload"""
     headers = data.pop("headers", None) if isinstance(data, dict) else None
-    return _make_request("PATCH", port, endpoint, json_data=data, headers=headers)
+    return _make_request("PATCH", port, endpoint, params=params,
+                         json_data=data, headers=headers)
 
-def safe_delete(port: int, endpoint: str) -> dict:
+def safe_delete(port: int, endpoint: str, params: dict | None = None) -> dict:
     """Perform a DELETE request to a specific Ghidra instance"""
-    return _make_request("DELETE", port, endpoint)
+    return _make_request("DELETE", port, endpoint, params=params)
 
 
 # ================= Text Formatters =================
@@ -3822,6 +3870,12 @@ def format_analysis_diff(response: dict, **kwargs) -> str:
                        else " - same program fingerprint")]
     if not functions.get("complete", True):
         lines.append("  note: a function listing was truncated; the counts are a floor")
+    # A section that was not read to its end supports no removal claim, and the
+    # reader has to know which ones those were.
+    for section_name in ("imports", "strings"):
+        if not (result.get(section_name) or {}).get("complete", True):
+            lines.append(f"  note: the {section_name} listing was truncated; no "
+                         f"removal is claimed from it")
     lines.append(f"  functions: +{summary.get('functions_added', 0)} "
                  f"-{summary.get('functions_removed', 0)} "
                  f"~{summary.get('functions_renamed', 0)} renamed "
@@ -3855,6 +3909,15 @@ def format_analysis_diff(response: dict, **kwargs) -> str:
             lambda row: f"+ {str(row)[:100]}")
     section("strings removed", (result.get("strings") or {}).get("removed") or [],
             lambda row: f"- {str(row)[:100]}")
+    # What was not seen, kept apart from what is known to be gone.
+    for section_name in ("imports", "strings"):
+        rows = (result.get(section_name) or {}).get("removed_not_seen") or []
+        if rows:
+            lines.append("")
+            lines.append(f"{section_name} not seen in the second listing "
+                         "(the listing was not read to its end):")
+            for row in rows[:40]:
+                lines.append(f"  ? {str(row)[:100]}")
     return "\n".join(lines)
 
 
@@ -11849,13 +11912,16 @@ def _runbook_call(port: int, step: dict) -> dict:
     # safe_post/safe_patch/safe_put pop "headers" from the payload, so a copy
     # goes in: the runbook must not lose what it recorded.
     body = dict(payload) if isinstance(payload, dict) else (payload or {})
+    # The parameters travel with the step: a POST BSim step carries its address
+    # and its dry-run arguments there, and dropping them made the replay a
+    # different request from the one that was recorded.
     if method == "POST":
-        return safe_post(port, endpoint, body)
+        return safe_post(port, endpoint, body, params=params)
     if method == "PATCH":
-        return safe_patch(port, endpoint, body)
+        return safe_patch(port, endpoint, body, params=params)
     if method == "PUT":
-        return safe_put(port, endpoint, body)
-    return safe_delete(port, endpoint)
+        return safe_put(port, endpoint, body, params=params)
+    return safe_delete(port, endpoint, params=params)
 
 
 def _runbook_record(port: int, steps: list) -> dict:
@@ -12125,19 +12191,25 @@ def _taint_resolve_name(port: int, name: str) -> dict:
         addresses.append(str(function["address"]))
     xrefs = _taint_result(safe_get(port, f"xrefs/to-name/{quote(name)}",
                                    {"limit": 1000}))
-    if isinstance(xrefs, list):
-        for item in xrefs:
-            if not isinstance(item, dict):
-                continue
-            reference = {
-                "from_address": item.get("from_address") or item.get("fromAddress"),
-                "to_address": item.get("to_address") or item.get("toAddress"),
-                "type": item.get("type") or item.get("ref_type"),
-                "function": item.get("function") or item.get("from_function"),
-            }
-            references.append(reference)
-            if reference["to_address"]:
-                addresses.append(str(reference["to_address"]))
+    # `XrefResource.getRefsToName()` answers `{name, symbols, references, total}`,
+    # not a list: testing `isinstance(xrefs, list)` skipped every real reference.
+    if isinstance(xrefs, dict):
+        xrefs = xrefs.get("references")
+    for item in xrefs if isinstance(xrefs, list) else []:
+        if not isinstance(item, dict):
+            continue
+        reference = {
+            "from_address": item.get("fromAddress") or item.get("from_address"),
+            "to_address": item.get("toAddress") or item.get("to_address"),
+            "type": (item.get("refType") or item.get("type")
+                     or item.get("ref_type")),
+            "function": item.get("fromFunction") or item.get("function"),
+            "function_address": (item.get("fromFunctionAddress")
+                                 or item.get("from_function_address")),
+        }
+        references.append(reference)
+        if reference["to_address"]:
+            addresses.append(str(reference["to_address"]))
     return {"name": name, "addresses": list(dict.fromkeys(addresses)),
             "references": references}
 
@@ -12195,11 +12267,15 @@ def _taint_functions_referencing(port: int, info: dict,
         address = reference.get("from_address")
         if not address:
             continue
-        function = reference.get("function")
-        if isinstance(function, dict):
-            function_address = function.get("address") or function.get("entry")
-        else:
-            function_address = function
+        function_address = reference.get("function_address")
+        if not function_address:
+            function = reference.get("function")
+            if isinstance(function, dict):
+                function_address = (function.get("address")
+                                    or function.get("entry"))
+            elif isinstance(function, str) and _core_taint_looks_like_address(
+                    function):
+                function_address = function
         if not function_address:
             containing = _taint_function_of(port, str(address))
             function_address = containing.get("address") or containing.get("entry")

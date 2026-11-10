@@ -899,7 +899,14 @@ class TaintCoreTests(unittest.TestCase):
         self.assertEqual(taint_core.MAX_PAGES, taint_helper.MAX_PAGES)
         self.assertEqual(taint_core.CALL_OPCODES, taint_helper.CALL_OPCODES)
         self.assertIsInstance(taint_core.CALL_OPCODES, set)
-        self.assertEqual(taint_core.CALL_OPCODES, {57, 58})
+        # `PcodeOp.CALL` is 7 and `CALLIND` is 8 (read with `javap -p -constants`
+        # against the committed SoftwareModeling.jar). 57 and 58 are
+        # `FLOAT_CEIL` and `FLOAT_FLOOR`: the first version of this constant
+        # named them, so every real call was discarded.
+        self.assertEqual(taint_core.CALL_OPCODES, {7, 8})
+        # The floating-point opcodes are not calls, and must stay out.
+        self.assertNotIn(57, taint_core.CALL_OPCODES)
+        self.assertNotIn(58, taint_core.CALL_OPCODES)
         self.assertEqual(taint_core.DISCLAIMER, bridge._TAINT_DISCLAIMER)
         self.assertIs(bridge._TAINT_CALL_OPCODES, bridge._CORE_TAINT_CALL_OPCODES)
         self.assertIn("not proof", taint_core.DISCLAIMER)
