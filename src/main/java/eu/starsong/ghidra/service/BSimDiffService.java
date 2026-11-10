@@ -1,14 +1,10 @@
 package eu.starsong.ghidra.service;
 
-import java.lang.reflect.Field;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import eu.starsong.ghidra.util.GhidraSwing;
-import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.Program;
@@ -54,26 +50,6 @@ public final class BSimDiffService {
 
     /** How many matches BSim is asked for, per function. */
     private static final int MATCH_LIMIT = 5;
-
-    /** The BSim query that asks for the nearest functions. */
-    private static final String QUERY_NEAREST =
-        "ghidra.features.bsim.query.protocol.QueryNearest";
-
-    /** The BSim query that lists the executables the database holds. */
-    private static final String QUERY_EXE_INFO =
-        "ghidra.features.bsim.query.protocol.QueryExeInfo";
-
-    /** The filter object that narrows a query to one executable. */
-    private static final String BSIM_FILTER =
-        "ghidra.features.bsim.query.protocol.BSimFilter";
-
-    /** The base class of every BSim filter type. */
-    private static final String BSIM_FILTER_TYPE =
-        "ghidra.features.bsim.gui.filters.BSimFilterType";
-
-    /** The filter type that matches on the name of the executable. */
-    private static final String EXE_NAME_FILTER_TYPE =
-        "ghidra.features.bsim.gui.filters.ExecutableNameBSimFilterType";
 
     private BSimDiffService() {
     }
@@ -123,7 +99,10 @@ public final class BSimDiffService {
 
         // The filter is built once and applied to every query, so the answer
         // can say whether the narrowing was in force for the whole comparison.
-        ExecutableFilter filter = buildExecutableFilter(wanted);
+        // The query service owns it: the filter travels inside the query, which
+        // is where BSim applies it.
+        BSimQueryService.ExecutableFilter filter =
+            BSimQueryService.executableFilter(wanted);
 
         List<Function> functions = new ArrayList<>();
         FunctionIterator iterator = program.getFunctionManager().getFunctions(true);
@@ -147,8 +126,9 @@ public final class BSimDiffService {
         int unknownAddress = 0;
         List<Map<String, Object>> failures = new ArrayList<>();
         for (Function function : functions) {
-            Map<String, Object> queried = nearestMatches(program,
-                function.getEntryPoint().toString(), floor, filter);
+            Map<String, Object> queried = BSimQueryService.query(program,
+                function.getEntryPoint().toString(), null, MATCH_LIMIT, floor,
+                0.0, filter);
             if (!Boolean.TRUE.equals(queried.get("success"))) {
                 // Two different things hide behind a failed query, and the report
                 // must not confuse them: a function with no signature (a thunk,
@@ -228,7 +208,7 @@ public final class BSimDiffService {
     }
 
     /** What the comparison did, said honestly about the filter. */
-    private static String method(ExecutableFilter filter) {
+    private static String method(BSimQueryService.ExecutableFilter filter) {
         String pairing = "Pairing by BSim similarity within the named "
             + "executable; a pair is a hypothesis, and every pair carries its "
             + "similarity. A function with no pair is listed, not dropped.";
@@ -240,333 +220,6 @@ public final class BSimDiffService {
         return pairing + " The executable filter could NOT be applied ("
             + filter.reason() + "), so the match limit is spent on the whole "
             + "corpus and a match of the named executable can be missed.";
-    }
-
-    /**
-     * The nearest functions of the wanted executable that look like one function.
-     *
-     * <p>The query is built here rather than asked of {@link BSimQueryService}
-     * because the executable filter has to travel with the query: BSim applies
-     * the filter in its SQL layer, so the match limit applies to the filtered
-     * set. Everything is reflective for the reason {@link BSimIngestService}
-     * gives: the BSim API is internal and moves between series.
-     *
-     * @param program the open program
-     * @param address the entry point of the function being asked about
-     * @param floor   the similarity floor
-     * @param filter  the executable filter, or null when it could not be built
-     * @return a payload shaped like {@code BSimQueryService.query}: {@code success}
-     *         says whether the query ran, and the matches are in {@code matches}
-     */
-    private static Map<String, Object> nearestMatches(Program program, String address,
-            double floor, ExecutableFilter filter) {
-        Map<String, Object> data = new LinkedHashMap<>();
-        String database = BSimService.database();
-        if (!BSimService.available()) {
-            return BSimDatabase.failure(data, "BSIM_DISABLED",
-                "this Ghidra build has no BSim query engine");
-        }
-        if (database == null) {
-            return BSimDatabase.failure(data, "BSIM_NO_DATABASE",
-                "no signature database is configured");
-        }
-        if (program == null) {
-            return BSimDatabase.failure(data, "BSIM_NO_PROGRAM",
-                "no program is open in this instance");
-        }
-
-        Function function = GhidraSwing.runRead(() -> resolveFunction(program, address));
-        if (function == null) {
-            return BSimDatabase.failure(data, "BSIM_NO_FUNCTION",
-                "no function at " + address);
-        }
-        if (function.getBody() == null || function.getBody().getNumAddresses() == 0) {
-            return BSimDatabase.failure(data, "BSIM_NO_BODY",
-                "the function has no body, so no signature can be made for it");
-        }
-
-        Object signatureGenerator = null;
-        Object connection = BSimDatabase.open(database, false, data);
-        if (connection == null) {
-            return data;
-        }
-        try {
-            ClassLoader loader = BSimDatabase.loader();
-            Class<?> databaseClass = Class.forName(BSimDatabase.FUNCTION_DATABASE,
-                true, loader);
-            Object databaseInfo = connection.getClass().getMethod("getInfo")
-                .invoke(connection);
-            Object vectorFactory = connection.getClass()
-                .getMethod("getLSHVectorFactory").invoke(connection);
-            if (databaseInfo == null || vectorFactory == null) {
-                return BSimDatabase.failure(data, "BSIM_INIT_FAILED",
-                    "the signature database answered without its configuration");
-            }
-
-            Class<?> generatorClass = Class.forName(BSimDatabase.GEN_SIGNATURES,
-                true, loader);
-            signatureGenerator = generatorClass.getConstructor(boolean.class)
-                .newInstance(Boolean.valueOf(
-                    BSimDatabase.booleanField(databaseInfo, "trackcallgraph")));
-            generatorClass.getMethod("setVectorFactory",
-                Class.forName("generic.lsh.vector.LSHVectorFactory", true, loader))
-                .invoke(signatureGenerator, vectorFactory);
-            BSimDatabase.addList(signatureGenerator, databaseInfo,
-                "addExecutableCategories", "execats");
-            BSimDatabase.addList(signatureGenerator, databaseInfo, "addFunctionTags",
-                "functionTags");
-            String dateColumn = BSimDatabase.stringField(databaseInfo, "dateColumnName");
-            if (dateColumn != null && !dateColumn.isBlank()) {
-                generatorClass.getMethod("addDateColumnName", String.class)
-                    .invoke(signatureGenerator, dateColumn);
-            }
-
-            String[] location = BSimDatabase.projectLocation(program);
-            generatorClass.getMethod("openProgram", Program.class, String.class,
-                    String.class, String.class, String.class, String.class)
-                .invoke(signatureGenerator, program, null, null, null,
-                    location[0], location[1]);
-            // One function: the one being asked about.
-            generatorClass.getMethod("scanFunction", Function.class)
-                .invoke(signatureGenerator, function);
-
-            Object description = generatorClass.getMethod("getDescriptionManager")
-                .invoke(signatureGenerator);
-            if (description == null) {
-                return BSimDatabase.failure(data, "BSIM_SCAN_FAILED",
-                    "no signature could be generated for this function");
-            }
-
-            Class<?> queryClass = Class.forName(QUERY_NEAREST, true, loader);
-            Object query = queryClass.getConstructor().newInstance();
-            queryClass.getField("manage").set(query, description);
-            queryClass.getField("thresh").set(query, Double.valueOf(floor));
-            queryClass.getField("signifthresh").set(query, Double.valueOf(0.0));
-            queryClass.getField("max").set(query, Integer.valueOf(MATCH_LIMIT));
-            if (filter.isApplied()) {
-                try {
-                    queryClass.getField("bsimFilter").set(query, filter.bsimFilter());
-                } catch (Throwable missing) {
-                    // The narrowing is optional: without it the query still
-                    // runs, only with the weaker, corpus-wide limit.
-                    filter.disable("the BSim query has no filter field ("
-                        + BSimDatabase.describe(BSimDatabase.unwrap(missing)) + ")");
-                }
-            }
-
-            Object response = queryClass.getMethod("execute", databaseClass)
-                .invoke(query, connection);
-            if (response == null) {
-                return BSimDatabase.failure(data, "BSIM_QUERY_FAILED",
-                    "the database refused the query: "
-                        + BSimDatabase.lastError(connection));
-            }
-
-            List<Map<String, Object>> matches = new ArrayList<>();
-            List<?> results = (List<?>) BSimDatabase.call(response, "getResult");
-            if (results == null) {
-                results = (List<?>) fieldOf(response, "result");
-            }
-            if (results != null) {
-                for (Object result : results) {
-                    Iterator<?> notes = iterate(result);
-                    while (notes != null && notes.hasNext()
-                            && matches.size() < MATCH_LIMIT) {
-                        matches.add(describeNote(notes.next()));
-                    }
-                }
-            }
-
-            data.put("success", Boolean.TRUE);
-            data.put("matches", matches);
-            data.put("returned", Integer.valueOf(matches.size()));
-            return data;
-        } catch (Throwable failed) {
-            Throwable cause = BSimDatabase.unwrap(failed);
-            data.put("success", Boolean.FALSE);
-            data.put("code", "BSIM_QUERY_FAILED");
-            data.put("reason", BSimDatabase.describe(cause));
-            return data;
-        } finally {
-            BSimDatabase.disposeQuietly(signatureGenerator);
-            BSimDatabase.closeQuietly(connection);
-        }
-    }
-
-    /**
-     * The filter that narrows a query to one executable, and why it is missing
-     * when it could not be built.
-     *
-     * <p>The filter is only used when the exact name the database recorded is
-     * known: the BSim filter matches the executable name exactly, while the
-     * answer compares names case-insensitively. Filtering on a name the
-     * database does not hold would turn a case difference into a missing pair.
-     */
-    private static final class ExecutableFilter {
-
-        /** The BSim filter instance, or null when it could not be built. */
-        private final Object bsimFilter;
-
-        /** Why the filter is missing, when it is. */
-        private String reason;
-
-        /** Does the database hold the executable that was asked for? */
-        private final Boolean found;
-
-        ExecutableFilter(Object bsimFilter, String reason, Boolean found) {
-            this.bsimFilter = bsimFilter;
-            this.reason = reason;
-            this.found = found;
-        }
-
-        boolean isApplied() {
-            return bsimFilter != null && reason == null;
-        }
-
-        Boolean found() {
-            return found;
-        }
-
-        Object bsimFilter() {
-            return bsimFilter;
-        }
-
-        String reason() {
-            return reason == null ? "no reason was reported" : reason;
-        }
-
-        /** The narrowing is lost: the comparison runs without it. */
-        void disable(String why) {
-            this.reason = why;
-        }
-    }
-
-    /**
-     * Build the filter, resolving the exact name the database recorded first.
-     *
-     * <p>Everything is reflective: the BSim filter API is internal and has moved
-     * between series, and a build that does not carry it must still answer the
-     * comparison (with the old, weaker narrowing) instead of failing.
-     */
-    private static ExecutableFilter buildExecutableFilter(String wanted) {
-        StoredName stored = storedExecutableName(wanted);
-        if (stored.failure() != null) {
-            // The database could not be asked, so nothing is claimed about it.
-            return new ExecutableFilter(null, stored.failure(), null);
-        }
-        if (stored.name() == null) {
-            return new ExecutableFilter(null,
-                "the database holds no executable named '" + wanted
-                    + "', so there was nothing to narrow the query to",
-                Boolean.FALSE);
-        }
-        try {
-            ClassLoader loader = BSimDatabase.loader();
-            Class<?> filterClass = Class.forName(BSIM_FILTER, true, loader);
-            Class<?> typeBase = Class.forName(BSIM_FILTER_TYPE, true, loader);
-            Class<?> typeClass = Class.forName(EXE_NAME_FILTER_TYPE, true, loader);
-            Object filter = filterClass.getConstructor().newInstance();
-            Object type = typeClass.getConstructor().newInstance();
-            filterClass.getMethod("addAtom", typeBase, String.class)
-                .invoke(filter, type, stored.name());
-            Object empty = filterClass.getMethod("isEmpty").invoke(filter);
-            if (Boolean.TRUE.equals(empty)) {
-                return new ExecutableFilter(null,
-                    "the BSim filter refused the executable name '"
-                        + stored.name() + "'", Boolean.TRUE);
-            }
-            return new ExecutableFilter(filter, null, Boolean.TRUE);
-        } catch (Throwable missing) {
-            return new ExecutableFilter(null,
-                "this Ghidra build has no usable BSim executable filter ("
-                    + BSimDatabase.describe(BSimDatabase.unwrap(missing)) + ")",
-                Boolean.TRUE);
-        }
-    }
-
-    /**
-     * The name the database recorded for the wanted executable.
-     *
-     * <p>BSim matches the executable name exactly, so the name has to be the
-     * one the database holds; the answer compares names case-insensitively, so
-     * the name is looked up the way the database finds it (case-insensitively)
-     * and the stored spelling is returned.
-     */
-    private static StoredName storedExecutableName(String wanted) {
-        String database = BSimService.database();
-        if (database == null) {
-            return new StoredName(null, "no signature database is configured");
-        }
-        Map<String, Object> opened = new LinkedHashMap<>();
-        Object connection = BSimDatabase.open(database, false, opened);
-        if (connection == null) {
-            return new StoredName(null,
-                "the executable list could not be read from the database");
-        }
-        try {
-            ClassLoader loader = BSimDatabase.loader();
-            Class<?> queryClass = Class.forName(QUERY_EXE_INFO, true, loader);
-            Object query = queryClass.getConstructor().newInstance();
-            queryClass.getField("filterExeName").set(query, wanted);
-            queryClass.getField("limit").set(query, Integer.valueOf(100));
-            Object response = queryClass
-                .getMethod("execute", Class.forName(BSimDatabase.FUNCTION_DATABASE,
-                    true, loader))
-                .invoke(query, connection);
-            if (response == null) {
-                return new StoredName(null,
-                    "the executable list could not be read from the database");
-            }
-            Object records = fieldOf(response, "records");
-            if (!(records instanceof Iterable)) {
-                return new StoredName(null,
-                    "the executable list could not be read from the database");
-            }
-            for (Object record : (Iterable<?>) records) {
-                String name = (String) BSimDatabase.call(record, "getNameExec");
-                if (name != null && name.equalsIgnoreCase(wanted)) {
-                    return new StoredName(name, null);
-                }
-            }
-            return new StoredName(null, null);
-        } catch (Throwable unavailable) {
-            // The listing is a convenience: without it the comparison still
-            // runs, only without the narrowing.
-            return new StoredName(null,
-                "the executable list could not be read ("
-                    + BSimDatabase.describe(BSimDatabase.unwrap(unavailable)) + ")");
-        } finally {
-            BSimDatabase.closeQuietly(connection);
-        }
-    }
-
-    /**
-     * The name the database recorded, or the reason it could not be read.
-     *
-     * <p>The two failures are different: an executable that is not in the
-     * database is a fact about the database, and a listing that could not be
-     * read is a fact about this build.
-     */
-    private static final class StoredName {
-
-        /** The stored spelling, or null when the database holds no such name. */
-        private final String name;
-
-        /** Why the name could not be looked up, or null. */
-        private final String failure;
-
-        StoredName(String name, String failure) {
-            this.name = name;
-            this.failure = failure;
-        }
-
-        String name() {
-            return name;
-        }
-
-        String failure() {
-            return failure;
-        }
     }
 
     /**
@@ -694,73 +347,4 @@ public final class BSimDiffService {
         return value.startsWith("0x") ? value.substring(2) : value;
     }
 
-    /** The function at an address, or null when there is none. */
-    private static Function resolveFunction(Program program, String address) {
-        try {
-            Address target = program.getAddressFactory()
-                .getDefaultAddressSpace().getAddress(address.trim());
-            return program.getFunctionManager().getFunctionAt(target);
-        } catch (Exception invalid) {
-            // AddressFormatException is checked; a bad address is "not found".
-            return null;
-        }
-    }
-
-    private static Object fieldOf(Object bean, String name) {
-        try {
-            Field field = bean.getClass().getField(name);
-            return field.get(bean);
-        } catch (Throwable missing) {
-            return null;
-        }
-    }
-
-    private static Iterator<?> iterate(Object collection) {
-        if (collection instanceof Iterable) {
-            return ((Iterable<?>) collection).iterator();
-        }
-        return null;
-    }
-
-    /** One match, in the shape the answer uses. */
-    private static Map<String, Object> describeNote(Object note) {
-        Map<String, Object> match = new LinkedHashMap<>();
-        Object described = BSimDatabase.call(note, "getFunctionDescription");
-        String function = null;
-        String address = null;
-        String executable = null;
-        String path = null;
-        if (described != null) {
-            function = (String) BSimDatabase.call(described, "getFunctionName");
-            Object addressValue = BSimDatabase.call(described, "getAddress");
-            address = addressValue == null ? null
-                : "0x" + Long.toHexString(((Number) addressValue).longValue());
-            Object exe = BSimDatabase.call(described, "getExecutableRecord");
-            if (exe != null) {
-                // The executable record calls the name `getNameExec`: measured,
-                // `getName()` exists but answers null, so the match came back
-                // with an empty "executable" and the reader could not tell which
-                // binary it was.
-                executable = (String) BSimDatabase.call(exe, "getNameExec");
-                if (executable == null) {
-                    executable = (String) BSimDatabase.call(exe, "getName");
-                }
-                path = (String) BSimDatabase.call(exe, "getPath");
-            }
-        }
-        match.put("function", function);
-        match.put("address", address);
-        match.put("executable", executable);
-        match.put("path", path);
-        match.put("similarity", doubleOf(note, "getSimilarity"));
-        match.put("significance", doubleOf(note, "getSignificance"));
-        return match;
-    }
-
-    private static double doubleOf(Object bean, String method) {
-        Object value = BSimDatabase.call(bean, method);
-        return value instanceof Number
-            ? Math.round(((Number) value).doubleValue() * 1000.0) / 1000.0
-            : 0.0;
-    }
 }

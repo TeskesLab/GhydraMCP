@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from .core import cache as core_cache
 from .core import diff as core_diff
 
 PAGE_LIMIT = 1000
@@ -76,9 +77,7 @@ def collect_snapshot(client, include_strings: bool = True) -> Dict[str, Any]:
     program: Dict[str, Any] = {}
     response = _get(client, "program")
     payload = response.get("result") if isinstance(response, dict) else None
-    if isinstance(payload, dict):
-        program = {key: payload.get(key) for key in PROGRAM_FIELDS
-                   if payload.get(key) is not None}
+    program = core_cache.fingerprint_from_program(payload)
 
     functions_page = _page(client, "functions")
     functions = []

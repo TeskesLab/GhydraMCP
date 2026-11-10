@@ -982,28 +982,38 @@ def run_mcp_config_tests():
 
 
 def run_target_tests():
-    """Run the cross-tool target workflow suite — fakes, no services."""
+    """Run the cross-tool target workflow suite — fakes, no services.
+
+    Two files, because they answer two questions: `test_target.py` asks whether
+    the workflow computes the right thing, and `test_target_cli.py` asks whether
+    the commands reach the user. The second one exists because a mistake in the
+    command's own failure handling was invisible while only the helper was
+    tested.
+    """
     print_header("Running Target Workflow Tests")
 
-    try:
-        result = subprocess.run(
-            suite_script("test_target.py"),
-            capture_output=True,
-            text=True
-        )
+    passed = True
+    for script in ("test_target.py", "test_target_cli.py"):
+        try:
+            result = subprocess.run(
+                suite_script(script),
+                capture_output=True,
+                text=True
+            )
 
-        if result.stdout:
-            print("STDOUT:")
-            print(result.stdout)
+            if result.stdout:
+                print("STDOUT:")
+                print(result.stdout)
 
-        if result.stderr:
-            print("STDERR:")
-            print(result.stderr)
+            if result.stderr:
+                print("STDERR:")
+                print(result.stderr)
 
-        return result.returncode == 0
-    except Exception as e:
-        print(f"Error running target workflow tests: {e}")
-        return False
+            passed = passed and result.returncode == 0
+        except Exception as e:
+            print(f"Error running target workflow tests: {e}")
+            passed = False
+    return passed
 
 
 def run_gateway_tests():

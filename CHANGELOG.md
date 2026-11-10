@@ -7,6 +7,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The BSim query was written twice.** The executable filter has to travel
+  inside the query — BSim applies it in its SQL layer, so the match limit is
+  spent on the matches of the wanted executable and not on the whole corpus —
+  and the query service was out of reach when the filter was built, so
+  `BSimDiffService` grew its own copy of it: about 250 lines that would have to
+  be fixed twice. The filter moved to `BSimQueryService`, which now builds it
+  (`executableFilter`) and attaches it (`query(..., filter)`), and the diff
+  asks for one. The duplicate import of `GhidraSwing` went with it.
+- **The program fingerprint asked for names no endpoint sends.**
+  `ProgramResource.getCurrentProgram()` answers `path` and `imageBase`; the
+  diff, the runbook and the mission asked for `executable_path` and
+  `image_base`, so a fingerprint carried only the name — and **two different
+  binaries of the same name compared as "the same program fingerprint"**. The
+  runbook's own docstring says the path is what tells "the same program" from
+  "another one with the same name", and the mission's dossier printed
+  "(no path)" because it read `path` but stored it under `path` while its own
+  renderer read `executable_path`. One accessor in the core
+  (`fingerprint_from_program`) now builds it, and the bridge and the CLI call
+  the same one — they did not even agree with each other before (the CLI read
+  four fields, the bridge two).
+- **The server's own error code was read and thrown away.** The cross-tool
+  workflow turned every failure into a `TARGET_*` code and dropped the code the
+  server sent, so "the instance is down" and "the server refused this one"
+  looked the same. The target taxonomy is still the contract; the original code
+  travels in the message.
+- **`ghydra target` had no test at the level the user runs it.** The helpers
+  were tested and the commands were not, which is how a mistake in the
+  command's own failure handling survived: the handler named a class it did not
+  import, and nothing ever reached it. A new suite drives the five commands
+  through the real root command and checks that a failure is **reported** with
+  its code and a non-zero exit, rather than raised out of the command.
 - **The cross-tool workflow read a program shape no instance sends.** The Ghidra
   API emits `imageBase` and serialises every address with `Address.toString()` —
   **unprefixed hexadecimal** (`00401000`, `140000000`). The target workflow read

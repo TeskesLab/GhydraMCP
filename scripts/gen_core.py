@@ -64,8 +64,10 @@ CORE_RENAMES = {
         "CACHE_VERSION": "_CORE_CACHE_VERSION",
         "IDENTITY_FIELDS": "_CORE_CACHE_IDENTITY_FIELDS",
         "STATISTIC_FIELDS": "_CORE_CACHE_STATISTIC_FIELDS",
+        "FINGERPRINT_FIELDS": "_CORE_CACHE_FINGERPRINT_FIELDS",
         "identity_from_program": "_core_cache_identity",
         "cache_key": "_core_cache_key",
+        "fingerprint_from_program": "_core_cache_fingerprint",
         # Names the module imports (imports are stripped from the generated
         # block, so the bridge's own generated name is used instead).
         "digest": "_core_digest",
@@ -75,6 +77,10 @@ CORE_RENAMES = {
         "name_set": "_core_diff_name_set",
         "diff_names": "_core_diff_names",
         "diff_snapshots": "_core_diff_snapshots",
+        # The fingerprint lives in the cache module, and the imports are
+        # stripped from the generated block.
+        "FINGERPRINT_FIELDS": "_CORE_CACHE_FINGERPRINT_FIELDS",
+        "fingerprint_from_program": "_core_cache_fingerprint",
     },
     "ghydra/core/fleet.py": {
         "KINDS": "_CORE_FLEET_KINDS",

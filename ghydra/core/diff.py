@@ -21,8 +21,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Set
 
-#: The fields of /program a diff reports on.
-PROGRAM_FIELDS = ("name", "executable_path", "image_base", "language", "compiler")
+from .cache import FINGERPRINT_FIELDS, fingerprint_from_program
+
+#: The fields of /program a diff reports on — the fingerprint's own names.
+PROGRAM_FIELDS = tuple(name for name, _ in FINGERPRINT_FIELDS)
 
 
 def name_set(values: Iterable[str]) -> Set[str]:

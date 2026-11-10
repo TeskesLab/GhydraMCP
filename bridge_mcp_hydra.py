@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.36.2"
+BRIDGE_VERSION = "v3.36.3"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1173,12 +1173,37 @@ def _core_parse_goal(goal):
 # <<< end generated from ghydra/core/hints.py
 
 
-# >>> generated from ghydra/core/cache.py (31fe133efb5705df) — edit the core, then run scripts/gen_core.py
+# >>> generated from ghydra/core/cache.py (9e480acbded364a4) — edit the core, then run scripts/gen_core.py
 _CORE_CACHE_VERSION = 1
 
 _CORE_CACHE_IDENTITY_FIELDS = ('programId', 'path', 'executablePath', 'language', 'languageId', 'imageBase', 'creationDate')
 
 _CORE_CACHE_STATISTIC_FIELDS = ('functionCount', 'symbolCount', 'memoryBlockCount')
+
+_CORE_CACHE_FINGERPRINT_FIELDS = (('name', ('name',)), ('executable_path', ('path', 'executablePath')), ('image_base', ('imageBase',)), ('language', ('language', 'languageId')), ('compiler', ('compiler', 'compilerSpecId')))
+
+def _core_cache_fingerprint(program):
+    """The facts that tell one program from another, out of a `/program` payload.
+
+    Args:
+        program: The ``result`` of ``/program`` (any shape; a non-dict is "no
+            fingerprint", which the caller reports rather than guesses).
+
+    Returns:
+        dict: The fingerprint, with the names the callers read: ``name``,
+              ``executable_path``, ``image_base``, ``language`` and
+              ``compiler``. A fact the payload does not carry is absent.
+    """
+    if not isinstance(program, dict):
+        return {}
+    fingerprint: Dict[str, Any] = {}
+    for name, sources in _CORE_CACHE_FINGERPRINT_FIELDS:
+        for source in sources:
+            value = program.get(source)
+            if value is not None:
+                fingerprint[name] = value
+                break
+    return fingerprint
 
 def _core_cache_identity(program):
     """The identity of a program, from the payload of ``/program``.
@@ -1210,8 +1235,8 @@ def _core_cache_key(identity, kind, request):
 # <<< end generated from ghydra/core/cache.py
 
 
-# >>> generated from ghydra/core/diff.py (1c3f14292fe3b30e) — edit the core, then run scripts/gen_core.py
-_CORE_DIFF_PROGRAM_FIELDS = ('name', 'executable_path', 'image_base', 'language', 'compiler')
+# >>> generated from ghydra/core/diff.py (ef204fc8a80da5eb) — edit the core, then run scripts/gen_core.py
+_CORE_DIFF_PROGRAM_FIELDS = tuple((name for name, _ in _CORE_CACHE_FINGERPRINT_FIELDS))
 
 def _core_diff_name_set(values):
     """The non-empty names of a listing, as a set (order and repeats are noise)."""
@@ -11896,10 +11921,7 @@ def _runbook_load_steps(steps: str) -> list:
 def _runbook_program(port: int) -> dict:
     response = safe_get(port, "program")
     payload = response.get("result") if isinstance(response, dict) else None
-    if not isinstance(payload, dict):
-        return {}
-    return {key: payload.get(key) for key in _DIFF_PROGRAM_FIELDS
-            if payload.get(key) is not None}
+    return _core_cache_fingerprint(payload)
 
 
 def _runbook_call(port: int, step: dict) -> dict:
@@ -12048,12 +12070,9 @@ def _diff_page(port: int, endpoint: str, keys=("name", "value")) -> dict:
 
 
 def _diff_collect(port: int, include_strings: bool = True) -> dict:
-    program = {}
     response = safe_get(port, "program")
     payload = response.get("result") if isinstance(response, dict) else None
-    if isinstance(payload, dict):
-        program = {key: payload.get(key) for key in _DIFF_PROGRAM_FIELDS
-                   if payload.get(key) is not None}
+    program = _core_cache_fingerprint(payload)
     functions_page = _diff_page(port, "functions")
     functions = [{"address": str(item.get("address") or ""),
                   "name": item.get("name"), "size": item.get("size")}
@@ -12504,9 +12523,7 @@ def _mission_step_overview(mission: _Mission) -> None:
         mission.add_unknown("What is this binary?",
                             f"the program could not be read ({_mission_error_code(envelope)})")
         return
-    mission.program = {key: payload.get(key) for key in
-                       ("name", "executable_path", "image_base", "language")
-                       if payload.get(key) is not None}
+    mission.program = _core_cache_fingerprint(payload)
     mission.add_finding("data", "Program fingerprint",
                         json.dumps(mission.program, ensure_ascii=False),
                         confidence="high",

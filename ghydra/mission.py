@@ -34,6 +34,7 @@ from . import diff as diff_helper
 from . import runbook as runbook_helper
 from . import taint as taint_helper
 from .core import mission as core_mission
+from .core.cache import fingerprint_from_program
 from .core.hints import HINT_PATTERNS as CORE_HINT_PATTERNS
 from .core.hints import parse_goal as core_parse_goal
 
@@ -251,11 +252,10 @@ def _step_overview(caller, mission) -> None:
         mission.add_unknown("What is this binary?",
                             f"the program could not be read ({_error_code(envelope)})")
         return
-    # /program answers `path`, not `executable_path`: reading only the name it
-    # does not use left every dossier printing "(no path)".
-    mission.program = {key: payload.get(key) for key in
-                       ("name", "path", "executable_path", "image_base", "language")
-                       if payload.get(key) is not None}
+    # One fingerprint, read from the keys `/program` actually sends. It used to
+    # be built here with names no endpoint sends, and the dossier's own renderer
+    # read a different name again — so every dossier printed "(no path)".
+    mission.program = fingerprint_from_program(payload)
     mission.add_finding(
         "data", "Program fingerprint",
         json.dumps(mission.program, ensure_ascii=False),

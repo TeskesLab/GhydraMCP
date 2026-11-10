@@ -31,7 +31,7 @@ class FakeClient:
     def __init__(self, program=None, imports=None, strings=None,
                  taint_client=None, inspect=None, fail=None, drift=None):
         self.program = program if program is not None else {
-            "name": "sample.exe", "executable_path": "/tmp/sample.exe",
+            "name": "sample.exe", "path": "/tmp/sample.exe",
             "image_base": "0x400000", "language": "x86:LE:64:default"}
         self.imports = imports if imports is not None else [
             {"name": "socket"}, {"name": "recv"}, {"name": "system"}]
@@ -513,6 +513,28 @@ class BridgeToolTests(unittest.TestCase):
         failure = {"success": False,
                    "error": {"code": "MISSION_IO", "message": "no disk"}}
         self.assertIn("MISSION_IO", bridge.format_mission_start(failure))
+
+
+class FingerprintTests(unittest.TestCase):
+    """The dossier's program line, with the producer's payload.
+
+    The mission read `path` but stored it under `path` while its own renderer
+    read `executable_path` — so every dossier printed "(no path)".
+    """
+
+    def test_the_dossier_prints_the_path(self):
+        # The core module is addressed through the package the mission itself
+        # comes from, so the name cannot be mistyped here.
+        cache = __import__(M.__name__.rsplit(".", 1)[0] + ".core.cache",
+                           fromlist=["cache"])
+        fingerprint_from_program = cache.fingerprint_from_program
+        payload = {"name": "sample.exe", "path": "/tmp/sample.exe",
+                   "imageBase": "0x400000"}
+        current = M.Mission("what is this binary")
+        current.program = fingerprint_from_program(payload)
+        text = M.to_markdown(current)
+        self.assertIn("/tmp/sample.exe", text)
+        self.assertNotIn("no path", text)
 
 
 if __name__ == "__main__":

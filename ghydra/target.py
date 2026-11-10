@@ -227,13 +227,26 @@ class TargetError(Exception):
 
 
 # --------------------------------------------------------------------- reading
+def _reason(exc: BaseException) -> str:
+    """What the failure said, with the server's own code when it carried one.
+
+    The code the client raises with is the server's code, and it is the only
+    thing that tells "the instance is down" from "the server refused this one".
+    Discarding it left both looking the same.
+    """
+    code = str(getattr(exc, "code", "") or "")
+    text = str(exc)
+    return f"{text} [{code}]" if code else text
+
+
 def _program(ghidra_client) -> Dict[str, Any]:
     """The static side's program, from `GET /program`."""
     try:
         envelope = ghidra_client.get("program")
     except Exception as exc:  # noqa: BLE001 - the reason is the message
-        raise TargetError(f"the Ghidra instance did not answer: {exc}",
-                          ERROR_NO_PROGRAM)
+        raise TargetError(
+            f"the Ghidra instance did not answer: {_reason(exc)}",
+            ERROR_NO_PROGRAM)
     result = (envelope or {}).get("result")
     if not isinstance(result, dict) or not result:
         raise TargetError("the Ghidra instance reports no open program",
@@ -268,8 +281,9 @@ def _function(ghidra_client, target: str) -> Dict[str, Any]:
         code = str(getattr(exc, "code", "") or "")
         if "NOT_FOUND" in code:
             raise TargetError(f"no function matches {target!r}", ERROR_NOT_FOUND)
-        raise TargetError(f"the Ghidra instance did not answer: {exc}",
-                          ERROR_NO_PROGRAM)
+        raise TargetError(
+            f"the Ghidra instance did not answer: {_reason(exc)}",
+            ERROR_NO_PROGRAM)
     result = (envelope or {}).get("result")
     if not isinstance(result, dict) or not result:
         raise TargetError(f"no function matches {target!r}", ERROR_NOT_FOUND)
@@ -372,7 +386,8 @@ def decompile(ghidra_client, target: str, style: str = "normalize") -> Dict[str,
         if "NOT_FOUND" in code:
             raise TargetError(f"the function at {address} cannot be decompiled: {exc}",
                               ERROR_NOT_FOUND)
-        raise TargetError(f"the decompiler did not answer: {exc}", ERROR_NO_PROGRAM)
+        raise TargetError(f"the decompiler did not answer: {_reason(exc)}",
+                          ERROR_NO_PROGRAM)
     result = (envelope or {}).get("result") or {}
     code = result.get("decompilation")
     if not code:

@@ -1091,6 +1091,9 @@ class MissionCoreTests(unittest.TestCase):
         cli = mission.Mission.__new__(mission.Mission)
         cli.goal = "goal"
         cli.id = "m1"
+        # The fingerprint's own names, which are not the payload's names:
+        # `/program` sends `path` and `imageBase`, the fingerprint carries
+        # `executable_path` and `image_base`.
         cli.program = {"name": "a.exe", "executable_path": "/a"}
         cli.hints = {"source": "recv"}
         cli.failed = None
@@ -1169,6 +1172,58 @@ class I1InventoryTests(unittest.TestCase):
         positions = [text.index(f"# >>> generated from {module}")
                      for module in gen_core.CORE_MODULES]
         self.assertEqual(sorted(positions), positions)
+
+
+class FingerprintTests(unittest.TestCase):
+    """One program fingerprint, read from the keys the API actually sends."""
+
+    #: The payload `ProgramResource.getCurrentProgram()` sends.
+    PAYLOAD = {"name": "sample.exe", "path": "C:/bin/sample.exe",
+               "imageBase": "140000000", "language": "x86:LE:64:default",
+               "compiler": "windows"}
+
+    def test_the_path_and_the_image_base_survive(self):
+        from ghydra.core.cache import fingerprint_from_program
+        fingerprint = fingerprint_from_program(self.PAYLOAD)
+        self.assertEqual("C:/bin/sample.exe", fingerprint["executable_path"])
+        self.assertEqual("140000000", fingerprint["image_base"])
+
+    def test_the_names_the_fingerprint_carries_are_the_names_the_callers_read(self):
+        from ghydra.core.cache import fingerprint_from_program
+        fingerprint = fingerprint_from_program(self.PAYLOAD)
+        self.assertEqual(sorted(diff_core.PROGRAM_FIELDS),
+                         sorted(fingerprint))
+
+    def test_a_payload_that_is_not_a_dict_is_no_fingerprint(self):
+        from ghydra.core.cache import fingerprint_from_program
+        self.assertEqual({}, fingerprint_from_program(None))
+        self.assertEqual({}, fingerprint_from_program("not a payload"))
+
+    def test_a_fact_the_payload_does_not_carry_is_absent(self):
+        from ghydra.core.cache import fingerprint_from_program
+        fingerprint = fingerprint_from_program({"name": "sample.exe"})
+        self.assertEqual({"name": "sample.exe"}, fingerprint)
+
+    def test_the_bridge_and_the_cli_build_the_same_fingerprint(self):
+        from ghydra.core.cache import fingerprint_from_program
+        self.assertEqual(fingerprint_from_program(self.PAYLOAD),
+                         bridge._core_cache_fingerprint(self.PAYLOAD))
+
+    def test_two_different_binaries_of_the_same_name_are_not_the_same_program(self):
+        """The defect: the fingerprint held only the name, so this was equal."""
+        from ghydra.core.cache import fingerprint_from_program
+        left = fingerprint_from_program(
+            dict(self.PAYLOAD, path="C:/bin/cmd.exe"))
+        right = fingerprint_from_program(
+            dict(self.PAYLOAD, path="C:/other/cmd.exe"))
+        self.assertNotEqual(left, right)
+
+    def test_a_different_image_base_is_not_the_same_program(self):
+        from ghydra.core.cache import fingerprint_from_program
+        left = fingerprint_from_program(self.PAYLOAD)
+        right = fingerprint_from_program(
+            dict(self.PAYLOAD, imageBase="180000000"))
+        self.assertNotEqual(left, right)
 
 
 if __name__ == "__main__":

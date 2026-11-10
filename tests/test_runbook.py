@@ -37,8 +37,11 @@ class FakeClient:
         self.imports = imports if imports is not None else ["CreateFileW", "ReadFile"]
         self.strings = strings if strings is not None else ["hello", "/api/v1"]
         self.program = program if program is not None else {
-            "name": "sample.exe", "executable_path": "/tmp/sample.exe",
-            "image_base": "0x400000"}
+            # The shape `ProgramResource.getCurrentProgram()` sends: `path`
+            # and `imageBase`. A fixture with `executable_path` and
+            # `image_base` was a shape no endpoint ever sends.
+            "name": "sample.exe", "path": "/tmp/sample.exe",
+            "imageBase": "0x400000"}
         self.flip = flip
         self.calls = []
 
@@ -198,8 +201,8 @@ class DiffTests(unittest.TestCase):
                        {"address": "0x401200", "name": "added", "size": 16}],
             imports=["CreateFileW", "WinExec"],
             strings=["hello", "new string"],
-            program={"name": "sample.exe", "executable_path": "/tmp/sample.exe",
-                     "image_base": "0x500000"}))
+            program={"name": "sample.exe", "path": "/tmp/sample.exe",
+                     "imageBase": "0x500000"}))
         return a, b
 
     def test_a_rename_is_not_an_add_plus_a_remove(self):
@@ -607,6 +610,61 @@ class DiffCompletenessTests(unittest.TestCase):
         report = diff_helper.diff_snapshots(a, a)
         self.assertTrue(report["complete"])
         self.assertEqual([], report["incomplete_sections"])
+
+
+class FingerprintDiffTests(unittest.TestCase):
+    """The diff's fingerprint, with the producer's payload.
+
+    The fingerprint is what tells "the same program" from "another one with the
+    same name", and it used to carry only the name — so two different binaries
+    compared as the same program.
+    """
+
+    def _snapshot(self, path, image_base="0x400000"):
+        """A snapshot collected from a client that answers the producer's shape."""
+        class Client:
+            def get(self, endpoint, params=None):
+                if str(endpoint).lstrip("/") == "program":
+                    return {"success": True,
+                            "result": {"name": "sample.exe", "path": path,
+                                       "imageBase": image_base,
+                                       "language": "x86:LE:64:default"}}
+                return {"success": True, "result": []}
+
+        return diff_helper.collect_snapshot(Client())
+
+    def test_the_fingerprint_carries_the_path(self):
+        snapshot = self._snapshot("/tmp/sample.exe")
+        self.assertEqual("/tmp/sample.exe", snapshot["program"]["executable_path"])
+
+    def test_the_fingerprint_carries_the_image_base(self):
+        snapshot = self._snapshot("/tmp/sample.exe")
+        self.assertEqual("0x400000", snapshot["program"]["image_base"])
+
+    def test_two_binaries_of_the_same_name_are_a_change(self):
+        left = self._snapshot("/tmp/sample.exe")
+        right = self._snapshot("/other/sample.exe")
+        report = diff_helper.diff_snapshots(left, right)
+        self.assertTrue(report["program_changed"],
+                        "two different binaries compared as the same program")
+
+    def test_the_same_binary_is_not_a_change(self):
+        left = self._snapshot("/tmp/sample.exe")
+        right = self._snapshot("/tmp/sample.exe")
+        self.assertFalse(diff_helper.diff_snapshots(left, right)["program_changed"])
+
+    def test_the_runbook_header_carries_the_path(self):
+        """The runbook's own docstring: the path is what tells the programs apart."""
+        class Client:
+            def get(self, endpoint, params=None):
+                return {"success": True,
+                        "result": {"name": "sample.exe",
+                                   "path": "/tmp/sample.exe",
+                                   "imageBase": "0x400000"}}
+
+        fingerprint = rb.program_fingerprint(Client())
+        self.assertEqual("/tmp/sample.exe", fingerprint["executable_path"])
+        self.assertEqual("0x400000", fingerprint["image_base"])
 
 
 if __name__ == "__main__":

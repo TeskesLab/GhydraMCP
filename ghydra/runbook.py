@@ -24,6 +24,7 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 
+from .core.cache import fingerprint_from_program
 from .core.runbook import BadEntry, BadSteps, validate_steps
 
 RUNBOOK_VERSION = 1
@@ -110,11 +111,7 @@ def program_fingerprint(client) -> Dict[str, Any]:
     except Exception:
         return {}
     payload = response.get("result") if isinstance(response, dict) else None
-    if not isinstance(payload, dict):
-        return {}
-    return {key: payload.get(key) for key in
-            ("name", "executable_path", "image_base", "language", "compiler")
-            if payload.get(key) is not None}
+    return fingerprint_from_program(payload)
 
 
 def _call(client, step: Dict[str, Any]) -> Any:

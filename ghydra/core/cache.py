@@ -33,6 +33,43 @@ IDENTITY_FIELDS = ("programId", "path", "executablePath", "language",
 #: The counters that move when the program is edited.
 STATISTIC_FIELDS = ("functionCount", "symbolCount", "memoryBlockCount")
 
+#: The facts that tell one program from another, and the names the API sends
+#: them under. `ProgramResource.getCurrentProgram()` answers `path` and
+#: `imageBase`; a fingerprint that asked for `executable_path` and `image_base`
+#: got neither, and two different binaries of the same name compared equal.
+#: The output names are the ones every surface already reads.
+FINGERPRINT_FIELDS = (
+    ("name", ("name",)),
+    ("executable_path", ("path", "executablePath")),
+    ("image_base", ("imageBase",)),
+    ("language", ("language", "languageId")),
+    ("compiler", ("compiler", "compilerSpecId")),
+)
+
+
+def fingerprint_from_program(program: Any) -> Dict[str, Any]:
+    """The facts that tell one program from another, out of a `/program` payload.
+
+    Args:
+        program: The ``result`` of ``/program`` (any shape; a non-dict is "no
+            fingerprint", which the caller reports rather than guesses).
+
+    Returns:
+        dict: The fingerprint, with the names the callers read: ``name``,
+              ``executable_path``, ``image_base``, ``language`` and
+              ``compiler``. A fact the payload does not carry is absent.
+    """
+    if not isinstance(program, dict):
+        return {}
+    fingerprint: Dict[str, Any] = {}
+    for name, sources in FINGERPRINT_FIELDS:
+        for source in sources:
+            value = program.get(source)
+            if value is not None:
+                fingerprint[name] = value
+                break
+    return fingerprint
+
 
 def identity_from_program(program: Any) -> Dict[str, Any]:
     """The identity of a program, from the payload of ``/program``.
