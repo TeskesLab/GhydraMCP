@@ -6,7 +6,9 @@
     "shape": "namespace_verb: snake_case, lower case, the first token names the domain",
     "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)+$",
     "why": "The prefix is load-bearing, not decoration. Two tools that read memory exist and they mean different things: `memory_read` reads the static image Ghidra has open, and a live-process read must not be reachable by the same name. The namespaces also keep an agent's tool-selection bounded, which is why both servers group their tools.",
-    "reserved_parameters": ["arguments"],
+    "reserved_parameters": [
+      "arguments"
+    ],
     "reserved_parameters_why": "`arguments` is the name of the container the MCP protocol uses for a tool's parameters; a client that re-encodes the container loses the value, and the tool then runs with its defaults instead of failing. It happened here (x64dbg_call), and a guard now refuses the name."
   },
   "ghydra_side": {
@@ -39,12 +41,31 @@
     },
     "adoption": "Rename in the registry, and keep the old names as aliases for one release: an agent configuration that names SetBreakpoint must not break the day the rule lands.",
     "mapping_examples": [
-      {"from": "SetBreakpoint", "to": "x64dbg_set_breakpoint"},
-      {"from": "ReadMemory", "to": "x64dbg_read_memory", "collision": "memory_read (static) must stay distinct"},
-      {"from": "GetDebugState", "to": "x64dbg_get_debug_state"},
-      {"from": "ListModules", "to": "x64dbg_list_modules"},
-      {"from": "ExecuteDebuggerCommand", "to": "x64dbg_execute_debugger_command"},
-      {"from": "SaveDatabase", "to": "x64dbg_save_database"}
+      {
+        "from": "SetBreakpoint",
+        "to": "x64dbg_set_breakpoint"
+      },
+      {
+        "from": "ReadMemory",
+        "to": "x64dbg_read_memory",
+        "collision": "memory_read (static) must stay distinct"
+      },
+      {
+        "from": "GetDebugState",
+        "to": "x64dbg_get_debug_state"
+      },
+      {
+        "from": "ListModules",
+        "to": "x64dbg_list_modules"
+      },
+      {
+        "from": "ExecuteDebuggerCommand",
+        "to": "x64dbg_execute_debugger_command"
+      },
+      {
+        "from": "SaveDatabase",
+        "to": "x64dbg_save_database"
+      }
     ],
     "mapping_rule": "Split the PascalCase into words, lower-case them, join with underscores, prefix `x64dbg_`."
   },
@@ -64,5 +85,22 @@
       "dynamic": "x64dbg_list_modules",
       "why": "A program is a file; a module is a loaded image of one. The TargetDescriptor is where the two are correlated."
     }
-  ]
+  ],
+  "gateway": {
+    "description": "The gateway server (`ghydra-gateway`) exposes the cross-tool workflow as tools; it is a third server, and it follows the same naming rule.",
+    "tools": [
+      "target_open",
+      "target_locate",
+      "target_breakpoint",
+      "target_run_to",
+      "target_decompile"
+    ],
+    "steps": {
+      "analyze_open": "target_open",
+      "function_locate": "target_locate",
+      "breakpoint_set": "target_breakpoint",
+      "run_to": "target_run_to",
+      "decompile": "target_decompile"
+    }
+  }
 }

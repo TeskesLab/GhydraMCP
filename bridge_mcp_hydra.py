@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.33.0"
+BRIDGE_VERSION = "v3.34.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))

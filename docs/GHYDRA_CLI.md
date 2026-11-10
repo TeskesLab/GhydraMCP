@@ -11,6 +11,7 @@ A command-line interface for GhydraMCP that provides access to Ghidra's reverse 
 - [Global Options](#global-options)
 - [Agent / programmatic use](#agent-programmatic-use)
 - [The cross-tool target workflow](#the-cross-tool-target-workflow)
+- [The gateway: the workflow as MCP tools](#the-gateway-the-workflow-as-mcp-tools)
 - [The combined MCP client configuration](#the-combined-mcp-client-configuration)
 - [Configuration](#configuration)
 - [Implemented Command Groups](#implemented-command-groups)
@@ -159,6 +160,32 @@ it), `TARGET_NOT_FOUND` (no such function — try another name), `TARGET_NO_CODE
 decompiler returned nothing), `TARGET_NOT_LOADED` (the debugger does not have the
 binary open), `TARGET_NOT_SAME_BINARY` (a copy or a rebuild — the addresses of one do
 not describe the other).
+
+## The gateway: the workflow as MCP tools
+
+`ghydra-gateway` is a **separate MCP server** (its own console script, not a
+subcommand — a server on stdio must own stdout, and the CLI's root command prints).
+It exposes the five-step chain as tools, so an agent can drive it without a shell:
+
+| Tool | The plan's step | What it does |
+| --- | --- | --- |
+| `target_open` | `analyze_open` | both sides, one TargetDescriptor, identity verdict |
+| `target_locate` | `function_locate` | the static address of a function |
+| `target_breakpoint` | `breakpoint_set` | translate and set it, or refuse |
+| `target_run_to` | `run_to` | resume to it, report the registers |
+| `target_decompile` | `decompile` | the recovered C, addressed statically |
+
+The names follow the contract (`namespace_verb`, snake_case); the plan's workflow
+names are the *steps*, mapped in `ghydra/gateway.GATEWAY_STEPS`. Every tool answers
+with a structured result — `success`, plus `code` and `reason` on a failure — because
+an MCP tool that raises turns the contract's code into unstructured noise. The
+refusal is the same one the CLI has: `target_breakpoint` and `target_run_to` answer
+`TARGET_NOT_SAME_BINARY` and touch nothing when the two sides are different files.
+
+```bash
+ghydra-gateway                    # serve on stdio, for an MCP client
+ghydra mcp-config --gateway       # one-entry client configuration for it
+```
 
 ## The combined MCP client configuration
 

@@ -1001,6 +1001,31 @@ def run_target_tests():
         return False
 
 
+def run_gateway_tests():
+    """Run the MCP gateway suite — fakes, no services, no protocol frames."""
+    print_header("Running Gateway Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_gateway.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running gateway tests: {e}")
+        return False
+
+
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
@@ -1009,6 +1034,7 @@ NO_GHIDRA_SUITES = (
     "--contract",
     "--mcp-config",
     "--target",
+    "--gateway",
 )
 
 SUITES = {
@@ -1048,6 +1074,7 @@ SUITES = {
     "--contract": run_contract_tests,
     "--mcp-config": run_mcp_config_tests,
     "--target": run_target_tests,
+    "--gateway": run_gateway_tests,
 }
 
 USAGE = (

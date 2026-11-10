@@ -130,6 +130,18 @@ class DocumentTests(unittest.TestCase):
         joined = "\n".join(mcpconfig.summary(document, include_secrets=True))
         self.assertIn(TOKEN, joined)
 
+    def test_the_gateway_form_is_one_entry(self):
+        """Phase 3's form: one server, five tools, the workflow in one call."""
+        document = mcpconfig.build(gateway=True)
+        self.assertEqual(["ghydra-gateway"], list(document["mcpServers"]))
+        entry = document["mcpServers"]["ghydra-gateway"]
+        self.assertEqual(mcpconfig.GATEWAY_SCRIPT, entry["command"])
+        self.assertNotIn("headers", entry, "the gateway resolves the token itself")
+
+    def test_the_gateway_entry_does_not_carry_the_token(self):
+        document = mcpconfig.build(gateway=True, settings={"token": TOKEN})
+        self.assertNotIn(TOKEN, json.dumps(document))
+
     def test_masking_does_not_touch_the_original(self):
         document = mcpconfig.build(settings={"token": TOKEN})
         masked = mcpconfig.mask(document)

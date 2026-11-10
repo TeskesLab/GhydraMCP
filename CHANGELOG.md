@@ -7,6 +7,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The gateway: the cross-tool workflow as MCP tools** (`ghydra-gateway`): a
+  separate MCP server on stdio — its own console script, not a subcommand, because a
+  server on stdio must own stdout and the CLI's root command prints — exposing the
+  five steps of the unification plan as tools: `target_open`, `target_locate`,
+  `target_breakpoint`, `target_run_to`, `target_decompile`. The names follow the
+  contract's vocabulary; the plan's workflow names are the steps, mapped in
+  `ghydra/gateway.GATEWAY_STEPS`.
+  Every tool answers **structurally** (`success`, plus `code` and `reason` on a
+  failure): an MCP tool that raises turns a contract code into unstructured noise.
+  The refusals are the same ones the CLI pins — `target_breakpoint` and
+  `target_run_to` answer `TARGET_NOT_SAME_BINARY` and touch nothing over two
+  different files — and `target_open` **reports** the mismatch instead of refusing,
+  because `analyze_open` answering "these are a copy and a rebuild" is a successful
+  analysis of a bad situation. Two of the fourteen tests exist because of that
+  distinction, which the first version got wrong.
+  `ghydra mcp-config --gateway` emits the one-entry client configuration for it.
+  The plan put the gateway in a third repository; it turned out small enough to live
+  next to the code it calls, and the contract's rules stay data that can move.
 - **The cross-tool chain is complete** (`ghydra target run-to` and `… decompile`):
   with `describe`, `locate` and `breakpoint`, the five steps of the unification
   plan's Phase 3 exist as commands — `analyze_open`, `function_locate`,

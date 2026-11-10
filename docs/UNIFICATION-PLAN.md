@@ -359,6 +359,11 @@ descriptor built from two **different** files raises `TARGET_NOT_SAME_BINARY` an
 that the fake debugger recorded **no `SetBreakpoint` call at all** — a refusal that
 still writes to the debugger is not a refusal.
 
-What is still missing for a real gateway is the process: a single MCP server that
-fronts both, which the plan puts in a third repository. The commands are the same
-workflow without that server, and they are what an agent would call through it.
+The gateway process now exists too, **in this repository**: `ghydra-gateway` is an
+MCP server on stdio whose five tools are the five steps (`target_open`,
+`target_locate`, `target_breakpoint`, `target_run_to`, `target_decompile`), each a
+thin wrapper over `ghydra/target.py` — so the refusals the tests pin are the ones the
+agent meets. `ghydra mcp-config --gateway` emits the one-entry client configuration
+for it. The plan suggested a third repository for the contract and the gateway; the
+contract's rules are data and can move there, and the gateway turned out small enough
+to live next to the code it calls.

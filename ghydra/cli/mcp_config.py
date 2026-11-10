@@ -28,10 +28,13 @@ from ..utils import rich_echo
               help="Write the configuration here instead of printing it")
 @click.option('--no-x64dbg', is_flag=True, default=False,
               help="Leave the debugger out, even when its token is known")
+@click.option('--gateway', is_flag=True, default=False,
+              help="Register the single gateway server (both sides, one entry) "
+                   "instead of the two servers separately")
 @click.option('--show-secrets', is_flag=True, default=False,
               help="Print the debugger token instead of masking it")
 @click.pass_context
-def mcp_config(ctx, groups, host, output, no_x64dbg, show_secrets):
+def mcp_config(ctx, groups, host, output, no_x64dbg, gateway, show_secrets):
     """Build the combined MCP client configuration.
 
     One file that registers both servers: the Ghidra bridge over stdio, and the
@@ -54,7 +57,8 @@ def mcp_config(ctx, groups, host, output, no_x64dbg, show_secrets):
 
     try:
         document = mcpconfig.build(groups=selected, host=host,
-                                   include_debugger=not no_x64dbg)
+                                   include_debugger=not no_x64dbg,
+                                   gateway=gateway)
     except Exception as exc:  # noqa: BLE001 - the reason is the message
         rich_echo(f"error: {exc}", err=True)
         ctx.exit(1)

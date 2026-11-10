@@ -113,9 +113,30 @@ def debugger_entry(settings: Optional[dict] = None) -> Tuple[Optional[Dict[str, 
             "headers": {"Authorization": f"Bearer {token}"}}, None
 
 
+#: The console script the gateway is served by. It is its own entry point on
+#: purpose: an MCP server on stdio must own stdout, and the CLI's root command
+#: discovers instances and prints.
+GATEWAY_SCRIPT = "ghydra-gateway"
+
+
+def gateway_entry(groups: Optional[List[str]] = None,
+                  host: Optional[str] = None) -> Dict[str, Any]:
+    """The single entry: the gateway server, which fronts both plugins."""
+    environment: Dict[str, str] = {}
+    if groups:
+        environment["GHYDRA_TOOL_GROUPS"] = ",".join(groups)
+    if host:
+        environment["GHIDRA_HYDRA_HOST"] = str(host)
+    entry: Dict[str, Any] = {"command": GATEWAY_SCRIPT, "args": []}
+    if environment:
+        entry["env"] = environment
+    return entry
+
+
 def build(groups: Optional[List[str]] = None,
           settings: Optional[dict] = None,
           include_debugger: bool = True,
+          gateway: bool = False,
           host: Optional[str] = None,
           state_dir: Optional[str] = None) -> Dict[str, Any]:
     """The combined configuration, in the shape clients already understand.
@@ -123,6 +144,11 @@ def build(groups: Optional[List[str]] = None,
     `mcpServers` is the de-facto standard (Claude Desktop, Cursor, Cline, 5ire);
     the two entries use the transports each server actually speaks.
     """
+    if gateway:
+        # One server, both sides: the tools are `target_*`, and the workflows that
+        # need both plugins are a single call.
+        return {"mcpServers": {"ghydra-gateway": gateway_entry(
+            groups=groups, host=host)}}
     document: Dict[str, Any] = {"mcpServers": {"ghydra": bridge_entry(
         groups=groups, host=host, state_dir=state_dir)}}
     notes: List[str] = []
