@@ -17,6 +17,7 @@ What is proven:
 No Ghidra, no debugger, no network: the factory hands the tools fakes.
 """
 
+import json
 import os
 import re
 import sys
@@ -198,6 +199,41 @@ class ResultShapeTests(unittest.TestCase):
             with self.subTest(tool=name):
                 answer = self._answer(call)
                 self.assertIn("success", answer)
+
+class ProtocolTests(unittest.IsolatedAsyncioTestCase):
+    """The server over stdio: initialize, tools/list, and a call that fails cleanly.
+
+    The in-process tests prove the tools; this proves the *server* — framing, the
+    schemas the client sees, and a failure that is a code inside a successful
+    protocol answer rather than a protocol error.
+    """
+
+    async def test_the_gateway_speaks_mcp(self):
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        parameters = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "ghydra.gateway"],
+            env={**os.environ, "PYTHONPATH": root},
+        )
+        async with stdio_client(parameters) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                listed = await session.list_tools()
+                names = sorted(tool.name for tool in listed.tools)
+                self.assertEqual(
+                    ["target_breakpoint", "target_decompile", "target_locate",
+                     "target_open", "target_run_to"], names)
+
+                answer = await session.call_tool("target_locate", {"name": "main"})
+                text = answer.content[0].text if answer.content else ""
+                document = json.loads(text)
+                self.assertFalse(document["success"], document)
+                self.assertTrue(str(document["code"]).startswith("TARGET_"),
+                                document)
 
 
 if __name__ == "__main__":
