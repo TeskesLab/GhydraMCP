@@ -3,7 +3,7 @@
   "generated_by": "scripts/gen_x64dbg_vocabulary.py",
   "source": {
     "repository": "danalec/x64dbg-mcp-server (fork of duty1g/x64dbg-mcp-server)",
-    "commit": "9d7a93e",
+    "commit": "81d4936",
     "file": "src/mcp/tools.zig",
     "protocol_version": "2024-11-05"
   },
@@ -46,7 +46,7 @@
       "proposed": "x64dbg_list_commands_by_category",
       "read_only": true,
       "debug_only": false,
-      "description": "Lists the available MCP tools, optionally filtered to a single category."
+      "description": "Lists every MCP tool with its description. There is no category filter: the tools are a flat list, and the debugger's own commands are a separate namespace. A n"
     },
     {
       "current": "SearchForStrings",

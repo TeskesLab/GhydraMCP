@@ -7,6 +7,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The x64dbg plugin: four Phase-1 defects fixed and verified** on its own branch
+  (`fix/thread-safety-and-honest-frames`, `81d4936`, pushed to the fork), with
+  `zig build` and `zig build test` (50 unit tests) green on Zig 0.14.0:
+  the **data race** (`.single_threaded = true` while threads came from Win32
+  `CreateThread`; five structures written by callbacks and read by HTTP threads —
+  now a mutex around the rings and the SSE table, an atomic `server_running`, and no
+  slice into a ring escaping the lock), the **silent JSON truncation** (`JsonWriter`
+  dropped bytes on overflow, so an oversized answer was malformed JSON that a client
+  could not tell from a complete one — the writer now records it and the response
+  paths answer a JSON-RPC error), the **CORS hole** (`Access-Control-Allow-Origin: *`
+  plus a preflight answered before the token check), and a **tool that lied**
+  (`ListCommandsByCategory` declared a category, ignored it, and listed the MCP
+  tools). Docs corrected against the code: 80 tools, loopback bind, Zig 0.14.0, the
+  two defaults.
+- **The rename table no longer reports stale on an unrelated commit.** It compared
+  the whole generated document, whose `source.commit` moves with every commit in the
+  plugin repository — the four fixes above flagged 80 unchanged names as stale. The
+  check now compares the **mapping** and reports a moved provenance as a note, while
+  a real change (a tool added, renamed, or a flag flipped) still fails; the four
+  states are pinned by tests.
 - **The x64dbg rename table, generated from its own registry**
   ([`contract/x64dbg-vocabulary.json`](contract/x64dbg-vocabulary.json)):
   `contract/vocabulary.json` says the rule and that the x64dbg side does not follow

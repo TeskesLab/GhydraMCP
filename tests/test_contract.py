@@ -261,6 +261,34 @@ class X64dbgVocabularyTests(unittest.TestCase):
         self.assertIn("proposal", self.document["status"])
         self.assertIn("commit", self.document["source"])
 
+    def test_a_moved_provenance_is_not_a_stale_table(self):
+        """Any commit in the plugin repo moved the recorded commit, not the mapping.
+
+        The first version compared the whole document, so the four unrelated fixes
+        made the table report stale — a false alarm that teaches people to ignore
+        the guard.
+        """
+        import sys as _sys
+        _sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        import gen_x64dbg_vocabulary as generator
+
+        document = json.loads(json.dumps(self.document))
+        moved = json.loads(json.dumps(self.document))
+        moved["source"]["commit"] = "deadbee"
+        self.assertEqual(0, generator.check_rendered(
+            json.dumps(document), json.dumps(moved)))
+
+    def test_a_real_mapping_change_is_still_stale(self):
+        import sys as _sys
+        _sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        import gen_x64dbg_vocabulary as generator
+
+        document = json.loads(json.dumps(self.document))
+        changed = json.loads(json.dumps(self.document))
+        changed["tools"][0]["proposed"] = "x64dbg_renamed_away"
+        self.assertEqual(1, generator.check_rendered(
+            json.dumps(document), json.dumps(changed)))
+
     def test_the_generator_accepts_the_committed_table(self):
         import subprocess
         result = subprocess.run(

@@ -171,6 +171,50 @@ def check(document_path: str) -> int:
     return 1 if problems else 0
 
 
+def mapping_only(document: dict) -> dict:
+    """The document without its provenance: what a staleness check may compare.
+
+    The commit and the protocol version say where the table came from; they are
+    worth recording and worth reporting, but they are not the mapping. Comparing
+    them made any unrelated commit in the plugin repository look like a stale table.
+    """
+    comparable = json.loads(json.dumps(document))
+    comparable.pop("source", None)
+    comparable.pop("generated_by", None)
+    return comparable
+
+
+def differs_only_in_provenance(current: str, rendered: str) -> bool:
+    """True when the mappings agree and only the recorded source moved."""
+    try:
+        a = json.loads(current)
+        b = json.loads(rendered)
+    except ValueError:
+        return False
+    if mapping_only(a) != mapping_only(b):
+        return False
+    return a.get("source") != b.get("source")
+
+
+def check_rendered(current: str, rendered: str) -> int:
+    """Compare a committed table against a fresh generation.
+
+    0 when the mapping is the same — with a note when only the provenance moved.
+    """
+    if current == rendered:
+        print("ok: the x64dbg vocabulary table is current")
+        return 0
+    if differs_only_in_provenance(current, rendered):
+        old = (json.loads(current).get("source") or {}).get("commit")
+        new = (json.loads(rendered).get("source") or {}).get("commit")
+        print(f"ok: the mapping is unchanged; the plugin registry moved from {old} "
+              f"to {new} (run without --check to record it)")
+        return 0
+    print("stale: contract/x64dbg-vocabulary.json does not match the plugin "
+          "registry. Run: python scripts/gen_x64dbg_vocabulary.py", file=sys.stderr)
+    return 1
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true",
@@ -198,19 +242,16 @@ def main(argv=None) -> int:
         with io.open(DOCUMENT, encoding="utf-8") as handle:
             current = handle.read()
     if arguments.check:
-        if rendered != current:
-            print("stale: contract/x64dbg-vocabulary.json does not match the plugin "
-                  "registry. Run: python scripts/gen_x64dbg_vocabulary.py",
-                  file=sys.stderr)
-            return 1
-        print("ok: the x64dbg vocabulary table is current")
-        return 0
+        return check_rendered(current, rendered)
     if rendered == current:
         print("ok: nothing to update")
         return 0
+    provenance_only = differs_only_in_provenance(current, rendered)
     with io.open(DOCUMENT, "w", encoding="utf-8", newline="") as handle:
         handle.write(rendered)
-    print(f"wrote {DOCUMENT}")
+    print(f"wrote {DOCUMENT}"
+          + (" (the mapping is unchanged; the provenance was refreshed)"
+             if provenance_only else ""))
     return 0
 
 

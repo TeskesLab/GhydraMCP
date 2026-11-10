@@ -374,3 +374,30 @@ agent meets. `ghydra mcp-config --gateway` emits the one-entry client configurat
 for it. The plan suggested a third repository for the contract and the gateway; the
 contract's rules are data and can move there, and the gateway turned out small enough
 to live next to the code it calls.
+
+### The x64dbg side: four defects fixed (2026-11-09)
+
+The plugin repository builds again here (Zig 0.14.0, `zig build` and
+`zig build test` green), and the four defects below are fixed on
+`fix/thread-safety-and-honest-frames` (`81d4936`, pushed to
+`danalec/x64dbg-mcp-server`):
+
+| # | Defect | What was wrong | Fix |
+| --- | --- | --- | --- |
+| 1 | data race | `.single_threaded = true` while threads came from Win32 `CreateThread`; five structures written by callbacks and read by HTTP threads | `single_threaded` false, one mutex for the rings/SSE table, `server_running` atomic, and **no slice into a ring escapes the lock** (`getEvent` copies) |
+| 3 | silent JSON truncation | `JsonWriter.raw` dropped bytes on overflow, so a too-large answer became malformed JSON | the writer records the overflow; the response paths answer a JSON-RPC internal error instead of the truncated frame |
+| 5 | CORS | `Access-Control-Allow-Origin: *`, and `OPTIONS` answered **before** the token check | no wildcard; the preflight is answered like every other request |
+| 7 | a lying tool | `ListCommandsByCategory` declared a category, ignored it, listed the MCP tools | a non-empty category is refused with the reason; the description says what it lists |
+
+Docs corrected against the code (#8): 80 tools (not 84), the default bind is
+`127.0.0.1` (not `0.0.0.0`), Zig 0.14.0 (not 0.16-dev), Disassemble default 10,
+WaitForPause default 30000.
+
+**Still open:** #9 (the two plugin commands share x64dbg's global command namespace)
+— a rename there breaks users' scripts, so the decision is an alias plus a
+deprecation note, not a silent break. And #4/#6 were already addressed by the
+plugin's own fixed port walk and the bridge's retry rules.
+
+The rename table's staleness rule was refined because of this work: it now compares
+the **mapping**, not the recorded commit — otherwise these four unrelated commits
+made the table report stale.
