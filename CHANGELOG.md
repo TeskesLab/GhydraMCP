@@ -1252,3 +1252,28 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 [1.2]: https://github.com/teal-bauer/GhydraMCP/compare/v1.1...v1.2
 [1.1]: https://github.com/teal-bauer/GhydraMCP/compare/1.0...v1.1
 [1.0]: https://github.com/teal-bauer/GhydraMCP/releases/tag/1.0
+
+- **The doctor had no test at all.** `ghydra doctor` is the command a user runs
+  when something does not work, and nothing tested it. It also named a locked
+  project **twice** — Ghidra leaves a `<name>.lock` and a `<name>.lock~`, and the
+  two were counted as two projects. The project is named once now, the verb
+  follows the count, and a new suite pins the checks a user would notice being
+  wrong: a missing installation, a JDK that is too old, an extension built for
+  another Ghidra version, a port taken by something else, and the promise that
+  every finding carries the command that fixes it.
+- **The suite list in `docs/TESTING.md` drifted.** The runner's own usage line
+  had fallen behind — twelve suites worked and were not in it, and it is now
+  generated from the suites so it cannot. The document's list carries a
+  description per flag, so it cannot be generated; a **guard** catches the drift
+  instead: every suite the runner has must be named in the document.
+- **The module entry ran the command twice.** `ghydra/cli/__init__.py` imports
+  `main`, so `python -m ghydra.cli.main` executed it once as `ghydra.cli.main`
+  and once as `__main__`, and Python warned about it on stderr. The package
+  imports the command lazily now, and `python -m ghydra.cli` is a clean entry.
+- **The two x64dbg plugin branches had never been merged.** `fix/mcp-server-defects`
+  (ten commits: the namespaced commands, the free-port walk, the closed CORS, the
+  growable frames) and `fix/thread-safety-and-honest-frames` (the state lock, the
+  honest JSON frames, the tool that lied) had diverged and neither contained the
+  other. They are merged in `fix/all-defects`, with the namespaced commands and
+  the lock and the overflow guard all in force — 56 tests green under Zig 0.14.0
+  and 0.17.0. The rename table is generated from the merged branch.
