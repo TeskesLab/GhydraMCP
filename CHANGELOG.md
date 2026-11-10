@@ -7,6 +7,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`mcp-config --gateway --groups` is refused instead of ignored.** The gateway
+  serves a fixed set of five tools and reads no group list, so the combination wrote
+  a `GHYDRA_TOOL_GROUPS` that the server never looked at — a setting that does
+  nothing is worse than an error that says which flag belongs where. The gateway
+  entry also stops emitting that variable.
+- **A generated setting the gateway ignored.** `ghydra mcp-config --gateway`
+  writes `GHIDRA_HYDRA_HOST` into the client configuration, and
+  `gateway.ghidra_client()` read only its argument and the config file — so the host
+  in the generated file did nothing. It now follows the CLI precedence
+  (`argument > environment > configuration > default`) with the bridge's variable
+  names, and a test asserts the variable the generated file writes is one the
+  gateway actually reads — the same guard that caught an invented port variable
+  earlier. An unused import and a dead helper went with it.
+- **A configuration file the newer commands ignored.** `GhidraConfig` keeps the
+  x64dbg settings as flat `x64dbg_*` attributes and the file nests them under
+  `"x64dbg"`; only the CLI's `_section` read them. So `ghydra-gateway` looked for an
+  attribute named `x64dbg`, got `None`, and **ignored the documented
+  `"x64dbg": {"path": ...}`** — working only from environment variables — and
+  `ghydra mcp-config` passed no settings at all, so a config file pointing at an
+  installation still answered "the x64dbg token is unknown". One accessor on the
+  dataclass (`GhidraConfig.x64dbg_section()`) now feeds all three call sites, and
+  the CLI test drives the real root command with a patched configuration.
 - **The x64dbg plugin: four Phase-1 defects fixed and verified** on its own branch
   (`fix/thread-safety-and-honest-frames`, `81d4936`, pushed to the fork), with
   `zig build` and `zig build test` (50 unit tests) green on Zig 0.14.0:

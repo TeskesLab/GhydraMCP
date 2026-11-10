@@ -119,12 +119,13 @@ def debugger_entry(settings: Optional[dict] = None) -> Tuple[Optional[Dict[str, 
 GATEWAY_SCRIPT = "ghydra-gateway"
 
 
-def gateway_entry(groups: Optional[List[str]] = None,
-                  host: Optional[str] = None) -> Dict[str, Any]:
-    """The single entry: the gateway server, which fronts both plugins."""
+def gateway_entry(host: Optional[str] = None) -> Dict[str, Any]:
+    """The single entry: the gateway server, which fronts both plugins.
+
+    No group variable here: the gateway serves the five workflow tools and reads no
+    group list, so writing one would be a setting that does nothing.
+    """
     environment: Dict[str, str] = {}
-    if groups:
-        environment["GHYDRA_TOOL_GROUPS"] = ",".join(groups)
     if host:
         environment["GHIDRA_HYDRA_HOST"] = str(host)
     entry: Dict[str, Any] = {"command": GATEWAY_SCRIPT, "args": []}
@@ -147,8 +148,7 @@ def build(groups: Optional[List[str]] = None,
     if gateway:
         # One server, both sides: the tools are `target_*`, and the workflows that
         # need both plugins are a single call.
-        return {"mcpServers": {"ghydra-gateway": gateway_entry(
-            groups=groups, host=host)}}
+        return {"mcpServers": {"ghydra-gateway": gateway_entry(host=host)}}
     document: Dict[str, Any] = {"mcpServers": {"ghydra": bridge_entry(
         groups=groups, host=host, state_dir=state_dir)}}
     notes: List[str] = []

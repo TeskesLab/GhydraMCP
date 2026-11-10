@@ -236,5 +236,52 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
                                 document)
 
 
+class EnvironmentTests(unittest.TestCase):
+    """The host written into the generated configuration must be read."""
+
+    def test_the_generated_variable_is_one_the_gateway_reads(self):
+        import io as _io
+        with _io.open(os.path.join(root(), "ghydra", "gateway.py"),
+                      encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn("GHIDRA_HYDRA_HOST", source)
+        self.assertIn("GHIDRA_HOST", source)
+
+    def test_the_environment_reaches_the_client(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"GHIDRA_HYDRA_HOST": "10.0.0.5"}):
+            client = gateway.ghidra_client()
+        self.assertEqual("10.0.0.5", client.host)
+
+    def test_the_argument_wins_over_the_environment(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"GHIDRA_HYDRA_HOST": "10.0.0.5"}):
+            client = gateway.ghidra_client("127.0.0.1")
+        self.assertEqual("127.0.0.1", client.host)
+
+    def test_the_config_is_the_last_word_before_the_default(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GHIDRA_HYDRA_HOST", None)
+            os.environ.pop("GHIDRA_HOST", None)
+            with mock.patch("ghydra.config.ConfigManager.load",
+                            classmethod(lambda cls, verbose=False: _Config())):
+                client = gateway.ghidra_client()
+        self.assertEqual("config-host", client.host)
+        self.assertEqual(8193, client.port)
+
+
+class _Config:
+    default_host = "config-host"
+    default_port = 8193
+
+    def x64dbg_section(self):
+        return {}
+
+
+def root():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -211,7 +211,7 @@ user meets.
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
 | `X64DBG_BAD_ARGS` | Python | — | — | `bridge_mcp_hydra.py:9087` |
-| `X64DBG_DISABLED` | Python | — | — | `ghydra/gateway.py:87` |
+| `X64DBG_DISABLED` | Python | — | — | `ghydra/gateway.py:98` |
 | `X64DBG_ERROR` | Python | — | — | `bridge_mcp_hydra.py:9127` |
 | `X64DBG_MISSING` | Python | — | — | `ghydra/x64dbg.py:369` |
 | `X64DBG_NO_FILE` | Python | — | — | `ghydra/x64dbg.py:852` |

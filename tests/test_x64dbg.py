@@ -929,5 +929,33 @@ class X64dbgErrorTaxonomyTests(unittest.TestCase):
             self.assertIn(name, names)
 
 
+class ConfigSectionTests(unittest.TestCase):
+    """The four settings, from the file to the section every caller takes."""
+
+    def test_the_nested_section_becomes_flat_attributes(self):
+        from ghydra.config.defaults import GhidraConfig
+        config = GhidraConfig.from_dict(
+            {"x64dbg": {"host": "127.0.0.1", "port": 9095,
+                        "token": "abc", "path": "C:/tools/x64dbg"}})
+        self.assertEqual("127.0.0.1", config.x64dbg_host)
+        self.assertEqual(9095, config.x64dbg_port)
+        self.assertEqual("abc", config.x64dbg_token)
+        self.assertEqual("C:/tools/x64dbg", config.x64dbg_path)
+
+    def test_the_section_carries_only_what_was_set(self):
+        from ghydra.config.defaults import GhidraConfig
+        self.assertEqual({}, GhidraConfig().x64dbg_section())
+        section = GhidraConfig.from_dict(
+            {"x64dbg": {"port": 9094}}).x64dbg_section()
+        self.assertEqual({"port": 9094}, section)
+
+    def test_the_section_survives_a_save_and_load(self):
+        from ghydra.config.defaults import GhidraConfig
+        config = GhidraConfig.from_dict(
+            {"x64dbg": {"port": 9095, "path": "/opt/x64dbg"}})
+        again = GhidraConfig.from_dict(config.to_dict())
+        self.assertEqual(config.x64dbg_section(), again.x64dbg_section())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

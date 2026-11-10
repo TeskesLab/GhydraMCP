@@ -19,10 +19,15 @@ def suite_script(name):
 
 
 def print_header(text):
-    """Print a header with the given text"""
-    print("\n" + "=" * 80)
-    print(f" {text} ".center(80, "="))
-    print("=" * 80 + "\n")
+    """Print a header with the given text.
+
+    Flushed on purpose: a redirected log is where a stuck run is diagnosed, and
+    buffered output leaves it empty until the process ends — which is exactly when
+    the answer is no longer needed.
+    """
+    print("\n" + "=" * 80, flush=True)
+    print(f" {text} ".center(80, "="), flush=True)
+    print("=" * 80 + "\n", flush=True)
 
 def run_http_api_tests():
     """Run the HTTP API tests"""

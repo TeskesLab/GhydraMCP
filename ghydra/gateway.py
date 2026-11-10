@@ -56,14 +56,22 @@ INSTRUCTIONS = (
 # --------------------------------------------------------------------- clients
 def ghidra_client(host: Optional[str] = None,
                   port: Optional[int] = None) -> GhidraHTTPClient:
-    """The static side, from the options or the CLI's configuration."""
+    """The static side: the argument, then the environment, then the configuration.
+
+    The environment is the bridge's (`GHIDRA_HYDRA_HOST`, then `GHIDRA_HOST`),
+    because `ghydra mcp-config --gateway` writes the host there — a generated
+    configuration that names a variable the server ignores is a trap.
+    """
     from .config import ConfigManager
 
     try:
         config = ConfigManager.load()
     except Exception:  # noqa: BLE001 - no config file is a normal state
         config = None
-    resolved_host = host or getattr(config, "default_host", None) or "localhost"
+    environment_host = (os.environ.get("GHIDRA_HYDRA_HOST")
+                        or os.environ.get("GHIDRA_HOST"))
+    resolved_host = (host or environment_host
+                     or getattr(config, "default_host", None) or "localhost")
     resolved_port = port or getattr(config, "default_port", None) or 8192
     return GhidraHTTPClient(str(resolved_host), int(resolved_port))
 
@@ -77,7 +85,10 @@ def debugger_client():
         config = ConfigManager.load()
     except Exception:  # noqa: BLE001
         config = None
-    section = getattr(config, "x64dbg", None) if config is not None else None
+    # The section, not an attribute called `x64dbg`: the object keeps the four
+    # settings flat, and `getattr(config, "x64dbg", None)` silently ignored the
+    # configuration file.
+    section = config.x64dbg_section() if config is not None else None
     settings = debugger.resolve_config(section)
     if not settings["token"]:
         raise debugger.X64dbgError(

@@ -48,6 +48,14 @@ def mcp_config(ctx, groups, host, output, no_x64dbg, gateway, show_secrets):
         ghydra mcp-config -o claude_desktop.json   # write it for a client
     """
     formatter = ctx.obj['formatter']
+    if gateway and groups:
+        # The gateway serves a fixed set of five tools and reads no group list, so
+        # honouring --groups here would mean writing a variable the server ignores.
+        rich_echo("error: --groups selects the bridge's tool groups; the gateway "
+                  "serves a fixed set of five tools. Use one or the other.",
+                  err=True)
+        ctx.exit(1)
+        return
     try:
         selected = mcpconfig.parse_groups(groups)
     except ValueError as exc:
@@ -56,9 +64,13 @@ def mcp_config(ctx, groups, host, output, no_x64dbg, gateway, show_secrets):
         return
 
     try:
+        # The documented `"x64dbg": {"path": ...}` lives in the config file, so the
+        # section has to reach the builder or the answer is always "token unknown".
+        config = (ctx.obj or {}).get("config")
+        settings = config.x64dbg_section() if config is not None else None
         document = mcpconfig.build(groups=selected, host=host,
                                    include_debugger=not no_x64dbg,
-                                   gateway=gateway)
+                                   gateway=gateway, settings=settings)
     except Exception as exc:  # noqa: BLE001 - the reason is the message
         rich_echo(f"error: {exc}", err=True)
         ctx.exit(1)

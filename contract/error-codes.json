@@ -791,7 +791,7 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/gateway.py:87`"
+      "origin": "`ghydra/gateway.py:98`"
     },
     {
       "code": "X64DBG_ERROR",

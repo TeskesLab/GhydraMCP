@@ -138,6 +138,24 @@ class DocumentTests(unittest.TestCase):
         self.assertEqual(mcpconfig.GATEWAY_SCRIPT, entry["command"])
         self.assertNotIn("headers", entry, "the gateway resolves the token itself")
 
+    def test_the_gateway_refuses_a_group_list(self):
+        """`--groups` would be written into a variable the gateway never reads."""
+        result = CliRunner().invoke(cli, ["mcp-config", "--gateway",
+                                          "--groups", "core"],
+                                    catch_exceptions=False)
+        self.assertEqual(1, result.exit_code, result.output)
+        # Rich wraps prose at the console width, so assert on fragments that
+        # stay on one line rather than on a sentence.
+        self.assertIn("--groups selects", result.output)
+        self.assertIn("five tools", result.output.replace("\n", " "))
+
+    def test_the_gateway_document_carries_no_group_variable(self):
+        document = mcpconfig.build(gateway=True, groups=["core"], host="127.0.0.1")
+        entry = document["mcpServers"]["ghydra-gateway"]
+        self.assertNotIn("GHYDRA_TOOL_GROUPS", entry.get("env") or {})
+        self.assertEqual("127.0.0.1", (entry.get("env") or {}).get(
+            "GHIDRA_HYDRA_HOST"))
+
     def test_the_gateway_entry_does_not_carry_the_token(self):
         document = mcpconfig.build(gateway=True, settings={"token": TOKEN})
         self.assertNotIn(TOKEN, json.dumps(document))
@@ -184,6 +202,19 @@ class WriteTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
+    """The command, with the machine's own configuration out of the way."""
+
+    def setUp(self):
+        from unittest import mock
+
+        from ghydra.cli import main as main_module
+        from ghydra.config.defaults import GhidraConfig
+
+        self._patch = mock.patch.object(
+            main_module.ConfigManager, "load",
+            classmethod(lambda cls, verbose=False: GhidraConfig()))
+        self._patch.start()
+        self.addCleanup(self._patch.stop)
 
     def run_command(self, *arguments, env=None):
         runner = CliRunner(env=env)
@@ -211,6 +242,29 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(0, result.exit_code, result.output)
         self.assertNotIn(TOKEN, result.output)
         self.assertIn(mcpconfig.MASK, result.output)
+
+    def test_the_cli_reads_the_config_section(self):
+        """A config file pointing at an installation must produce the entry.
+
+        The command passed no settings, so the documented
+        `"x64dbg": {"path": ...}` was ignored and the answer was always
+        "the x64dbg token is unknown".
+        """
+        from ghydra.cli import main as main_module
+        from ghydra.config.defaults import GhidraConfig
+
+        from unittest import mock
+
+        config = GhidraConfig.from_dict(
+            {"x64dbg": {"port": 9095, "token": TOKEN}})
+        with mock.patch.object(main_module.ConfigManager, "load",
+                               classmethod(lambda cls, verbose=False: config)):
+            result = CliRunner().invoke(cli, ["mcp-config"],
+                                        catch_exceptions=False)
+        self.assertEqual(0, result.exit_code, result.output)
+        self.assertIn("x64dbg", result.output)
+        self.assertIn("9095", result.output)
+        self.assertNotIn(TOKEN, result.output, "the token must stay masked")
 
     def test_writing_puts_the_secret_in_the_file_and_warns(self):
         directory = tempfile.mkdtemp(prefix="ghydra-mcp-config-")

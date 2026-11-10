@@ -27,16 +27,6 @@ def target_group():
     """Work on one target through both sides: static address, runtime address."""
 
 
-def _settings(ctx):
-    """The debugger's settings out of the CLI's configuration."""
-    config = (getattr(ctx, "obj", None) or {}).get("config")
-    for attribute in ("x64dbg", "debugger"):
-        section = getattr(config, attribute, None) if config is not None else None
-        if section:
-            return section
-    return None
-
-
 def _debugger(ctx):
     """The client for the debugger's MCP server (it knows how to find the token)."""
     return debugger_client(ctx)

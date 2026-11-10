@@ -185,6 +185,8 @@ refusal is the same one the CLI has: `target_breakpoint` and `target_run_to` ans
 ```bash
 ghydra-gateway                    # serve on stdio, for an MCP client
 ghydra mcp-config --gateway       # one-entry client configuration for it
+# --groups selects the bridge's groups; the gateway serves a fixed set of
+# five tools, so the two flags are not combined (the command says so).
 ```
 
 ## The combined MCP client configuration

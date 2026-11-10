@@ -50,17 +50,7 @@ def x64dbg():
 
 def _section(ctx):
     """The x64dbg config section, as the CLI resolved it."""
-    config = ctx.obj['config']
-    section = {}
-    if config.x64dbg_host:
-        section["host"] = config.x64dbg_host
-    if config.x64dbg_port:
-        section["port"] = config.x64dbg_port
-    if config.x64dbg_token:
-        section["token"] = config.x64dbg_token
-    if config.x64dbg_path:
-        section["path"] = config.x64dbg_path
-    return section
+    return ctx.obj['config'].x64dbg_section()
 
 
 def _emit(ctx, kind, data):
