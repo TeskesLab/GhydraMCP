@@ -85,5 +85,36 @@ class RunnerContractTests(unittest.TestCase):
         self.assertIn("Usage:", result.stdout + result.stderr)
 
 
+class UsageTests(unittest.TestCase):
+    """The line that says what the runner accepts, built from what it accepts."""
+
+    def test_every_suite_is_in_the_usage(self):
+        """A suite that works but is not in the line cannot be discovered."""
+        import run_tests
+
+        for flag in run_tests.SUITES:
+            self.assertIn(flag, run_tests.USAGE,
+                          f"{flag} works but the usage does not mention it")
+
+    def test_the_usage_names_no_suite_that_does_not_exist(self):
+        import re
+
+        import run_tests
+
+        # A flag may carry digits (--x64dbg), so the pattern takes them.
+        named = set(re.findall(r"--[a-z][a-z0-9-]*", run_tests.USAGE))
+        for flag in named:
+            if flag in ("--no-ghidra", "--require-live"):
+                continue
+            self.assertIn(flag, run_tests.SUITES,
+                          f"the usage names {flag}, which is not a suite")
+
+    def test_the_usage_is_built_from_the_suites(self):
+        """A hand-written line is how it drifted in the first place."""
+        import run_tests
+
+        self.assertEqual(run_tests.build_usage(), run_tests.USAGE)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

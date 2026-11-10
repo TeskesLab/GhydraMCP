@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.36.3"
+BRIDGE_VERSION = "v3.36.4"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -1604,9 +1604,7 @@ def _core_telemetry_summarize(entries, days=7, path=''):
 # <<< end generated from ghydra/core/telemetry.py
 
 
-# >>> generated from ghydra/core/taint.py (17452e5035c8dd11) — edit the core, then run scripts/gen_core.py
-_CORE_TAINT_PROGRAM_FIELDS = ('name', 'executable_path', 'image_base')
-
+# >>> generated from ghydra/core/taint.py (46f670da8b2fa636) — edit the core, then run scripts/gen_core.py
 _CORE_TAINT_PAGE_LIMIT = 1000
 
 _CORE_TAINT_MAX_PAGES = 5

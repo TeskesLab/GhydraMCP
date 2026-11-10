@@ -1092,14 +1092,24 @@ SUITES = {
     "--gateway": run_gateway_tests,
 }
 
-USAGE = (
-    "Usage: python run_tests.py [--no-ghidra | --http | --mcp | --data | "
-    "--comments | --port | --kuna | --x64dbg | --headless | --evidence | "
-    "--triage | --rea | --surface | --capabilities | --scripts | "
-    "--compatibility | --runner | --docs | --capability-summary | --tasks | --errors |"
-    " --context-pack | --assertions | --read-only | --runbook | --taint | --require-live]"
-    "  (suite flags may be combined)"
-)
+def build_usage() -> str:
+    """The usage, built from the suites that exist.
+
+    The line used to be written out by hand, and it fell behind: twelve suites
+    worked and were not in it. A user who typed one of them, saw the line that
+    does not mention it, and had no way to learn the right name. Building the
+    line from the dict makes that impossible.
+    """
+    flags = sorted(SUITES)
+    return (
+        "Usage: python run_tests.py [--no-ghidra | "
+        + " | ".join(flags)
+        + " | --require-live]"
+        "  (suite flags may be combined)"
+    )
+
+
+USAGE = build_usage()
 
 if __name__ == "__main__":
     # Check if we have the required dependencies

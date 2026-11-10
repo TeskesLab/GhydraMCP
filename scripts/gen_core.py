@@ -116,7 +116,6 @@ CORE_RENAMES = {
         "summarize": "_core_telemetry_summarize",
     },
     "ghydra/core/taint.py": {
-        "PROGRAM_FIELDS": "_CORE_TAINT_PROGRAM_FIELDS",
         "PAGE_LIMIT": "_CORE_TAINT_PAGE_LIMIT",
         "MAX_PAGES": "_CORE_TAINT_MAX_PAGES",
         "CALL_OPCODES": "_CORE_TAINT_CALL_OPCODES",

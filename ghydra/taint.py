@@ -30,7 +30,6 @@ from typing import Any, Dict, List, Optional
 from .core import taint as core_taint
 
 #: All of these are defined once, in the core (I1).
-PROGRAM_FIELDS = core_taint.PROGRAM_FIELDS
 PAGE_LIMIT = core_taint.PAGE_LIMIT
 MAX_PAGES = core_taint.MAX_PAGES
 CALL_OPCODES = core_taint.CALL_OPCODES

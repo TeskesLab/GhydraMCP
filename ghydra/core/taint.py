@@ -19,9 +19,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-#: The fields of /program a taint report echoes.
-PROGRAM_FIELDS = ("name", "executable_path", "image_base")
-
 #: The server clamps every page to this many items.
 PAGE_LIMIT = 1000
 
