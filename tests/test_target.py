@@ -46,6 +46,12 @@ class FakeGhidra:
         self.lookups.append(endpoint)
         if endpoint == "program":
             return {"success": True, "result": self.program}
+        if endpoint.endswith("/decompile"):
+            return {"success": True,
+                    "result": {"functionName": "main",
+                               "functionAddress": "0x140001234",
+                               "decompilation": "int main(void) { return 0; }",
+                               "success": True}}
         if endpoint.startswith("functions/by-name/"):
             key = "by-name:" + endpoint.rsplit("/", 1)[-1]
             result = self.functions.get(key)
@@ -73,6 +79,10 @@ class FakeDebugger:
             return f"0x{self.base:x} | 0x25000 | {self.path}"
         if name == "SetBreakpoint":
             return "breakpoint set"
+        if name == "RunToAddress":
+            return "[state] paused at the address"
+        if name == "GetAllRegisters":
+            return "RAX=0x1 RBX=0x2 RCX=0x3"
         raise AssertionError(f"unexpected tool {name}")
 
 
@@ -180,6 +190,62 @@ class BreakpointTests(unittest.TestCase):
         self.assertFalse(descriptor.correlatable())
         with self.assertRaises(ValueError):
             descriptor.to_runtime(0x140001234)
+
+class DecompileTests(unittest.TestCase):
+    """`decompile`: the code comes from the static side, addressed statically."""
+
+    def test_the_code_comes_back_with_both_addresses(self):
+        answer = target.decompile(FakeGhidra(), "main")
+        self.assertIn("int main(void)", answer["code"])
+        self.assertEqual("0x140001234", answer["static_address"])
+        self.assertEqual("main", answer["function"])
+
+    def test_a_name_and_an_address_give_the_same_answer(self):
+        by_name = target.decompile(FakeGhidra(), "main")
+        by_address = target.decompile(FakeGhidra(), "0x140001234")
+        self.assertEqual(by_name["code"], by_address["code"])
+
+    def test_a_decompiler_that_returns_nothing_is_a_code(self):
+        class Silent(FakeGhidra):
+            def get(self, endpoint, params=None):
+                if endpoint.endswith("/decompile"):
+                    return {"success": True, "result": {"decompilation": None}}
+                return super().get(endpoint, params)
+
+        with self.assertRaises(TargetError) as caught:
+            target.decompile(Silent(), "main")
+        self.assertEqual(target.ERROR_NO_CODE, caught.exception.code)
+
+
+class RunToTests(unittest.TestCase):
+    """`run_to`: resume to an address, then report the registers."""
+
+    def test_the_address_is_translated_and_the_registers_read(self):
+        debugger = FakeDebugger()
+        answer = target.run_to(FakeGhidra(), debugger, "main", timeout_ms=5000)
+        expected = hex(0x140001234 - IMAGE_BASE + MODULE_BASE)
+        self.assertEqual(expected, answer["runtime_address"])
+        self.assertIn("RAX", answer["registers"])
+        run_calls = [call for call in debugger.calls if call[0] == "RunToAddress"]
+        self.assertEqual(1, len(run_calls))
+        self.assertEqual(expected, run_calls[0][1]["address"])
+        self.assertEqual(5000, run_calls[0][1]["timeoutMs"])
+
+    def test_the_timeout_is_below_the_client_read_timeout(self):
+        """The server must answer before the client gives up; 30s vs 30s is a race."""
+        self.assertLess(target.RUN_TO_TIMEOUT_MS, 30_000)
+
+    def test_a_different_build_resumes_nothing(self):
+        debugger = FakeDebugger(path=r"D:\builds\sample.exe")
+        with self.assertRaises(TargetError) as caught:
+            target.run_to(FakeGhidra(), debugger, "main")
+        self.assertEqual(target.ERROR_NOT_SAME_BINARY, caught.exception.code)
+        self.assertEqual([("ListModules", None)], debugger.calls)
+
+    def test_a_non_positive_timeout_is_refused(self):
+        with self.assertRaises(TargetError) as caught:
+            target.run_to(FakeGhidra(), FakeDebugger(), "main", timeout_ms=0)
+        self.assertEqual(target.ERROR_BAD_ADDRESS, caught.exception.code)
 
 
 if __name__ == "__main__":

@@ -345,10 +345,14 @@ descriptor**, which is the part that needs the address model:
 | `analyze_open` | `ghydra target describe` | both sides → one `TargetDescriptor` + identity verdict |
 | `function_locate` | `ghydra target locate <name>` | the static address Ghidra knows |
 | `breakpoint_set` | `ghydra target breakpoint <name>` | locate → translate → set, or refuse |
+| `run_to` | `ghydra target run-to <name>` | translate, resume to it, report the registers |
+| `decompile` | `ghydra target decompile <name>` | the recovered C, addressed statically |
 
-`run_to` and `decompile` are the remaining two; neither needs new address logic
-(`decompile` already exists as `ghydra functions decompile`, and `run_to` is one
-x64dbg tool call with a timeout).
+All five steps exist. `run_to` carries the same refusal as `breakpoint_set` and a
+worse consequence if it were wrong — resuming a different build is not a breakpoint
+in the wrong place, it is a process running — and its timeout defaults below the
+client's read timeout, because the debugger's own default (30 s) is exactly that
+boundary and a full-length run would lose its answer.
 
 The refusal is what the tests pin: `tests/test_target.py` (`--target`) asserts that a
 descriptor built from two **different** files raises `TARGET_NOT_SAME_BINARY` and

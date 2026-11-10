@@ -130,14 +130,16 @@ Earlier versions forced ANSI color codes on regardless of the output target, whi
 
 ## The cross-tool target workflow
 
-The three commands that make the static and the dynamic side work on **one**
-target. They print JSON on stdout, unwrapped, because a script or an agent drives
-them.
+The five commands that make the static and the dynamic side work on **one**
+target — the gateway chain of the unification plan. They print JSON on stdout,
+unwrapped, because a script or an agent drives them.
 
 ```bash
-ghydra target describe            # both sides, one TargetDescriptor, identity verdict
-ghydra target locate main         # the static address Ghidra knows
-ghydra target breakpoint main     # locate, translate, set it in the debugger
+ghydra target describe            # analyze_open: both sides, one TargetDescriptor
+ghydra target locate main         # function_locate: the static address Ghidra knows
+ghydra target breakpoint main     # breakpoint_set: locate, translate, set it
+ghydra target run-to main         # run_to: resume to it, then report the registers
+ghydra target decompile main      # decompile: the recovered C, addressed statically
 ```
 
 `describe` is the `analyze_open` step: it pairs the Ghidra program with the loaded
@@ -147,10 +149,16 @@ it locates the function statically, translates
 two sides are not the same file**, in which case it exits with
 `TARGET_NOT_SAME_BINARY` and does not touch the debugger.
 
+`run-to` is the same refusal with a worse consequence if it were wrong: resuming a
+different build is not a breakpoint in the wrong place, it is a process running. Its
+timeout defaults to 10 s on purpose — the debugger's own default (30 s) is the
+client's read timeout, and a run that takes the full time loses its answer.
+
 The codes are the contract: `TARGET_NO_PROGRAM` (an instance did not answer — start
-it), `TARGET_NOT_FOUND` (no such function — try another name), `TARGET_NOT_LOADED`
-(the debugger does not have the binary open), `TARGET_NOT_SAME_BINARY` (a copy or a
-rebuild — the addresses of one do not describe the other).
+it), `TARGET_NOT_FOUND` (no such function — try another name), `TARGET_NO_CODE` (the
+decompiler returned nothing), `TARGET_NOT_LOADED` (the debugger does not have the
+binary open), `TARGET_NOT_SAME_BINARY` (a copy or a rebuild — the addresses of one do
+not describe the other).
 
 ## The combined MCP client configuration
 

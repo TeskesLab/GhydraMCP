@@ -36,7 +36,7 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 
 ## Every command
 
-`153` commands in `40` groups.
+`155` commands in `40` groups.
 
 | Command | What it does |
 | --- | --- |
@@ -171,8 +171,10 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 | `ghydra symbols imports` | List imported symbols. |
 | `ghydra symbols list` | List all symbols in the program. |
 | `ghydra target breakpoint` | Set a breakpoint in the debugger on a function Ghidra knows. |
+| `ghydra target decompile` | Decompile a function on the static side, named or addressed. |
 | `ghydra target describe` | Show the target as both sides see it, and whether they may be correlated. |
 | `ghydra target locate` | Find a function's static address by name or by address. |
+| `ghydra target run-to` | Run the debuggee to a function, and report the registers at the stop. |
 | `ghydra twin build` | Take a snapshot of the instance's program. |
 | `ghydra twin diff` | What changed between two snapshots, with the shared comparison. |
 | `ghydra twin query` | Answer a question from a snapshot, with no Ghidra running. |

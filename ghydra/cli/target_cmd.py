@@ -130,3 +130,61 @@ def breakpoint(ctx, name):
     _emit(ctx, document)
     rich_echo(f"breakpoint {document['function']}: {document['static_address']}"
               f" (static) -> {document['runtime_address']} (runtime)", err=True)
+
+
+@target_group.command('decompile')
+@click.argument('name')
+@click.option('--style', default='normalize', show_default=True,
+              help="Decompiler style")
+@click.pass_context
+def decompile(ctx, name, style):
+    """Decompile a function on the static side, named or addressed.
+
+    
+    Examples:
+        ghydra target decompile main
+        ghydra target decompile 0x140001234
+    """
+    ghidra = ctx.obj['client']
+    try:
+        document = target_helper.decompile(ghidra, name, style=style)
+    except (target_helper.TargetError, GhidraError) as exc:
+        _fail(ctx, exc)
+        return
+    _emit(ctx, document)
+    rich_echo(f"{document['function']} at {document['static_address']}"
+              f" ({len(document['code'])} characters of C)", err=True)
+
+
+@target_group.command('run-to')
+@click.argument('name')
+@click.option('--timeout-ms', type=int, default=target_helper.RUN_TO_TIMEOUT_MS,
+              show_default=True,
+              help="How long the debugger waits before answering (below the "
+                   "client's read timeout on purpose)")
+@click.pass_context
+def run_to(ctx, name, timeout_ms):
+    """Run the debuggee to a function, and report the registers at the stop.
+
+    The address is located in Ghidra, translated into the running process, and the
+    debugger runs to it. When the two sides are not the same file the command
+    refuses with TARGET_NOT_SAME_BINARY and resumes nothing.
+
+    
+    Example:
+        ghydra target run-to main
+    """
+    ghidra = ctx.obj['client']
+    try:
+        debugger = _debugger(ctx)
+        document = target_helper.run_to(ghidra, debugger, name,
+                                        timeout_ms=timeout_ms)
+    except (target_helper.TargetError, GhidraError) as exc:
+        _fail(ctx, exc)
+        return
+    except Exception as exc:  # noqa: BLE001
+        _fail(ctx, exc)
+        return
+    _emit(ctx, document)
+    rich_echo(f"ran to {document['function']} at {document['runtime_address']}"
+              f" (runtime)", err=True)

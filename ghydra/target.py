@@ -208,6 +208,7 @@ ERROR_NOT_LOADED = "TARGET_NOT_LOADED"
 ERROR_NOT_FOUND = "TARGET_NOT_FOUND"
 ERROR_NOT_SAME_BINARY = "TARGET_NOT_SAME_BINARY"
 ERROR_BAD_ADDRESS = "TARGET_BAD_ADDRESS"
+ERROR_NO_CODE = "TARGET_NO_CODE"
 
 
 class TargetError(Exception):
@@ -327,6 +328,78 @@ def breakpoint(ghidra_client, debugger_client, target: str) -> Dict[str, Any]:
         "static_address": hex(static_address),
         "runtime_address": hex(runtime),
         "delta": hex(descriptor.delta()) if descriptor.delta() is not None else None,
+        "identity": identity,
+    }
+
+
+#: `RunToAddress` blocks, and its default (30 000 ms) is the client's read timeout:
+#: a run that takes the full time loses its answer. Asking for less keeps the
+#: server answering before the client gives up.
+RUN_TO_TIMEOUT_MS = 10_000
+
+
+def decompile(ghidra_client, target: str, style: str = "normalize") -> Dict[str, Any]:
+    """`decompile`: the recovered C of one function, addressed statically.
+
+    The address comes from `locate`, so a name works as well as an address, and the
+    caller gets both forms back.
+    """
+    found = locate(ghidra_client, target)
+    address = found["static_address"]
+    try:
+        envelope = ghidra_client.get(f"functions/{address}/decompile",
+                                     params={"style": style})
+    except Exception as exc:  # noqa: BLE001 - the reason is the message
+        code = str(getattr(exc, "code", "") or "")
+        if "NOT_FOUND" in code:
+            raise TargetError(f"the function at {address} cannot be decompiled: {exc}",
+                              ERROR_NOT_FOUND)
+        raise TargetError(f"the decompiler did not answer: {exc}", ERROR_NO_PROGRAM)
+    result = (envelope or {}).get("result") or {}
+    code = result.get("decompilation")
+    if not code:
+        raise TargetError(
+            result.get("errorMessage")
+            or f"the decompiler returned no code for {address}", ERROR_NO_CODE)
+    return {
+        "function": result.get("functionName") or found["name"],
+        "static_address": result.get("functionAddress") or address,
+        "style": style,
+        "code": code,
+    }
+
+
+def run_to(ghidra_client, debugger_client, target: str,
+           timeout_ms: int = RUN_TO_TIMEOUT_MS) -> Dict[str, Any]:
+    """`run_to`: run the debuggee to a function, and report the registers at the stop.
+
+    Refuses with `TARGET_NOT_SAME_BINARY` before resuming anything when the two
+    sides are not the same file — resuming a different build is worse than setting a
+    breakpoint in it.
+    """
+    if int(timeout_ms) <= 0:
+        raise TargetError("the timeout must be positive", ERROR_BAD_ADDRESS)
+    descriptor = describe(ghidra_client, debugger_client)
+    identity = descriptor.identity()
+    if not descriptor.correlatable():
+        raise TargetError(
+            "the two sides are not the same target: " + str(identity["reason"]),
+            ERROR_NOT_SAME_BINARY)
+
+    found = locate(ghidra_client, target)
+    static_address = _as_int(found["static_address"])
+    runtime = descriptor.to_runtime(static_address)
+    debugger_client.call_tool(
+        "RunToAddress",
+        {"address": hex(runtime), "timeoutMs": int(timeout_ms)})
+    # Read-only, and it cannot change the debuggee: the state is read after the stop.
+    registers = debugger_client.call_tool("GetAllRegisters")
+    return {
+        "function": found["name"],
+        "static_address": hex(static_address),
+        "runtime_address": hex(runtime),
+        "timeout_ms": int(timeout_ms),
+        "registers": registers,
         "identity": identity,
     }
 

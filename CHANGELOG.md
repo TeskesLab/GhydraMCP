@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The cross-tool chain is complete** (`ghydra target run-to` and `… decompile`):
+  with `describe`, `locate` and `breakpoint`, the five steps of the unification
+  plan's Phase 3 exist as commands — `analyze_open`, `function_locate`,
+  `breakpoint_set`, `run_to`, `decompile`.
+  `run-to` carries the same identity refusal as `breakpoint` with a worse
+  consequence if it were wrong — resuming a different build is not a breakpoint in
+  the wrong place, it is a process running — and then reads the registers with a
+  **read-only** tool, so the answer cannot change the debuggee. Its timeout defaults
+  to **10 s**, below the client's 30 s read timeout on purpose: the debugger's own
+  default is 30 s, and a run that takes the full time would lose its answer to the
+  client giving up first.
+  `decompile` addresses the static side through `locate`, so a name works as well as
+  an address, and a decompiler that returns nothing is `TARGET_NO_CODE`, not an
+  empty answer. `tests/test_target.py` is **19 tests** and pins both, including the
+  two refusals that assert the fake debugger was never resumed or written.
 - **The cross-tool target workflow (Phase 3 of the unification plan)**: three
   commands that make the static and the dynamic side work on one target —
   `ghydra target describe` (`analyze_open`: both sides, one `TargetDescriptor`, and

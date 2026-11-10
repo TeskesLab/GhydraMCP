@@ -12,7 +12,7 @@
     "success_field": "success"
   },
   "counts": {
-    "codes": 117,
+    "codes": 118,
     "families": 37
   },
   "codes": [
@@ -701,6 +701,13 @@
       "http_status": null,
       "message": null,
       "origin": "`ghydra/target.py:209`"
+    },
+    {
+      "code": "TARGET_NO_CODE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:211`"
     },
     {
       "code": "TARGET_NO_PROGRAM",
