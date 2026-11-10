@@ -1016,6 +1016,31 @@ def run_target_tests():
     return passed
 
 
+def run_doctor_tests():
+    """Run the doctor suite — the command that says what is wrong here."""
+    print_header("Running Doctor Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_doctor.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running doctor tests: {e}")
+        return False
+
+
 def run_gateway_tests():
     """Run the MCP gateway suite — fakes, no services, no protocol frames."""
     print_header("Running Gateway Tests")
@@ -1050,6 +1075,7 @@ NO_GHIDRA_SUITES = (
     "--mcp-config",
     "--target",
     "--gateway",
+    "--doctor",
 )
 
 SUITES = {
@@ -1089,6 +1115,7 @@ SUITES = {
     "--contract": run_contract_tests,
     "--mcp-config": run_mcp_config_tests,
     "--target": run_target_tests,
+    "--doctor": run_doctor_tests,
     "--gateway": run_gateway_tests,
 }
 

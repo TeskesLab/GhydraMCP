@@ -213,6 +213,28 @@ def documented_commands_problems() -> list:
     return problems
 
 
+def runner_flags_problems() -> list:
+    """Every suite the runner has must be named in the testing document.
+
+    The document lists the flags by hand, because each carries a description
+    the runner does not know. That is a list that can fall behind, and it did:
+    a suite was added and the document was not updated. The runner's own usage
+    line is generated from the suites, so this is the second half of the same
+    promise.
+    """
+    document = os.path.join(ROOT, "docs", "TESTING.md")
+    if not os.path.exists(document):
+        return ["docs/TESTING.md is missing"]
+    try:
+        runner = _load_script("../run_tests")
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load run_tests.py: {failure}"]
+    with open(document, encoding="utf-8") as handle:
+        text = handle.read()
+    return [f"docs/TESTING.md does not mention the suite {flag}"
+            for flag in sorted(runner.SUITES) if flag not in text]
+
+
 def x64dbg_vocabulary_problems() -> list:
     """The rename table must be current — or, without the plugin repo, consistent."""
     try:
@@ -398,6 +420,7 @@ def main() -> int:
     problems.extend(documented_commands_problems())
     problems.extend(cheatsheet_current_problems())
     problems.extend(x64dbg_vocabulary_problems())
+    problems.extend(runner_flags_problems())
     if not version_copy_ok():
         problems.append(
             "ghydra/x64dbg.py must use __version__ (scripts/version.py's sixth copy)")
