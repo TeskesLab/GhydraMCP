@@ -211,6 +211,64 @@ class ErrorCodeTests(unittest.TestCase):
                 self.assertIn(code, known)
 
 
+class X64dbgVocabularyTests(unittest.TestCase):
+    """The rename table: what the other side needs to adopt the rule."""
+
+    def setUp(self):
+        self.document = load_json("x64dbg-vocabulary.json")
+        self.entries = self.document["tools"]
+
+    def test_all_eighty_tools_are_mapped(self):
+        self.assertEqual(80, len(self.entries))
+        self.assertEqual(80, self.document["counts"]["tools"])
+
+    def test_every_proposed_name_follows_the_rule(self):
+        for entry in self.entries:
+            with self.subTest(tool=entry["current"]):
+                self.assertRegex(entry["proposed"], NAME_PATTERN)
+                self.assertTrue(entry["proposed"].startswith("x64dbg_"))
+
+    def test_no_two_tools_collapse_into_one_name(self):
+        names = [entry["proposed"] for entry in self.entries]
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_the_proposal_collides_with_nothing_this_repository_has(self):
+        bridge = {tool["name"] for tool in load_json("tools.json")["tools"]}
+        overlaps = sorted({entry["proposed"] for entry in self.entries} & bridge)
+        self.assertEqual([], overlaps)
+        self.assertEqual([], self.document["collisions_with_ghydra"])
+
+    def test_the_acronyms_split_where_the_words_do(self):
+        """`SEHChain` is SEH + Chain: the naive splitter gets this wrong."""
+        mapping = {entry["current"]: entry["proposed"] for entry in self.entries}
+        for current, expected in (("GetSEHChain", "x64dbg_get_seh_chain"),
+                                  ("GetPEB", "x64dbg_get_peb"),
+                                  ("DetectOEP", "x64dbg_detect_oep"),
+                                  ("SetBreakpoint", "x64dbg_set_breakpoint")):
+            with self.subTest(tool=current):
+                self.assertEqual(expected, mapping.get(current))
+
+    def test_the_read_only_flags_travel_with_the_names(self):
+        """The flag is what makes a call safe to retry; the rename must keep it."""
+        read_only = [entry for entry in self.entries if entry["read_only"]]
+        self.assertGreater(len(read_only), 0)
+        for entry in read_only:
+            with self.subTest(tool=entry["current"]):
+                self.assertIn("read_only", entry)
+        self.assertEqual(self.document["counts"]["read_only"], len(read_only))
+
+    def test_the_table_says_it_is_a_proposal(self):
+        self.assertIn("proposal", self.document["status"])
+        self.assertIn("commit", self.document["source"])
+
+    def test_the_generator_accepts_the_committed_table(self):
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "scripts/gen_x64dbg_vocabulary.py", "--check"],
+            cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+
 class TargetDescriptorTests(unittest.TestCase):
     """Rule 2: one address model, and an identity that can refuse."""
 

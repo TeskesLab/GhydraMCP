@@ -298,6 +298,13 @@ this repository is the contract, and that now exists:
 | error envelope (stable code + human text) | `contract/error-codes.json` (generated) | 112 codes, shaped, unique, each with its side and its `file:line` |
 | conformance | `tests/test_contract.py`, run as `--contract` (and in CI) | 24 tests |
 
+The vocabulary half is now complete on this side: the 80 flat tools are mapped to
+their namespaced names in [`contract/x64dbg-vocabulary.json`](../contract/x64dbg-vocabulary.json),
+generated from the plugin's own registry (`danalec/x64dbg-mcp-server` at `9d7a93e`),
+with the read-only flags carried across and **zero collisions** with the tools this
+repository already has. That is the whole cost of adopting the rule on the other
+side, and it is a table a colleague can apply without running anything.
+
 What this does **not** do is fix the x64dbg side. Its nine Phase-1 defects are
 untouched — including the data race (#1) and the UI-thread call (#2), which are the
 two that make it unsafe to point at a real debugging session. Those live in

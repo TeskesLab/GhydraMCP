@@ -1,0 +1,584 @@
+{
+  "contract_version": 1,
+  "generated_by": "scripts/gen_x64dbg_vocabulary.py",
+  "source": {
+    "repository": "danalec/x64dbg-mcp-server (fork of duty1g/x64dbg-mcp-server)",
+    "commit": "9d7a93e",
+    "file": "src/mcp/tools.zig",
+    "protocol_version": "2024-11-05"
+  },
+  "rule": {
+    "name_pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)+$",
+    "algorithm": "split the PascalCase name into words at the capital that starts a new word (SEHChain is SEH + Chain), lower-case them, join with underscores, prefix x64dbg_"
+  },
+  "status": "proposal — this repository never edits the other one; the table is what the rename needs, and the plugin keeps its current names as aliases for one release",
+  "counts": {
+    "tools": 80,
+    "renamed": 80,
+    "read_only": 36,
+    "collisions_with_ghydra": 0
+  },
+  "collisions_with_ghydra": [],
+  "tools": [
+    {
+      "current": "GetDebugState",
+      "proposed": "x64dbg_get_debug_state",
+      "read_only": true,
+      "debug_only": false,
+      "description": "Returns the current debugger state: whether a binary is loaded, whether it is running or paused, the PID, current instruction pointer, and current module. Alway"
+    },
+    {
+      "current": "LoadBinary",
+      "proposed": "x64dbg_load_binary",
+      "read_only": false,
+      "debug_only": false,
+      "description": "Loads an executable into the debugger for a new debugging session. Equivalent to File > Open in the GUI. If a session is already active it is terminated first. "
+    },
+    {
+      "current": "ExecuteDebuggerCommand",
+      "proposed": "x64dbg_execute_debugger_command",
+      "read_only": false,
+      "debug_only": false,
+      "description": "Executes a native x64dbg command string (like 'erun', 'analr', 'graph'). This is for x64dbg-internal commands ONLY — do NOT pass MCP tool names here. MCP tools "
+    },
+    {
+      "current": "ListCommandsByCategory",
+      "proposed": "x64dbg_list_commands_by_category",
+      "read_only": true,
+      "debug_only": false,
+      "description": "Lists the available MCP tools, optionally filtered to a single category."
+    },
+    {
+      "current": "SearchForStrings",
+      "proposed": "x64dbg_search_for_strings",
+      "read_only": true,
+      "debug_only": false,
+      "description": "Searches process memory for a specific text string and returns the addresses where it occurs."
+    },
+    {
+      "current": "GetEventLog",
+      "proposed": "x64dbg_get_event_log",
+      "read_only": true,
+      "debug_only": false,
+      "description": "Returns the last N debugger events (exceptions, breakpoints, DLL loads, thread events, etc.). Keeps the last 64 events in a ring buffer. Use this to see what ha"
+    },
+    {
+      "current": "ClearEventLog",
+      "proposed": "x64dbg_clear_event_log",
+      "read_only": false,
+      "debug_only": false,
+      "description": "Clears the event log ring buffer."
+    },
+    {
+      "current": "EvalExpression",
+      "proposed": "x64dbg_eval_expression",
+      "read_only": true,
+      "debug_only": false,
+      "description": "Evaluates an x64dbg expression (address, register, arithmetic, symbol) and returns the result in hex and decimal."
+    },
+    {
+      "current": "AttachProcess",
+      "proposed": "x64dbg_attach_process",
+      "read_only": false,
+      "debug_only": false,
+      "description": "Attaches the debugger to a running process by PID."
+    },
+    {
+      "current": "Echo",
+      "proposed": "x64dbg_echo",
+      "read_only": true,
+      "debug_only": false,
+      "description": "Echoes the input back to the client."
+    },
+    {
+      "current": "WaitForEvent",
+      "proposed": "x64dbg_wait_for_event",
+      "read_only": true,
+      "debug_only": false,
+      "description": "Blocks until a debugger event fires (breakpoint hit, paused, resumed, exception, session start/stop) or timeout. Returns all events that occurred. Use this to m"
+    },
+    {
+      "current": "GetCurrentAddress",
+      "proposed": "x64dbg_get_current_address",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Returns the current instruction pointer (EIP/RIP), the module it belongs to, and its label/comment. Takes no arguments."
+    },
+    {
+      "current": "ReadMemory",
+      "proposed": "x64dbg_read_memory",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Reads raw bytes from the target process memory and returns a hex dump with ASCII. Example: ReadMemory address=0x7FF600001000, size=128"
+    },
+    {
+      "current": "WaitForPause",
+      "proposed": "x64dbg_wait_for_pause",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Blocks until the debuggee stops running (hits a breakpoint, exception, or exits). Returns the reason for the pause and the current address. Use after 'run' to w"
+    },
+    {
+      "current": "run",
+      "proposed": "x64dbg_run",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Resumes execution and waits for the target to pause (breakpoint, exception, or exit). Blocks until a pause event occurs or timeout. Use timeoutMs to control how"
+    },
+    {
+      "current": "StepInto",
+      "proposed": "x64dbg_step_into",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Executes a single instruction, stepping INTO any call encountered (F7). Takes no arguments."
+    },
+    {
+      "current": "StepOver",
+      "proposed": "x64dbg_step_over",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Executes a single instruction, stepping OVER any call/subroutine entirely (F8). Takes no arguments."
+    },
+    {
+      "current": "StepOut",
+      "proposed": "x64dbg_step_out",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Runs until the current function returns to its caller (Ctrl+F9). Takes no arguments."
+    },
+    {
+      "current": "PauseDebug",
+      "proposed": "x64dbg_pause_debug",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Pauses (suspends) the running debuggee, equivalent to Debug > Pause (F12). Takes no arguments."
+    },
+    {
+      "current": "StopDebug",
+      "proposed": "x64dbg_stop_debug",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Terminates the current debugging session and closes the debuggee process. Takes no arguments."
+    },
+    {
+      "current": "RestartDebug",
+      "proposed": "x64dbg_restart_debug",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Restarts the current debugging session from the beginning. Takes no arguments."
+    },
+    {
+      "current": "SetBreakpoint",
+      "proposed": "x64dbg_set_breakpoint",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Sets a software execution breakpoint (INT3) at an address or API symbol."
+    },
+    {
+      "current": "DeleteBreakpoint",
+      "proposed": "x64dbg_delete_breakpoint",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Removes a breakpoint at an address or API symbol."
+    },
+    {
+      "current": "GetAllRegisters",
+      "proposed": "x64dbg_get_all_registers",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Returns the current values of all general-purpose registers. Takes no arguments."
+    },
+    {
+      "current": "GetCallStack",
+      "proposed": "x64dbg_get_call_stack",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Returns the current thread's call stack. Takes no arguments."
+    },
+    {
+      "current": "WriteMemToAddress",
+      "proposed": "x64dbg_write_mem_to_address",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Patches memory by writing raw hex bytes to an address. WARNING: this modifies the live process. Example: WriteMemToAddress address=0x12345678, byteString=0F FF "
+    },
+    {
+      "current": "CommentOrLabelAtAddress",
+      "proposed": "x64dbg_comment_or_label_at_address",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Adds a comment or a label at a specific address in the disassembly."
+    },
+    {
+      "current": "Disassemble",
+      "proposed": "x64dbg_disassemble",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Disassembles instructions at an address. Returns instruction mnemonics with addresses. Default: 10 instructions from current IP."
+    },
+    {
+      "current": "ListModules",
+      "proposed": "x64dbg_list_modules",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Lists all loaded modules (DLLs/EXE) with base addresses and sizes."
+    },
+    {
+      "current": "ListBreakpoints",
+      "proposed": "x64dbg_list_breakpoints",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Lists all active breakpoints (software, hardware, and memory)."
+    },
+    {
+      "current": "GetMemoryMap",
+      "proposed": "x64dbg_get_memory_map",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Returns the memory map showing all memory regions with base address, size, protection, and module info."
+    },
+    {
+      "current": "SetRegister",
+      "proposed": "x64dbg_set_register",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Sets the value of a CPU register."
+    },
+    {
+      "current": "GetThreads",
+      "proposed": "x64dbg_get_threads",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Lists all threads in the debugged process with IDs, instruction pointers, and names."
+    },
+    {
+      "current": "SwitchThread",
+      "proposed": "x64dbg_switch_thread",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Switches the debugger's active thread context to a different thread."
+    },
+    {
+      "current": "Assemble",
+      "proposed": "x64dbg_assemble",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Assembles an instruction at a specific address, replacing existing bytes."
+    },
+    {
+      "current": "GetImports",
+      "proposed": "x64dbg_get_imports",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Shows the import table of a loaded module."
+    },
+    {
+      "current": "GetExports",
+      "proposed": "x64dbg_get_exports",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Shows the export table of a loaded module."
+    },
+    {
+      "current": "SetHardwareBreakpoint",
+      "proposed": "x64dbg_set_hardware_breakpoint",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Sets a hardware breakpoint using debug registers (DR0-DR3). Supports read, write, and execute types."
+    },
+    {
+      "current": "SetMemoryBreakpoint",
+      "proposed": "x64dbg_set_memory_breakpoint",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Sets a memory breakpoint at an address. Triggers when memory is accessed (read/write/execute). Uses guard pages — slower than hardware breakpoints but no DR reg"
+    },
+    {
+      "current": "GetPatches",
+      "proposed": "x64dbg_get_patches",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Lists all memory patches applied to the debugged process."
+    },
+    {
+      "current": "FindPattern",
+      "proposed": "x64dbg_find_pattern",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Scans module memory for a byte pattern with ?? wildcards. Returns matching addresses. Example: FindPattern pattern='E8 ?? ?? ?? ?? 85 C0 74'"
+    },
+    {
+      "current": "GetStrings",
+      "proposed": "x64dbg_get_strings",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Scans a module's memory for ASCII strings and returns them with their addresses."
+    },
+    {
+      "current": "GetReferences",
+      "proposed": "x64dbg_get_references",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Finds code references (CALL/JMP) to a target address within a module."
+    },
+    {
+      "current": "GetFunctions",
+      "proposed": "x64dbg_get_functions",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Lists analyzed functions in a module with start addresses, sizes, and labels. Requires prior analysis (Ctrl+A in x64dbg)."
+    },
+    {
+      "current": "RunToAddress",
+      "proposed": "x64dbg_run_to_address",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Sets a temporary breakpoint at the target address, resumes execution, and waits for the debuggee to hit it."
+    },
+    {
+      "current": "TraceInto",
+      "proposed": "x64dbg_trace_into",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Single-steps N instructions recording the address and disassembly of each. Max 100."
+    },
+    {
+      "current": "SetConditionalBreakpoint",
+      "proposed": "x64dbg_set_conditional_breakpoint",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Sets a breakpoint with a condition expression and optional log text."
+    },
+    {
+      "current": "FollowPointer",
+      "proposed": "x64dbg_follow_pointer",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Dereferences a pointer chain N levels deep, showing each level's address and value with module info."
+    },
+    {
+      "current": "WatchExpressions",
+      "proposed": "x64dbg_watch_expressions",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Evaluates multiple x64dbg expressions at once and returns all results. Pass comma-separated expressions."
+    },
+    {
+      "current": "GetSEHChain",
+      "proposed": "x64dbg_get_seh_chain",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Walks the Structured Exception Handler chain (x32 only) and shows each handler's address and module."
+    },
+    {
+      "current": "GetPEB",
+      "proposed": "x64dbg_get_peb",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Reads key fields from the Process Environment Block: image base, being debugged, heaps, NtGlobalFlag, image path, command line."
+    },
+    {
+      "current": "GetArguments",
+      "proposed": "x64dbg_get_arguments",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Reads function arguments from the stack (x32: [ESP+4]...) or registers (x64: RCX,RDX,R8,R9...) at the current position."
+    },
+    {
+      "current": "DumpMemory",
+      "proposed": "x64dbg_dump_memory",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Saves a memory region to a file on disk."
+    },
+    {
+      "current": "AllocateMemory",
+      "proposed": "x64dbg_allocate_memory",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Allocates a block of memory in the target process."
+    },
+    {
+      "current": "FreeMemory",
+      "proposed": "x64dbg_free_memory",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Frees a previously allocated memory block in the target process."
+    },
+    {
+      "current": "EnableBreakpoint",
+      "proposed": "x64dbg_enable_breakpoint",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Enables a breakpoint at a given address."
+    },
+    {
+      "current": "DisableBreakpoint",
+      "proposed": "x64dbg_disable_breakpoint",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Disables a breakpoint at a given address without deleting it."
+    },
+    {
+      "current": "ToggleBreakpoint",
+      "proposed": "x64dbg_toggle_breakpoint",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Toggles a breakpoint between enabled and disabled."
+    },
+    {
+      "current": "DeleteAllBreakpoints",
+      "proposed": "x64dbg_delete_all_breakpoints",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Removes all breakpoints (normal, hardware, and memory)."
+    },
+    {
+      "current": "ResetHitCount",
+      "proposed": "x64dbg_reset_hit_count",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Resets the hit counter of a breakpoint at the given address to zero."
+    },
+    {
+      "current": "DisassembleFunction",
+      "proposed": "x64dbg_disassemble_function",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Disassembles an entire function by finding its start/end boundaries from the analysis database."
+    },
+    {
+      "current": "SearchSymbols",
+      "proposed": "x64dbg_search_symbols",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Searches for symbols (labels) matching a pattern in a module."
+    },
+    {
+      "current": "ListSymbols",
+      "proposed": "x64dbg_list_symbols",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Lists exported symbols of a module."
+    },
+    {
+      "current": "SuspendThread",
+      "proposed": "x64dbg_suspend_thread",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Suspends a thread by its thread ID."
+    },
+    {
+      "current": "ResumeThread",
+      "proposed": "x64dbg_resume_thread",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Resumes a suspended thread by its thread ID."
+    },
+    {
+      "current": "SetBookmark",
+      "proposed": "x64dbg_set_bookmark",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Sets a bookmark at the specified address."
+    },
+    {
+      "current": "DeleteBookmark",
+      "proposed": "x64dbg_delete_bookmark",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Deletes a bookmark at the specified address."
+    },
+    {
+      "current": "ListBookmarks",
+      "proposed": "x64dbg_list_bookmarks",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Lists all bookmarks with addresses and labels."
+    },
+    {
+      "current": "DumpModule",
+      "proposed": "x64dbg_dump_module",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Dumps an entire loaded module to a file on disk."
+    },
+    {
+      "current": "AnalyzeModule",
+      "proposed": "x64dbg_analyze_module",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Shows PE structure analysis: sections, entry point, image size, characteristics."
+    },
+    {
+      "current": "DetectOEP",
+      "proposed": "x64dbg_detect_oep",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Attempts to detect the Original Entry Point for packed executables by analyzing section characteristics."
+    },
+    {
+      "current": "GetDumpableRegions",
+      "proposed": "x64dbg_get_dumpable_regions",
+      "read_only": true,
+      "debug_only": true,
+      "description": "Lists memory regions that can be dumped (committed, readable) for a module or the entire process."
+    },
+    {
+      "current": "RestorePatches",
+      "proposed": "x64dbg_restore_patches",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Restores all patched bytes back to their original values."
+    },
+    {
+      "current": "SetExceptionBreakpoint",
+      "proposed": "x64dbg_set_exception_breakpoint",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Controls how an exception code is handled: break into debugger or pass to application. Use this to ignore Delphi (0EEDFADE), C++ (E06D7363), or other framework "
+    },
+    {
+      "current": "DeleteExceptionBreakpoint",
+      "proposed": "x64dbg_delete_exception_breakpoint",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Removes an exception breakpoint, restoring default handling for that exception code."
+    },
+    {
+      "current": "AnalyzeCode",
+      "proposed": "x64dbg_analyze_code",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Runs x64dbg code analysis on a module or address range. This populates the function list, enables GetFunctions/GetReferences/DisassembleFunction. Must be run be"
+    },
+    {
+      "current": "TraceOver",
+      "proposed": "x64dbg_trace_over",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Steps N instructions stepping OVER calls (like TraceInto but without diving into subroutines). Records address and disassembly of each step."
+    },
+    {
+      "current": "SetBreakpointCommand",
+      "proposed": "x64dbg_set_breakpoint_command",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Sets an x64dbg command to execute when a breakpoint at the given address is hit. Use for logging breakpoints (e.g., 'log {x:eax}' to log register values on hit)"
+    },
+    {
+      "current": "SetBreakpointFastResume",
+      "proposed": "x64dbg_set_breakpoint_fast_resume",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Makes a breakpoint auto-resume after hit without pausing. Combined with SetBreakpointCommand, creates logging breakpoints that record state at thousands of call"
+    },
+    {
+      "current": "SaveDatabase",
+      "proposed": "x64dbg_save_database",
+      "read_only": false,
+      "debug_only": true,
+      "description": "Saves the x64dbg database (labels, comments, breakpoints, analysis) for the current module. Persists your work across sessions."
+    }
+  ]
+}

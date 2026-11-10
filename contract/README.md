@@ -175,3 +175,35 @@ The x64dbg side still answers free-form English instead of the codes rule 3 asks
 for, and its tools still lack the `x64dbg_` prefix (mistake 1 in its own vocabulary).
 The configuration registers it as a **separate** server, which is what makes that
 tolerable today and what the vocabulary change fixes tomorrow.
+
+---
+
+## The x64dbg rename table — [`x64dbg-vocabulary.json`](x64dbg-vocabulary.json)
+
+[`vocabulary.json`](vocabulary.json) states the rule and says the x64dbg side does
+not follow it yet. This table is what following it costs, **read from the plugin's
+own registry** (`src/mcp/tools.zig`) rather than guessed from its documentation:
+
+| | |
+| --- | --- |
+| Tools | **80**, all 80 renamed |
+| Read-only | **36** — the flag that makes a call safe to retry, carried with the name |
+| Collisions with this repository | **0** |
+| Source | `danalec/x64dbg-mcp-server` at `9d7a93e`, protocol `2024-11-05` |
+| Status | **proposal** — this repository never edits the other one |
+
+The rule is mechanical: a PascalCase name is split into words at the capital that
+starts a new word, lower-cased, and prefixed. The split is the only place it can go
+wrong, and the test fixes the cases: `GetSEHChain` → `x64dbg_get_seh_chain` (SEH +
+Chain, not S + EHChain), `GetPEB` → `x64dbg_get_peb`, `DetectOEP` →
+`x64dbg_detect_oep`.
+
+The other repository is **not** a dependency of this one: the generator is run where
+it is checked out, the table is committed, and the guard validates the committed
+table when the repository is absent (CI). A colleague can adopt the rename from this
+file without running anything.
+
+```bash
+python scripts/gen_x64dbg_vocabulary.py            # regenerate (needs the checkout)
+python scripts/gen_x64dbg_vocabulary.py --check    # fail when stale
+```

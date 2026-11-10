@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **The x64dbg rename table, generated from its own registry**
+  ([`contract/x64dbg-vocabulary.json`](contract/x64dbg-vocabulary.json)):
+  `contract/vocabulary.json` says the rule and that the x64dbg side does not follow
+  it; this is what following it costs — **80 tools, all 80 renamed**, with the
+  **36** read-only flags carried across and **zero collisions** with the tools this
+  repository already has. Read from `danalec/x64dbg-mcp-server`'s
+  `src/mcp/tools.zig` at `9d7a93e` (protocol `2024-11-05`), not from its README.
+  The split is the only place the rule can go wrong, so the test fixes the cases:
+  `GetSEHChain` → `x64dbg_get_seh_chain` (SEH + Chain, not S + EHChain), `GetPEB`,
+  `DetectOEP`. The other repository is not a dependency of this one: the generator
+  runs where it is checked out, the table is committed, and the guard **validates
+  the committed table** when the repository is absent, which is what CI does — so
+  the check is honest in both states instead of failing on a fresh clone.
 - **The gateway: the cross-tool workflow as MCP tools** (`ghydra-gateway`): a
   separate MCP server on stdio — its own console script, not a subcommand, because a
   server on stdio must own stdout and the CLI's root command prints — exposing the

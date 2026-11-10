@@ -213,6 +213,31 @@ def documented_commands_problems() -> list:
     return problems
 
 
+def x64dbg_vocabulary_problems() -> list:
+    """The rename table must be current — or, without the plugin repo, consistent."""
+    try:
+        module = _load_script("gen_x64dbg_vocabulary")
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load scripts/gen_x64dbg_vocabulary.py: {failure}"]
+    if not module.repository():
+        # The other repository is not a dependency of this one: validate what is
+        # committed instead of pretending it was regenerated.
+        if not os.path.exists(module.DOCUMENT):
+            return ["contract/x64dbg-vocabulary.json is missing"]
+        code = module.check(module.DOCUMENT)
+        return [] if code == 0 else ["the committed x64dbg vocabulary is inconsistent"]
+    try:
+        rendered = module.render(module.repository())
+    except Exception as failure:  # noqa: BLE001
+        return [f"the x64dbg vocabulary cannot be generated: {failure}"]
+    with open(module.DOCUMENT, encoding="utf-8") as handle:
+        current = handle.read()
+    if rendered != current:
+        return ["contract/x64dbg-vocabulary.json is stale: "
+                "run scripts/gen_x64dbg_vocabulary.py"]
+    return []
+
+
 def cheatsheet_current_problems() -> list:
     """The generated cheat sheet must match the CLI."""
     try:
@@ -372,6 +397,7 @@ def main() -> int:
     problems.extend(errors_current_problems())
     problems.extend(documented_commands_problems())
     problems.extend(cheatsheet_current_problems())
+    problems.extend(x64dbg_vocabulary_problems())
     if not version_copy_ok():
         problems.append(
             "ghydra/x64dbg.py must use __version__ (scripts/version.py's sixth copy)")
