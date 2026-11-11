@@ -164,7 +164,7 @@ class BSimStatusTests(unittest.TestCase):
             "available": True, "database": None, "database_exists": False,
             "ready": False,
             "reason": "no signature database is configured; set "
-                      "-Dghydra.bsim.database=<path>"}})
+                      "-Dghidra.bsim.database=<path>"}})
         self.assertIn("not ready", text)
         self.assertIn("no signature database is configured", text)
 

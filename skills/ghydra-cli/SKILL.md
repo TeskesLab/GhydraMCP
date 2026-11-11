@@ -180,7 +180,7 @@ ghydra scalars search 0x80 --in-function main  # Find 0x80 in main's function
 The old single-`script` command group and the `/script/execute` route were
 removed in v3.0.0 — they are not valid commands. Use the `scripts` group below;
 it stays disabled server-side unless Ghidra is started with
-`-Dghydra.dev.allowScripts=true` (or `GHYDRA_ALLOW_SCRIPTS=1`).
+`-Dghidra.dev.allowScripts=true` (or `GHYDRA_ALLOW_SCRIPTS=1`).
 
 ```bash
 ghydra scripts list                                     # Available scripts

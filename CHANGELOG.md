@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **An address outside the image never reaches the debugger.** `EXTERNAL:00000010`
+  is an external symbol index, and dropping the space prefix turned it into
+  `0x10`: the identity guard passed and the debugger was told to set a
+  breakpoint at `image_base + 0x10` — an address in the module that has nothing
+  to do with the symbol. The space is kept now, reported by `target_locate`, and
+  a breakpoint or a run to an address in another space is refused with
+  `TARGET_NOT_IN_IMAGE` **before** anything is written or resumed.
+- **A name that reads as hexadecimal is a name.** The decision whether the
+  caller's text was an address used the wire parser, and `add`, `dec` and `f`
+  are hexadecimal to it — and `math::add` became `add` after the last colon. So
+  `target locate add` went to `GET /functions/add` and came back not found,
+  while `GET /functions/by-name/add` had the function all along. The address
+  path is tried first — a bare `401000` is an address — and a miss falls back
+  to the name endpoint.
+- **A capped import listing makes no removal claim.** The twin's `build()`
+  capped the imports by the same limit as the functions and wrote no truncation
+  flag for them, so the comparison read a flag that was never written and
+  reported the removal of an import it had simply not read.
+- **The re-ingest count is of the one executable.** `DescriptionManager.numFunctions()`
+  counts every description in the manager, and with `track_call_graph` Ghidra
+  12.2's `GenSignatures.writeToManager()` adds the imported-library callees to
+  that same manager — so a fully stored program with one function calling an
+  imported `Sleep` compared stored=1 against expected=2 and was reported as an
+  incomplete ingest. The count is now the one of this executable, which is
+  what the store holds.
+- **Three switches were misspelled, so the documented ones did nothing.**
+  `ghidra.dev.allowScripts`, `ghidra.dev.allowShutdown` and
+  `ghidra.bsim.database` were read with a `y` where the documentation has an
+  `i`: the plugin refused the endpoint and the message it printed named a
+  switch that worked. The names are one spelling now, and a guard pins the
+  switches the documentation names against the ones the code reads.
+- **`/scripts/run` runs a script that touches the script framework.** The
+  bundle host belongs to the Script Manager plugin, which is not enabled in
+  every instance, so resolving a script's class died with a
+  `NullPointerException` before the script ran. The service holds a reference
+  of its own while the script runs.
+
+### Added
+
+- **The extension builds without Maven.** `scripts/build_extension.py` compiles
+  the sources, merges the runtime dependencies through
+  `scripts/make_uberjar.py` and lays out the extension directory exactly as
+  `src/assembly/ghidra-extension.xml` describes it — for the machines that have
+  a JDK and no Maven.
+- **The plugin says which flags it saw.** A user who sets a switch and finds
+  the endpoint still refusing can read the property name, the environment
+  variable and the verdict in the log.
+
 ### Added
 - **The BSim query was written twice.** The executable filter has to travel
   inside the query — BSim applies it in its SQL layer, so the match limit is
@@ -1063,7 +1113,7 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 ### Breaking changes
 - **REST API 3000:** the plugin now uses Javalin/Jetty with service, DTO, and resource layers instead of the JDK HTTP server. Upgrade the plugin and Python bridge together; the bridge requires an exact API-version match.
 - **Fully-qualified names:** function, symbol, data-label, variable, and xref responses use namespace-qualified names such as `FOM::SharedMemory::ReadUInt`. Function and symbol responses no longer include a separate `namespace` field. Lookups and filters use the full name; bare names resolve only in the global namespace. URL-encode names in REST paths. Renaming to `A::B::name` moves the symbol into that namespace; `::name` or `Global::name` moves it to the global namespace. Local variable names remain bare and reject `::`.
-- **Script API replacement:** the former PyGhidra `/script/execute` and `/script/capabilities` routes and `script_execute` / `script_capabilities` MCP tools are replaced by `/scripts`, `/scripts/run`, and `scripts_list` / `scripts_run`. Use `ghydra scripts list` / `run` instead of the former `script` commands. Script endpoints are disabled by default; enable them with `-Dghydra.dev.allowScripts=true` or `GHYDRA_ALLOW_SCRIPTS=1`. This permits arbitrary code execution; enable it only in a trusted environment.
+- **Script API replacement:** the former PyGhidra `/script/execute` and `/script/capabilities` routes and `script_execute` / `script_capabilities` MCP tools are replaced by `/scripts`, `/scripts/run`, and `scripts_list` / `scripts_run`. Use `ghydra scripts list` / `run` instead of the former `script` commands. Script endpoints are disabled by default; enable them with `-Dghidra.dev.allowScripts=true` or `GHYDRA_ALLOW_SCRIPTS=1`. This permits arbitrary code execution; enable it only in a trusted environment.
 - **CLI variable editing:** the duplicate `ghydra functions update-variable` command is removed. Use `ghydra functions set-variable` with `--variable` and `--data-type`. The `functions_update_variable` MCP tool and variable PATCH endpoint remain available.
 
 ### Added
@@ -1071,7 +1121,7 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 - **Raw image rendering:** `POST /raw-image/define` (`raw_image_define` MCP tool, `ghydra raw-image define`) creates a `RawImage` data type at an address so captured framebuffers render inline in the Listing. Supports 9 pixel formats (RGB565, RGB888, ARGB8888, RGB332, ARGB4444, 1bpp, 2bpp, 4bpp, 8bpp) plus little/big endian. Backed by a new `RawImage` built-in DataType with width/height/format settings.
 - **Program saving:** `POST /program/save`, `programs_save`, and `ghydra project save-program` persist analysis changes. `all=true` / `--all` saves every open program with unsaved changes.
 - **Ghidra script execution:** list and run installed scripts, or run ad-hoc GhidraScript source with arguments and captured output, through the replacement script API.
-- **Development shutdown:** `POST /dev/shutdown` supports automated restart workflows. It requires `-Dghydra.dev.allowShutdown=true` or `GHYDRA_DEV_SHUTDOWN=1` and refuses unsaved changes with HTTP 409 unless `save=true` or `force=true` is supplied.
+- **Development shutdown:** `POST /dev/shutdown` supports automated restart workflows. It requires `-Dghidra.dev.allowShutdown=true` or `GHYDRA_DEV_SHUTDOWN=1` and refuses unsaved changes with HTTP 409 unless `save=true` or `force=true` is supplied.
 - **Database-backed variable listing:** `variables_list` defaults to `source=database` for committed locals and parameters with exact pagination; `source=decompiler` includes inferred locals with approximate pagination.
 - **Release tooling:** `scripts/prepare_release.py` updates all five version locations and dates the changelog section. Shared version and release-note checks reject inconsistent versions and missing or empty release notes.
 - **Release assets:** GitHub and Forgejo release workflows attach `SHA256SUMS` and verify that the release and its assets exist after publication.
@@ -1106,10 +1156,10 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 
 ### Added
 - **`analysis` link on `/program`:** the program resource now advertises an `analysis` link (to `/analysis/status`) for HATEOAS discoverability.
-- **Run Ghidra scripts via the API:** `GET /scripts` (list) and `POST /scripts/run` (run an existing script by `name`, or compile and run ad-hoc GhidraScript `source`, with `args`), plus `scripts_list`/`scripts_run` bridge tools and `ghydra scripts list`/`run`. Captures the script's output. Lets an agent do multi-stage/batch work (mass rename, signature transfer) in one call. Arbitrary code execution, so it is disabled unless the server is started with `-Dghydra.dev.allowScripts=true` (or `GHYDRA_ALLOW_SCRIPTS=1`). (#3)
+- **Run Ghidra scripts via the API:** `GET /scripts` (list) and `POST /scripts/run` (run an existing script by `name`, or compile and run ad-hoc GhidraScript `source`, with `args`), plus `scripts_list`/`scripts_run` bridge tools and `ghydra scripts list`/`run`. Captures the script's output. Lets an agent do multi-stage/batch work (mass rename, signature transfer) in one call. Arbitrary code execution, so it is disabled unless the server is started with `-Dghidra.dev.allowScripts=true` (or `GHYDRA_ALLOW_SCRIPTS=1`). (#3)
 - **Scalar search:** find constant values in instructions (`GET /scalars`, `scalars_search` bridge tool, `ghydra scalars search`), like Ghidra's "Search For Scalars". Filter by containing function (`in_function`) or by a nearby called function (`to_function`, e.g. the `0` passed to `memset`). The `in_function` filter scans only the matching functions; unfiltered scans on large programs are time-bounded and report `scanTruncated`. Reimplemented from PR #17 against the Javalin layer. (#17)
 - **Save endpoint:** `POST /program/save` persists the current program to the project (`?all=true` saves every open program with unsaved changes).
-- **Dev-only shutdown endpoint:** `POST /dev/shutdown` quits Ghidra so the build/deploy/restart loop can be automated. Off by default; enable with `-Dghydra.dev.allowShutdown=true` or `GHYDRA_DEV_SHUTDOWN=1`. With unsaved changes it refuses (409) unless `?save=true` (save, then exit) or `?force=true` (discard, then exit).
+- **Dev-only shutdown endpoint:** `POST /dev/shutdown` quits Ghidra so the build/deploy/restart loop can be automated. Off by default; enable with `-Dghidra.dev.allowShutdown=true` or `GHYDRA_DEV_SHUTDOWN=1`. With unsaved changes it refuses (409) unless `?save=true` (save, then exit) or `?force=true` (discard, then exit).
 
 ### Fixed
 - **HATEOAS links:** templated links with a single string argument (an address or name) emitted a literal `{}` href with the value misplaced into a `method` field; they now substitute correctly across all endpoints. Action links use a new `linkWithMethod`.

@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.37.7"
+BRIDGE_VERSION = "v3.38.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -9634,7 +9634,7 @@ def scripts_list(port: int | None = None) -> dict:
     """List Ghidra scripts available to run
 
     Requires the server started with script execution enabled
-    (-Dghydra.dev.allowScripts=true or GHYDRA_ALLOW_SCRIPTS=1); otherwise returns 403.
+    (-Dghidra.dev.allowScripts=true or GHYDRA_ALLOW_SCRIPTS=1); otherwise returns 403.
 
     Args:
         port: Specific Ghidra instance port (optional)
@@ -9663,7 +9663,7 @@ def scripts_run(name: str | None = None, source: str | None = None,
     Ghidra launched via pyghidraRun, not just the installed extension.
 
     WARNING: this is arbitrary code execution. It requires the server started with
-    -Dghydra.dev.allowScripts=true (or GHYDRA_ALLOW_SCRIPTS=1); otherwise returns 403.
+    -Dghidra.dev.allowScripts=true (or GHYDRA_ALLOW_SCRIPTS=1); otherwise returns 403.
 
     Args:
         name: Name of an existing script (e.g. "MyScript.java" or "Probe.py")
@@ -13153,7 +13153,7 @@ def bsim_status(port: int | None = None) -> dict:
 
     BSim is a Ghidra feature, not a plugin API, so it is discovered by loading
     the class: a build may ship without it. The database is configuration
-    (-Dghydra.bsim.database or GHYDRA_BSIM_DATABASE), and the answer names it
+    (-Dghidra.bsim.database or GHYDRA_BSIM_DATABASE), and the answer names it
     rather than pretending a query would work.
 
     Args:
@@ -13173,7 +13173,7 @@ def bsim_ingest(max_functions: int = 0, track_call_graph: bool = False,
     """Generate BSim signatures for this program and insert them into the database
 
     Ingests the *open* program: every function with a body is decompiled and its
-    signature stored in the configured database (-Dghydra.bsim.database or
+    signature stored in the configured database (-Dghidra.bsim.database or
     GHYDRA_BSIM_DATABASE), which is created when it does not exist yet. That is
     what makes a signature query possible later, and what a corpus is built from.
 
@@ -13224,7 +13224,7 @@ def bsim_query(address: str = "", name: str = "", min_similarity: float = 0.0,
     A match is a **lead, not an identification**: similarity 1.0 means the bytes
     of the two functions' vectors are the same, not that they are the same
     source. The corpus is whatever was ingested into the configured database
-    (-Dghydra.bsim.database or GHYDRA_BSIM_DATABASE).
+    (-Dghidra.bsim.database or GHYDRA_BSIM_DATABASE).
 
     Args:
         address: The function address to ask about

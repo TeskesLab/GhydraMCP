@@ -276,7 +276,7 @@ ghydra instances unregister --port 8195
 ### Scripts Commands
 
 Run Java GhidraScript or Python 3 (PyGhidra) scripts. Disabled server-side by
-default: start Ghidra with `-Dghydra.dev.allowScripts=true` (or
+default: start Ghidra with `-Dghidra.dev.allowScripts=true` (or
 `GHYDRA_ALLOW_SCRIPTS=1`). Running a script is arbitrary code execution.
 
 ```bash
@@ -1326,7 +1326,7 @@ ghydra --json bsim status
 BSim is a Ghidra **feature**, not a plugin API, so the plugin discovers it by
 loading the class — a build may ship without it, and `available: false` is a
 normal answer, not an error. The signature database is configuration
-(`-Dghydra.bsim.database=<path>` on the Ghidra side, or the
+(`-Dghidra.bsim.database=<path>` on the Ghidra side, or the
 `GHYDRA_BSIM_DATABASE` environment variable); `ready` is true only when the
 engine is present *and* a database is named, and `reason` says what is missing
 otherwise.

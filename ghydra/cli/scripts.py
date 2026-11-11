@@ -12,7 +12,7 @@ from ..utils import should_page, page_output, rich_echo
 def scripts():
     """Run Ghidra scripts (must be enabled on the server).
 
-    Requires the Ghidra plugin started with -Dghydra.dev.allowScripts=true (or
+    Requires the Ghidra plugin started with -Dghidra.dev.allowScripts=true (or
     GHYDRA_ALLOW_SCRIPTS=1). Running a script is arbitrary code execution.
     """
     pass

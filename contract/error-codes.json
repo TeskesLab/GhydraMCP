@@ -12,7 +12,7 @@
     "success_field": "success"
   },
   "counts": {
-    "codes": 120,
+    "codes": 121,
     "families": 38
   },
   "codes": [
@@ -637,14 +637,14 @@
       "side": "Java",
       "http_status": "500",
       "message": "Save before shutdown failed (not shutting down):",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/DevResource.java:78`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/DevResource.java:84`"
     },
     {
       "code": "SCRIPTS_DISABLED",
       "side": "Java",
       "http_status": "403",
-      "message": "Script execution is disabled. Start Ghidra with -Dghydra.dev.allowScripts=true",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/ScriptResource.java:82`"
+      "message": "Script execution is disabled. Start Ghidra with -D",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/ScriptResource.java:88`"
     },
     {
       "code": "SESSION_ALREADY",
@@ -678,8 +678,8 @@
       "code": "SHUTDOWN_DISABLED",
       "side": "Java",
       "http_status": "403",
-      "message": "Dev shutdown is disabled. Start Ghidra with -Dghydra.dev.allowShutdown=true",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/DevResource.java:61`"
+      "message": "Dev shutdown is disabled. Start Ghidra with -D",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/DevResource.java:67`"
     },
     {
       "code": "TAINT_READ_FAILED",
@@ -703,6 +703,13 @@
       "origin": "`ghydra/target.py:215`"
     },
     {
+      "code": "TARGET_NOT_IN_IMAGE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:221`"
+    },
+    {
       "code": "TARGET_NOT_LOADED",
       "side": "Python",
       "http_status": null,
@@ -721,7 +728,7 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/target.py:218`"
+      "origin": "`ghydra/target.py:222`"
     },
     {
       "code": "TARGET_NO_PROGRAM",
@@ -791,7 +798,7 @@
       "side": "Java",
       "http_status": "409",
       "message": "Refusing to shut down:",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/DevResource.java:86`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/DevResource.java:92`"
     },
     {
       "code": "X64DBG_BAD_ARGS",

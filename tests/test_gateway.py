@@ -56,9 +56,18 @@ class FakeGhidra:
                         "result": {"name": "main", "address": "140001234",
                                    "signature": "int main(void)"}}
             return {"success": False, "result": None}
-        return {"success": True,
-                "result": {"name": "main", "address": "140001234",
-                           "signature": "int main(void)"}}
+        if endpoint.startswith("functions/"):
+            # The server parses the segment as an address, and the function is
+            # the one at that address.
+            segment = endpoint.rsplit("/", 1)[-1].strip()
+            if segment.lower().startswith("0x"):
+                segment = segment[2:]
+            if segment.lower() == "140001234":
+                return {"success": True,
+                        "result": {"name": "main", "address": "140001234",
+                                   "signature": "int main(void)"}}
+            return {"success": False, "result": None}
+        return {"success": False, "result": None}
 
 
 class FakeDebugger:

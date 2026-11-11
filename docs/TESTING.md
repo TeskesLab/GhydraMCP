@@ -99,6 +99,7 @@ python run_tests.py --cli-failures  # every command, with nothing serving: none 
 python run_tests.py --bridge-tools  # every bridge tool, called with nothing serving
 python run_tests.py --formatters    # every formatter, with the answer of its own tool
 python run_tests.py --formatter-interface  # the base formatter and its two children agree
+python run_tests.py --flag-names     # the switches the docs name are the ones the code reads
 python run_tests.py --no-ghidra     # ALL suites that need no Ghidra (CI's set)
 python run_tests.py --surface --scripts   # several flags can be combined
 ```

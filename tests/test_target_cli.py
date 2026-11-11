@@ -66,6 +66,23 @@ class TargetCommandTests(unittest.TestCase):
                     "result": {"functionName": "main",
                                "functionAddress": "140001234",
                                "decompilation": "int main(void) { return 0; }"}}
+        if route.startswith("functions/by-name/"):
+            name = route.rsplit("/", 1)[-1]
+            if name != "main":
+                return {"success": False,
+                        "error": {"code": "FUNCTION_NOT_FOUND", "message": "no"}}
+            return {"success": True, "result": FUNCTION}
+        if route.startswith("functions/"):
+            segment = route.rsplit("/", 1)[-1]
+            if segment.lower().startswith("0x"):
+                segment = segment[2:]
+            if segment.lower() != "140001234":
+                # The server parses the segment as an address, and a name is
+                # not one.
+                return {"success": False,
+                        "error": {"code": "BAD_REQUEST",
+                                  "message": "Invalid address: " + segment}}
+            return {"success": True, "result": FUNCTION}
         return {"success": True, "result": FUNCTION}
 
     def _invoke(self, arguments, debugger=None, answer=None):

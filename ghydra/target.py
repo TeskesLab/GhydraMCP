@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 CONTRACT_VERSION = 1
 
@@ -215,6 +215,10 @@ ERROR_NOT_LOADED = "TARGET_NOT_LOADED"
 ERROR_NOT_FOUND = "TARGET_NOT_FOUND"
 ERROR_NOT_SAME_BINARY = "TARGET_NOT_SAME_BINARY"
 ERROR_BAD_ADDRESS = "TARGET_BAD_ADDRESS"
+#: An address that is not in the program's image — an external symbol, or a
+#: function in another address space. Translating it would put a breakpoint or
+#: a resume in the wrong place, so it is refused before anything is written.
+ERROR_NOT_IN_IMAGE = "TARGET_NOT_IN_IMAGE"
 ERROR_NO_CODE = "TARGET_NO_CODE"
 
 
@@ -262,35 +266,51 @@ def _modules(debugger_client) -> List[Dict[str, Any]]:
     return debugger.parse_modules(text)
 
 
-def _function(ghidra_client, target: str) -> Dict[str, Any]:
-    """One function, by address (`0x…`) or by name."""
+#: The answers that mean "there is nothing at that address", and that the
+#: name endpoint may still have. The server answers a bad address with 400
+#: `BAD_REQUEST`, and a missing function with 404 `FUNCTION_NOT_FOUND`.
+_MISSING = ("NOT_FOUND", "BAD_REQUEST", "BAD_ADDRESS", "INVALID")
+
+
+def _function(ghidra_client, target: str) -> Tuple[Dict[str, Any], str]:
+    """One function, by address (`0x…`) or by name.
+
+    The address path is tried first — a bare `401000` is an address — and a
+    miss falls back to the name endpoint. The reverse order would break the
+    bare hexadecimal addresses, and the disambiguation cannot be done by
+    parsing: `add`, `dec` and `f` are hexadecimal to the wire parser and names
+    to Ghidra, and `math::add` is a qualified name whose last colon is not an
+    address space.
+    """
     from urllib.parse import quote
 
     text = str(target or "").strip()
     if not text:
         raise TargetError("no function was named", ERROR_NOT_FOUND)
-    address = _parse_address(text)
-    endpoint = (f"functions/{text}" if address is not None
-                else f"functions/by-name/{quote(text, safe='')}")
-    try:
-        envelope = ghidra_client.get(endpoint)
-    except Exception as exc:  # noqa: BLE001
-        # The client raises on a non-2xx, so the code it carries is the honest
-        # answer: a function that is not there is NOT_FOUND, an instance that
-        # does not answer is NO_PROGRAM. They call for different actions.
-        code = str(getattr(exc, "code", "") or "")
-        if "NOT_FOUND" in code:
-            raise TargetError(f"no function matches {target!r}", ERROR_NOT_FOUND)
-        raise TargetError(
-            f"the Ghidra instance did not answer: {_reason(exc)}",
-            ERROR_NO_PROGRAM)
-    result = (envelope or {}).get("result")
-    if not isinstance(result, dict) or not result:
-        raise TargetError(f"no function matches {target!r}", ERROR_NOT_FOUND)
-    if not result.get("address"):
-        raise TargetError(f"the function {target!r} has no address",
-                          ERROR_BAD_ADDRESS)
-    return result
+    candidates = [("address", f"functions/{text}"),
+                  ("name", f"functions/by-name/{quote(text, safe='')}")]
+    for matched_by, endpoint in candidates:
+        try:
+            envelope = ghidra_client.get(endpoint)
+        except Exception as exc:  # noqa: BLE001
+            # The client raises on a non-2xx, so the code it carries is the
+            # honest answer: a function that is not there is NOT_FOUND, an
+            # instance that does not answer is NO_PROGRAM. They call for
+            # different actions — and only the first one is worth a fallback.
+            code = str(getattr(exc, "code", "") or "")
+            if any(marker in code for marker in _MISSING):
+                continue
+            raise TargetError(
+                f"the Ghidra instance did not answer: {_reason(exc)}",
+                ERROR_NO_PROGRAM)
+        result = (envelope or {}).get("result")
+        if not isinstance(result, dict) or not result:
+            continue
+        if not result.get("address"):
+            raise TargetError(f"the function {target!r} has no address",
+                              ERROR_BAD_ADDRESS)
+        return result, matched_by
+    raise TargetError(f"no function matches {target!r}", ERROR_NOT_FOUND)
 
 
 # ------------------------------------------------------------------ the workflow
@@ -310,7 +330,7 @@ def describe(ghidra_client, debugger_client) -> TargetDescriptor:
 
 def locate(ghidra_client, target: str) -> Dict[str, Any]:
     """`function_locate`: the static address of a function, by name or address."""
-    function = _function(ghidra_client, target)
+    function, matched_by = _function(ghidra_client, target)
     # `FunctionDto` serialises `getEntryPoint().toString()`: unprefixed hexadecimal.
     address = _ghidra_int(function.get("address"))
     if address is None:
@@ -320,11 +340,29 @@ def locate(ghidra_client, target: str) -> Dict[str, Any]:
         "name": function.get("name"),
         "signature": function.get("signature"),
         "static_address": hex(address),
-        "matched_by": ("address" if _parse_address(target) is not None else "name"),
+        # The space is part of the address: `EXTERNAL:00000010` is not an
+        # offset in the image, and a caller that asks where a symbol is has to
+        # be told that.
+        "address_space": _ghidra_space(function.get("address")),
+        "matched_by": matched_by,
         # The API's function detail carries no size; saying so is better than a
         # number nobody measured.
         "size": None,
     }
+
+
+def _in_image(found: Dict[str, Any]) -> Optional[str]:
+    """The address space of a located function, when it is not the default one.
+
+    `None` means the address is in the program's image — the only place a
+    debugger address can be translated to. Ghidra prints the space only when
+    it is not the default one, so a space that is there is a space that is not
+    the image.
+    """
+    space = found.get("address_space")
+    if not space:
+        return None
+    return str(space)
 
 
 def breakpoint(ghidra_client, debugger_client, target: str,
@@ -348,6 +386,13 @@ def breakpoint(ghidra_client, debugger_client, target: str,
             ERROR_NOT_SAME_BINARY)
 
     found = locate(ghidra_client, target)
+    space = _in_image(found)
+    if space is not None:
+        raise TargetError(
+            f"the function {found.get('name') or target!r} is in the address "
+            f"space {space!r}, not in the program's image, so it has no "
+            "address to translate into the debugger",
+            ERROR_NOT_IN_IMAGE)
     static_address = _ghidra_int(found["static_address"])
     runtime = descriptor.to_runtime(static_address)
     plan = {"tool": "SetBreakpoint", "arguments": {"target": hex(runtime)}}
@@ -430,6 +475,13 @@ def run_to(ghidra_client, debugger_client, target: str,
             ERROR_NOT_SAME_BINARY)
 
     found = locate(ghidra_client, target)
+    space = _in_image(found)
+    if space is not None:
+        raise TargetError(
+            f"the function {found.get('name') or target!r} is in the address "
+            f"space {space!r}, not in the program's image, so it has no "
+            "address to run to",
+            ERROR_NOT_IN_IMAGE)
     static_address = _ghidra_int(found["static_address"])
     runtime = descriptor.to_runtime(static_address)
     plan = {"tool": "RunToAddress",
@@ -498,6 +550,24 @@ def _ghidra_int(value: Any) -> Optional[int]:
         return int(text, 16)
     except ValueError:
         return None
+
+
+def _ghidra_space(value: Any) -> Optional[str]:
+    """The address space of a Ghidra address, or None for the default one.
+
+    `Address.toString()` prefixes the space only when it is not the default
+    one: an ordinary address is `00401000`, an external symbol is
+    `EXTERNAL:00000010`, and a function in another space carries that space's
+    name. **Only the default space is in the image**, so only the default space
+    can be translated into a debugger address.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if ":" not in text:
+        return None
+    space = text.rsplit(":", 1)[0].strip()
+    return space or None
 
 
 def _parse_address(value: Any) -> Optional[int]:

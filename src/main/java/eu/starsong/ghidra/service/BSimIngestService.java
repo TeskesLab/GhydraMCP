@@ -351,8 +351,16 @@ public final class BSimIngestService {
         // A scan that covered the whole program says exactly how many
         // signatures the corpus should hold; a capped scan does not, and the
         // program itself is then the only honest yardstick.
-        int expected = scanned >= discovered ? described
+        //
+        // The count is the one of THIS executable: `numFunctions()` counts every
+        // description in the manager, and the imported-library callees that
+        // `track_call_graph` adds to it are not this program's signatures.
+        int scoped = describedForExecutable(description, md5);
+        int expected = scanned >= discovered ? (scoped >= 0 ? scoped : described)
             : countFunctionsWithBody(program);
+        if (scoped >= 0) {
+            data.put("described_functions_for_executable", Integer.valueOf(scoped));
+        }
         data.put("stored_executable_md5", md5);
         data.put("stored_functions", stored < 0 ? null : Integer.valueOf(stored));
         data.put("expected_functions", Integer.valueOf(expected));
@@ -417,18 +425,11 @@ public final class BSimIngestService {
      * @return the fingerprint, or null when it could not be determined
      */
     private static String executableMd5(Object description, Program program) {
-        Object records = BSimDatabase.call(description, "getExecutableRecordSet");
-        if (records instanceof Iterable) {
-            for (Object record : (Iterable<?>) records) {
-                if (Boolean.TRUE.equals(BSimDatabase.call(record, "isLibrary"))) {
-                    // A library is inserted in pieces on purpose; it is not the
-                    // executable this program was ingested as.
-                    continue;
-                }
-                String md5 = (String) BSimDatabase.call(record, "getMd5");
-                if (md5 != null && md5.length() >= 10) {
-                    return md5;
-                }
+        Object record = executableRecord(description);
+        if (record != null) {
+            String md5 = (String) BSimDatabase.call(record, "getMd5");
+            if (md5 != null && md5.length() >= 10) {
+                return md5;
             }
         }
         try {
@@ -440,6 +441,74 @@ public final class BSimIngestService {
             // The program cannot name its own fingerprint.
         }
         return null;
+    }
+
+    /**
+     * The record of the executable this program was ingested as.
+     *
+     * <p>The manager holds a record per executable, and a library is inserted in
+     * pieces on purpose — so the library records are not the executable this
+     * program was ingested as, and they are skipped.
+     *
+     * @param description the signatures that were generated for the program
+     * @return the record, or null when the manager holds none
+     */
+    private static Object executableRecord(Object description) {
+        Object records = BSimDatabase.call(description, "getExecutableRecordSet");
+        if (records instanceof Iterable) {
+            for (Object record : (Iterable<?>) records) {
+                if (Boolean.TRUE.equals(BSimDatabase.call(record, "isLibrary"))) {
+                    // A library is inserted in pieces on purpose; it is not the
+                    // executable this program was ingested as.
+                    continue;
+                }
+                return record;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * How many of the generated signatures belong to this executable.
+     *
+     * <p>`numFunctions()` counts every description in the manager, and with
+     * `track_call_graph` the imported-library callees are added to the same
+     * manager — so the total counts signatures of other executables too. The
+     * store is per executable, so the count the store is measured against has to
+     * be too.
+     *
+     * @param description the signatures that were generated for the program
+     * @param md5         the fingerprint of the executable
+     * @return the number of this executable's signatures, or -1 when it cannot
+     *         be read
+     */
+    static int describedForExecutable(Object description, String md5) {
+        if (description == null || md5 == null || md5.isBlank()) {
+            return -1;
+        }
+        Object record = executableRecord(description);
+        if (record == null) {
+            return -1;
+        }
+        Object listed = BSimDatabase.call(description, "listFunctions", record);
+        int count = 0;
+        if (listed instanceof java.util.Iterator) {
+            // `listFunctions` answers an Iterator, and an Iterator is not an
+            // Iterable — it is the other way round.
+            java.util.Iterator<?> iterator = (java.util.Iterator<?>) listed;
+            while (iterator.hasNext()) {
+                iterator.next();
+                count++;
+            }
+            return count;
+        }
+        if (listed instanceof Iterable) {
+            for (Object ignored : (Iterable<?>) listed) {
+                count++;
+            }
+            return count;
+        }
+        return -1;
     }
 
     /**

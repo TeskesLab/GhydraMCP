@@ -4,7 +4,7 @@ Every error code the plugin and the clients answer with, where it is raised
 and what it means. **Generated** from the source by
 `scripts/gen_errors_doc.py`; a test fails when it drifts.
 
-**120 codes** in 18 families. A code is a contract: a
+**121 codes** in 18 families. A code is a contract: a
 client branches on it, a test asserts it, and
 [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md) explains the ones a
 user meets.
@@ -174,7 +174,7 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `SCRIPTS_DISABLED` | Java | 403 | Script execution is disabled. Start Ghidra with -Dghydra.dev.allowScripts=true | `src/main/java/eu/starsong/ghidra/resource/ScriptResource.java:82` |
+| `SCRIPTS_DISABLED` | Java | 403 | Script execution is disabled. Start Ghidra with -D | `src/main/java/eu/starsong/ghidra/resource/ScriptResource.java:88` |
 
 ## SESSION
 
@@ -223,7 +223,7 @@ user meets.
 
 ## Generic — the shape every client branches on
 
-`35` code(s): `BAD_REQUEST`, `CONNECTION_ERROR`, `INCOMPATIBLE_GHIDRA_BUILD`, `INSTANCE_NOT_FOUND`, `INTERNAL_ERROR`, `INVALID_BASE64`, `INVALID_DIMENSIONS`, `INVALID_HEX`, `INVALID_JSON`, `INVALID_RESPONSE`, `INVALID_TARGETS`, `LAUNCHER_NO_GHIDRA`, `LAUNCHER_NO_JDK`, `LAUNCHER_NO_UTILITY`, `MISSING_PARAMETER`, `NON_JSON_RESPONSE`, `NO_PROGRAM_LOADED`, `NO_PROJECT_OPEN`, `ORIGIN_NOT_ALLOWED`, `READ_ONLY_MODE`, `REQUEST_TIMEOUT`, `SAVE_FAILED`, `SHUTDOWN_DISABLED`, `TAINT_READ_FAILED`, `TARGET_BAD_ADDRESS`, `TARGET_NOT_FOUND`, `TARGET_NOT_LOADED`, `TARGET_NOT_SAME_BINARY`, `TARGET_NO_CODE`, `TARGET_NO_PROGRAM`, `TRANSACTION_FAILED`, `TRIAGE_ERROR`, `TRIAGE_NO_FILE`, `UNEXPECTED_ERROR`, `UNSAVED_CHANGES`
+`36` code(s): `BAD_REQUEST`, `CONNECTION_ERROR`, `INCOMPATIBLE_GHIDRA_BUILD`, `INSTANCE_NOT_FOUND`, `INTERNAL_ERROR`, `INVALID_BASE64`, `INVALID_DIMENSIONS`, `INVALID_HEX`, `INVALID_JSON`, `INVALID_RESPONSE`, `INVALID_TARGETS`, `LAUNCHER_NO_GHIDRA`, `LAUNCHER_NO_JDK`, `LAUNCHER_NO_UTILITY`, `MISSING_PARAMETER`, `NON_JSON_RESPONSE`, `NO_PROGRAM_LOADED`, `NO_PROJECT_OPEN`, `ORIGIN_NOT_ALLOWED`, `READ_ONLY_MODE`, `REQUEST_TIMEOUT`, `SAVE_FAILED`, `SHUTDOWN_DISABLED`, `TAINT_READ_FAILED`, `TARGET_BAD_ADDRESS`, `TARGET_NOT_FOUND`, `TARGET_NOT_IN_IMAGE`, `TARGET_NOT_LOADED`, `TARGET_NOT_SAME_BINARY`, `TARGET_NO_CODE`, `TARGET_NO_PROGRAM`, `TRANSACTION_FAILED`, `TRIAGE_ERROR`, `TRIAGE_NO_FILE`, `UNEXPECTED_ERROR`, `UNSAVED_CHANGES`
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
@@ -248,20 +248,21 @@ user meets.
 | `ORIGIN_NOT_ALLOWED` | Python | — | — | `bridge_mcp_hydra.py:971` |
 | `READ_ONLY_MODE` | Java | — | this instance runs in read-only mode, so | `src/main/java/eu/starsong/ghidra/middleware/ReadOnlyGuard.java:83` |
 | `REQUEST_TIMEOUT` | Python | — | — | `bridge_mcp_hydra.py:1059` |
-| `SAVE_FAILED` | Java | 500 | Save before shutdown failed (not shutting down): | `src/main/java/eu/starsong/ghidra/resource/DevResource.java:78` |
-| `SHUTDOWN_DISABLED` | Java | 403 | Dev shutdown is disabled. Start Ghidra with -Dghydra.dev.allowShutdown=true | `src/main/java/eu/starsong/ghidra/resource/DevResource.java:61` |
+| `SAVE_FAILED` | Java | 500 | Save before shutdown failed (not shutting down): | `src/main/java/eu/starsong/ghidra/resource/DevResource.java:84` |
+| `SHUTDOWN_DISABLED` | Java | 403 | Dev shutdown is disabled. Start Ghidra with -D | `src/main/java/eu/starsong/ghidra/resource/DevResource.java:67` |
 | `TAINT_READ_FAILED` | Python | — | — | `ghydra/taint.py:45` |
 | `TARGET_BAD_ADDRESS` | Python | — | — | `ghydra/target.py:217` |
 | `TARGET_NOT_FOUND` | Python | — | — | `ghydra/target.py:215` |
+| `TARGET_NOT_IN_IMAGE` | Python | — | — | `ghydra/target.py:221` |
 | `TARGET_NOT_LOADED` | Python | — | — | `ghydra/target.py:214` |
 | `TARGET_NOT_SAME_BINARY` | Python | — | — | `ghydra/target.py:216` |
-| `TARGET_NO_CODE` | Python | — | — | `ghydra/target.py:218` |
+| `TARGET_NO_CODE` | Python | — | — | `ghydra/target.py:222` |
 | `TARGET_NO_PROGRAM` | Python | — | — | `ghydra/target.py:213` |
 | `TRANSACTION_FAILED` | Java | — | (computed) | `src/main/java/eu/starsong/ghidra/server/GhydraServer.java:196` |
 | `TRIAGE_ERROR` | Python | — | — | `bridge_mcp_hydra.py:10727` |
 | `TRIAGE_NO_FILE` | Python | — | — | `bridge_mcp_hydra.py:10721` |
 | `UNEXPECTED_ERROR` | Python | — | — | `bridge_mcp_hydra.py:1079` |
-| `UNSAVED_CHANGES` | Java | 409 | Refusing to shut down: | `src/main/java/eu/starsong/ghidra/resource/DevResource.java:86` |
+| `UNSAVED_CHANGES` | Java | 409 | Refusing to shut down: | `src/main/java/eu/starsong/ghidra/resource/DevResource.java:92` |
 
 ## Regenerating
 

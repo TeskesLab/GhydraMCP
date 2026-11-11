@@ -49,7 +49,7 @@ calls are reflective on purpose: that API is internal and has moved between the
 # point the extension at a database; it does not need to exist yet
 export GHYDRA_BSIM_DATABASE=/var/tmp/signatures          # Linux/macOS
 # or: set GHYDRA_BSIM_DATABASE=C:\tmp\signatures         (Windows)
-# or: -Dghydra.bsim.database=<path> on the Ghidra JVM
+# or: -Dghidra.bsim.database=<path> on the Ghidra JVM
 
 ghydra bsim status        # engine? database? what is missing?
 ```

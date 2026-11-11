@@ -90,6 +90,13 @@ is only safe to traverse under the EDT, so:
 
 Read timeout is `-Dghidra.mcp.read.timeout` seconds (default 900).
 
+The address the server binds is `-Dghidra.mcp.bind.host` (default: every
+interface), and the origins the browser bridge may come from are
+`-Dghidra.mcp.cors.origin`. The variable listing scans at most
+`-Dghidra.mcp.localvar.scan` functions (default 100) and says when a page is
+incomplete, and a transaction that has to wait for the lock waits
+`-Dghidra.mcp.write.timeout` seconds (default 900).
+
 ## Performance
 
 The rules below are the measured ones. `src/test/ghidra/MeasurePerf.java` measures them

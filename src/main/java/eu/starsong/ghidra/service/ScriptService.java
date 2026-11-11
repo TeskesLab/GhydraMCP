@@ -238,6 +238,13 @@ public class ScriptService {
         PrintWriter writer = new PrintWriter(sw);
         StringWriter errors = new StringWriter();
         PrintWriter errorWriter = new PrintWriter(errors);
+        // The script framework resolves a script's class through the bundle
+        // host, and the host belongs to the Script Manager plugin — which is
+        // not enabled in every instance. Without a reference of our own the
+        // resolution dies with a NullPointerException before the script runs.
+        // The reference is counted: when the Script Manager holds one too, this
+        // is a pair of increments and decrements, and the host stays.
+        GhidraScriptUtil.acquireBundleHostReference();
         try {
             GhidraScriptProvider provider = providerFor(file, language);
             if (provider == null) {
@@ -282,6 +289,8 @@ public class ScriptService {
             String diagnostic = errors.toString();
             return new RunResult(file.getName(), sw.toString(), false,
                 diagnostic.isBlank() ? msg : diagnostic + "\n" + msg);
+        } finally {
+            GhidraScriptUtil.releaseBundleHostReference();
         }
     }
 

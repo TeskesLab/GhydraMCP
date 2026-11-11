@@ -1041,6 +1041,31 @@ def run_formatter_interface_tests():
         return False
 
 
+def run_flag_name_tests():
+    """Run the flag-name suite - the switches the docs name, the code reads."""
+    print_header("Running Flag Name Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_flag_names.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running flag name tests: {e}")
+        return False
+
+
 def run_formatter_tests():
     """Run the formatter suite - every formatter, with its own tool's answer."""
     print_header("Running Formatter Tests")
@@ -1258,6 +1283,7 @@ NO_GHIDRA_SUITES = (
     "--bridge-tools",
     "--formatters",
     "--formatter-interface",
+    "--flag-names",
 )
 
 SUITES = {
@@ -1304,6 +1330,7 @@ SUITES = {
     "--bridge-tools": run_bridge_tool_tests,
     "--formatters": run_formatter_tests,
     "--formatter-interface": run_formatter_interface_tests,
+    "--flag-names": run_flag_name_tests,
     "--gateway": run_gateway_tests,
     "--gateway-contract": run_gateway_contract_tests,
 }

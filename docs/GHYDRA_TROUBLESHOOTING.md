@@ -85,7 +85,7 @@ BSim answers three different states, and confusing them wastes time:
 | Answer | Meaning |
 | --- | --- |
 | `available: false` | this Ghidra build has no BSim engine |
-| `database: null` | no database configured (`-Dghydra.bsim.database` / `GHYDRA_BSIM_DATABASE`) |
+| `database: null` | no database configured (`-Dghidra.bsim.database` / `GHYDRA_BSIM_DATABASE`) |
 | `database_exists: false` | nothing ingested yet (an H2 database is `<path>.mv.db`) |
 | `ready: true` | a query is possible |
 | `can_ingest: true` | an ingest is possible (the file is created if absent) |

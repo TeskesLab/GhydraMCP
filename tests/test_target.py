@@ -26,8 +26,31 @@ IMAGE_BASE = 0x140000000
 MODULE_BASE = 0x7FF7A1230000
 
 
+def _hex_address(text):
+    """The address a path segment names, or None when it names none.
+
+    Ghidra reads an address as hexadecimal, so `add` and `dec` are addresses —
+    of a function that does not exist. A qualified name is not: `math::add`
+    carries a namespace, not an address space.
+    """
+    text = (text or "").strip()
+    if "::" in text:
+        return None
+    if text.lower().startswith("0x"):
+        text = text[2:]
+    if not text or any(character not in "0123456789abcdefABCDEF"
+                       for character in text):
+        return None
+    return "%x" % int(text, 16)
+
+
 class FakeGhidra:
-    """The static side: `/program` and the two function lookups."""
+    """The static side: `/program` and the two function lookups.
+
+    The shape is the one the server produces: the address route parses its
+    segment as an address and answers 400 `BAD_REQUEST` when the segment is
+    not one, and the by-name route answers the function or 404.
+    """
 
     def __init__(self, path=r"C:\bin\sample.exe", image_base=IMAGE_BASE,
                  functions=None):
@@ -39,12 +62,14 @@ class FakeGhidra:
         self.functions = functions if functions is not None else {
             "by-name:main": {"name": "main", "address": "140001234",
                              "signature": "int main(void)"},
-            "address": {"name": "main", "address": "140001234",
-                        "signature": "int main(void)"},
+            "address:140001234": {"name": "main", "address": "140001234",
+                                  "signature": "int main(void)"},
         }
         self.lookups = []
 
     def get(self, endpoint, params=None):
+        from urllib.parse import unquote
+
         self.lookups.append(endpoint)
         if endpoint == "program":
             return {"success": True, "result": self.program}
@@ -55,10 +80,19 @@ class FakeGhidra:
                                "decompilation": "int main(void) { return 0; }",
                                "success": True}}
         if endpoint.startswith("functions/by-name/"):
-            key = "by-name:" + endpoint.rsplit("/", 1)[-1]
+            # A name that goes into a URL path is percent-encoded.
+            key = "by-name:" + unquote(endpoint.rsplit("/", 1)[-1])
             result = self.functions.get(key)
         elif endpoint.startswith("functions/"):
-            result = self.functions.get("address")
+            text = endpoint.rsplit("/", 1)[-1]
+            parsed = _hex_address(text)
+            if parsed is None:
+                # The server parses the segment as an address and a name is
+                # not one.
+                return {"success": False,
+                        "error": {"code": "BAD_REQUEST",
+                                  "message": "Invalid address: " + text}}
+            result = self.functions.get("address:" + parsed)
         else:
             result = None
         if result is None:
@@ -134,7 +168,7 @@ class WireFormatTests(unittest.TestCase):
         functions = {
             "by-name:start": {"name": "start", "address": "00401000",
                               "signature": "void start(void)"},
-            "address": {"name": "start", "address": "00401000",
+            "address:401000": {"name": "start", "address": "00401000",
                         "signature": "void start(void)"},
         }
         found = target.locate(FakeGhidra(functions=functions), "start")
@@ -142,7 +176,7 @@ class WireFormatTests(unittest.TestCase):
 
     def test_an_address_with_a_letter_in_it_parses(self):
         functions = {
-            "address": {"name": "f", "address": "14000abcd",
+            "address:14000abcd": {"name": "f", "address": "14000abcd",
                         "signature": "void f(void)"},
         }
         found = target.locate(FakeGhidra(functions=functions), "0x14000abcd")
@@ -152,7 +186,7 @@ class WireFormatTests(unittest.TestCase):
         functions = {
             "by-name:ext": {"name": "ext", "address": "EXTERNAL:00000010",
                             "signature": "void ext(void)"},
-            "address": {"name": "ext", "address": "EXTERNAL:00000010",
+            "address:10": {"name": "ext", "address": "EXTERNAL:00000010",
                         "signature": "void ext(void)"},
         }
         found = target.locate(FakeGhidra(functions=functions), "ext")
@@ -352,6 +386,140 @@ class DryRunWorkflowTests(unittest.TestCase):
             target.breakpoint(FakeGhidra(), debugger, "main", dry_run=True)
         self.assertEqual(target.ERROR_NOT_SAME_BINARY, caught.exception.code)
         self.assertEqual([("ListModules", None)], debugger.calls)
+
+
+class ExternalAddressTests(unittest.TestCase):
+    """An address that is not in the image never reaches the debugger.
+
+    `EXTERNAL:00000010` is an external symbol index. Dropping the space
+    prefix made it `0x10`, the identity guard passed, and the debugger was
+    told to set a breakpoint at `image_base + 0x10` — an address in the module
+    that has nothing to do with the symbol.
+    """
+
+    def _external(self):
+        return FakeGhidra(functions={
+            "by-name:ext": {"name": "ext", "address": "EXTERNAL:00000010",
+                             "signature": "void ext(void)"},
+            "address:10": {"name": "ext", "address": "EXTERNAL:00000010",
+                            "signature": "void ext(void)"},
+        })
+
+    def test_the_space_is_kept(self):
+        found = target.locate(self._external(), "ext")
+        self.assertEqual("EXTERNAL", found["address_space"])
+
+    def test_a_breakpoint_at_an_external_address_is_refused(self):
+        debugger = FakeDebugger()
+        with self.assertRaises(target.TargetError) as caught:
+            target.breakpoint(self._external(), debugger, "ext")
+        self.assertEqual(target.ERROR_NOT_IN_IMAGE, caught.exception.code)
+        # Neither the write nor the read happened.
+        self.assertEqual([], [call for call in debugger.calls
+                              if call[0] != "ListModules"])
+
+    def test_a_run_to_an_external_address_is_refused(self):
+        debugger = FakeDebugger()
+        with self.assertRaises(target.TargetError) as caught:
+            target.run_to(self._external(), debugger, "ext")
+        self.assertEqual(target.ERROR_NOT_IN_IMAGE, caught.exception.code)
+        self.assertEqual([], [call for call in debugger.calls
+                              if call[0] != "ListModules"])
+
+    def test_a_dry_run_refuses_it_too(self):
+        """A preview may not report a plan it would refuse to execute."""
+        debugger = FakeDebugger()
+        with self.assertRaises(target.TargetError):
+            target.breakpoint(self._external(), debugger, "ext", dry_run=True)
+        self.assertEqual([], [call for call in debugger.calls
+                              if call[0] != "ListModules"])
+
+
+class HexadecimalNameTests(unittest.TestCase):
+    """A name that reads as hexadecimal is a name.
+
+    `add`, `dec` and `f` are hexadecimal to the wire parser, and `math::add`
+    is a qualified name whose last colon is not an address space. All four
+    went to `GET /functions/{name}` and came back not found, while
+    `GET /functions/by-name/{name}` had the function all along.
+    """
+
+    def _with(self, name):
+        return FakeGhidra(functions={
+            "by-name:" + name: {"name": name, "address": "140001234",
+                                "signature": "int %s(void)" % name},
+            "address:140001234": {"name": name, "address": "140001234",
+                                  "signature": "int %s(void)" % name},
+        })
+
+    def test_a_hexadecimal_name_is_found_by_name(self):
+        for name in ("add", "dec", "f"):
+            with self.subTest(name=name):
+                found = target.locate(self._with(name), name)
+                self.assertEqual(name, found["name"])
+                self.assertEqual("name", found["matched_by"])
+
+    def test_a_qualified_name_is_found_by_name(self):
+        found = target.locate(self._with("math::add"), "math::add")
+        self.assertEqual("math::add", found["name"])
+        self.assertEqual("name", found["matched_by"])
+
+    def test_an_address_is_still_an_address(self):
+        found = target.locate(self._with("main"), "0x140001234")
+        self.assertEqual("address", found["matched_by"])
+
+    def test_a_bare_hexadecimal_address_is_still_an_address(self):
+        found = target.locate(self._with("main"), "140001234")
+        self.assertEqual("address", found["matched_by"])
+
+
+class TwinImportTruncationTests(unittest.TestCase):
+    """A capped import listing does not claim that an import was removed.
+
+    `build()` capped the imports by the same limit as the functions and wrote
+    no truncation flag for them, so the comparison read a flag that was never
+    written and reported the removal of an import it had simply not read.
+    """
+
+    class FakeClient:
+        def __init__(self, imports):
+            self.imports = imports
+            self.base_url = "http://127.0.0.1:8192"
+
+        def get(self, endpoint, params=None):
+            if endpoint == "program":
+                return {"success": True, "result": {
+                    "name": "sample", "executablePath": "C:/bin/sample.exe",
+                    "imageBase": "140000000", "language": "x86:LE:64:default",
+                    "statistics": {"functionCount": 1, "stringCount": 0}}}
+            if endpoint == "symbols/imports":
+                # The server honours the limit of a listing.
+                limit = (params or {}).get("limit")
+                names = self.imports if limit is None else self.imports[:int(limit)]
+                return {"success": True, "result": [
+                    {"name": name} for name in names]}
+            return {"success": True, "result": []}
+
+    def test_the_import_truncation_is_recorded(self):
+        from ghydra import twin
+
+        document = twin.build(self.FakeClient(["A", "B", "C"]),
+                              max_functions=2, max_strings=100)
+        self.assertTrue(document["truncated"]["imports"])
+
+    def test_a_capped_import_listing_makes_no_removal_claim(self):
+        from ghydra import twin
+
+        whole = twin.build(self.FakeClient(["A", "B", "C"]),
+                           max_functions=10, max_strings=100)
+        capped = twin.build(self.FakeClient(["A", "B", "C"]),
+                            max_functions=2, max_strings=100)
+        report = twin.diff(whole, capped)
+        removed = report.get("imports", {}).get("removed", [])
+        not_seen = report.get("imports", {}).get("removed_not_seen", [])
+        self.assertEqual([], removed)
+        self.assertIn("C", not_seen)
+        self.assertFalse(report.get("complete", True))
 
 
 if __name__ == "__main__":

@@ -957,7 +957,7 @@ Provides access to Ghidra's analysis results.
 
 Run Ghidra scripts via the API, for multi-stage or batch operations (mass rename, signature transfer, etc.).
 
-**Disabled by default** because running a script is arbitrary code execution. Enable on the server with `-Dghydra.dev.allowScripts=true` or env `GHYDRA_ALLOW_SCRIPTS=1`; otherwise these return `403 SCRIPTS_DISABLED`. Only enable in a trusted/dev environment.
+**Disabled by default** because running a script is arbitrary code execution. Enable on the server with `-Dghidra.dev.allowScripts=true` or env `GHYDRA_ALLOW_SCRIPTS=1`; otherwise these return `403 SCRIPTS_DISABLED`. Only enable in a trusted/dev environment.
 
 - **`GET /scripts`**: List runnable scripts (name, path, category) from the enabled source directories.
 - **`POST /scripts/run`**: Run a script and return its captured output.
@@ -1039,7 +1039,7 @@ Defines a `RawImage` data type at an address so a captured framebuffer renders i
 
 Signature similarity across a corpus. BSim is a Ghidra **feature**, not a plugin
 API, so its availability is discovered by loading the class: a build may ship
-without it. The database is configuration — `-Dghydra.bsim.database=<path>` or
+without it. The database is configuration — `-Dghidra.bsim.database=<path>` or
 `GHYDRA_BSIM_DATABASE=<path>` — and it is a **local H2 file**, created on first
 ingest. Nothing here talks to a server.
 

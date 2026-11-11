@@ -19,7 +19,7 @@ def status_cmd(ctx):
 
     BSim is a Ghidra feature, not a plugin API, so the plugin discovers it by
     loading the class; a build may ship without it. The database is
-    configuration (-Dghydra.bsim.database or GHYDRA_BSIM_DATABASE).
+    configuration (-Dghidra.bsim.database or GHYDRA_BSIM_DATABASE).
 
     \b
     Example:

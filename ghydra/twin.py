@@ -204,6 +204,10 @@ def build(client, name: Optional[str] = None,
         "truncated": {
             "functions": len(functions) >= max_functions,
             "strings": len(strings) >= max_strings,
+            # The imports are capped by the same limit as the functions, and
+            # the comparison reads this flag: without it a capped import
+            # listing claims that an import was removed.
+            "imports": len(imports) >= max_functions,
         },
     }
     return document

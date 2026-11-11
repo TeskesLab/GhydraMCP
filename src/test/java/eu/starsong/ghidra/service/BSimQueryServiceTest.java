@@ -33,7 +33,7 @@ public class BSimQueryServiceTest {
 
     @Test
     public void without_a_database_the_filter_is_not_applied_and_says_why() {
-        // No `-Dghydra.bsim.database` and no `GHYDRA_BSIM_DATABASE` in this JVM.
+        // No `-Dghidra.bsim.database` and no `GHYDRA_BSIM_DATABASE` in this JVM.
         assumeNoDatabase();
         BSimQueryService.ExecutableFilter filter =
             BSimQueryService.executableFilter("cmd.exe");

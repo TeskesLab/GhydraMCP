@@ -17,7 +17,7 @@ import java.util.Map;
  *
  * <p>The database location is configuration, not discovery: a mission needs to
  * know *which* database a query would read, and a runbook needs it to be stable.
- * It comes from {@code -Dghydra.bsim.database} or {@code GHYDRA_BSIM_DATABASE};
+ * It comes from {@code -Dghidra.bsim.database} or {@code GHYDRA_BSIM_DATABASE};
  * when neither is set the answer says so instead of pretending a query would
  * work.
  */
@@ -27,7 +27,7 @@ public final class BSimService {
     private static final String BSim_MARKER = "ghidra.features.bsim.query.BSimServerInfo";
 
     /** System property naming the signature database. */
-    public static final String PROPERTY_DATABASE = "ghydra.bsim.database";
+    public static final String PROPERTY_DATABASE = "ghidra.bsim.database";
 
     /** Environment variable naming the signature database. */
     public static final String ENV_DATABASE = "GHYDRA_BSIM_DATABASE";

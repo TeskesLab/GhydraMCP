@@ -147,7 +147,7 @@ Everything is under `GHYDRA_STATE_DIR` (default `~/.ghydra`):
 | `audit.jsonl` | the mutating calls the server accepted |
 
 The BSim database is **not** here: it is a path you configure
-(`-Dghydra.bsim.database`), because it is a corpus you may want to share or keep
+(`-Dghidra.bsim.database`), because it is a corpus you may want to share or keep
 somewhere else.
 
 ---
