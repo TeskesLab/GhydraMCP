@@ -1,6 +1,7 @@
 """Table-based output formatter using rich library."""
 
 import io
+import json
 import os
 import sys
 from typing import Any, Dict
@@ -1198,6 +1199,22 @@ class TableFormatter(BaseFormatter):
                     lines.append(f"    {escape(description)}")
             lines.append("")
             lines.append("Call one with: ghydra x64dbg call <name> --arg value")
+            return self._capture("\n".join(lines))
+
+        if kind == "dry_run":
+            # A preview is not a result: nothing was sent, and the answer has to
+            # say so before it says what would have been.
+            lines = ["[yellow]dry run: nothing was sent to the debugger[/yellow]"]
+            tool = payload.get("tool")
+            if tool:
+                lines.append(f"  Would call: {escape(str(tool))}")
+                arguments = payload.get("arguments")
+                if arguments:
+                    lines.append(f"  Arguments: {escape(json.dumps(arguments))}")
+            for key in ("runtime_address", "static_address", "binary"):
+                if payload.get(key):
+                    lines.append(f"  {key.replace('_', ' ').capitalize()}: "
+                                 f"{escape(str(payload[key]))}")
             return self._capture("\n".join(lines))
 
         if kind == "call":

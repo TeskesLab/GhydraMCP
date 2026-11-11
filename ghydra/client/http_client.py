@@ -1,5 +1,6 @@
 """HTTP client for Ghidra HATEOAS API."""
 
+import json
 import time
 from typing import Any, Dict, Optional
 from urllib.parse import quote, urljoin
@@ -30,7 +31,8 @@ class GhidraHTTPClient:
         host: str = "localhost",
         port: int = 8192,
         timeout: int = 900,
-        session: Optional[requests.Session] = None
+        session: Optional[requests.Session] = None,
+        dry_run: bool = False
     ):
         """Initialize HTTP client.
 
@@ -46,6 +48,8 @@ class GhidraHTTPClient:
         self.port = port
         self.timeout = timeout
         self.base_url = f"http://{host}:{port}"
+        # --dry-run: a mutation is described, never sent (I12).
+        self.dry_run = bool(dry_run)
 
         # Configure session with retry logic
         if session is None:
@@ -61,6 +65,25 @@ class GhidraHTTPClient:
             self.session.mount("https://", adapter)
         else:
             self.session = session
+
+
+    def _dry_run(self, method: str, endpoint: str,
+                 payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Describe a mutation instead of sending it, when --dry-run is on.
+
+        The preview is the exact request that would go out. It is deliberately
+        client-side: the server never sees it, so a dry run cannot change
+        anything even if the server were to disagree about the method.
+        """
+        if not self.dry_run:
+            return None
+        plan = f"Dry run: would {method} {endpoint}"
+        if payload:
+            body = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            if len(body) > 400:
+                body = body[:400] + "..."
+            plan += f" with {body}"
+        return {"success": True, "dry_run": True, "result": plan}
 
     def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Make GET request to API.
@@ -104,7 +127,8 @@ class GhidraHTTPClient:
         self,
         endpoint: str,
         data: Optional[Dict[str, Any]] = None,
-        json_data: Optional[Dict[str, Any]] = None
+        json_data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Make POST request to API.
 
@@ -112,6 +136,8 @@ class GhidraHTTPClient:
             endpoint: API endpoint path
             data: Optional form data
             json_data: Optional JSON payload
+            params: Optional query string (the BSim routes take their arguments
+                there, including the ones that change state)
 
         Returns:
             Parsed JSON response data
@@ -126,9 +152,13 @@ class GhidraHTTPClient:
             "X-Request-ID": f"cli-{int(time.time() * 1000)}"
         }
 
+        planned = self._dry_run("POST", endpoint, json_data if json_data is not None else data)
+        if planned is not None:
+            return planned
         try:
             response = self.session.post(
                 url,
+                params=params,
                 data=data,
                 json=json_data,
                 headers=headers,
@@ -147,13 +177,15 @@ class GhidraHTTPClient:
     def patch(
         self,
         endpoint: str,
-        data: Optional[Dict[str, Any]] = None
+        data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Make PATCH request to API.
 
         Args:
             endpoint: API endpoint path
             data: Optional JSON payload
+            params: Optional query string
 
         Returns:
             Parsed JSON response data
@@ -169,9 +201,13 @@ class GhidraHTTPClient:
             "X-Request-ID": f"cli-{int(time.time() * 1000)}"
         }
 
+        planned = self._dry_run("PATCH", endpoint, data)
+        if planned is not None:
+            return planned
         try:
             response = self.session.patch(
                 url,
+                params=params,
                 json=data,
                 headers=headers,
                 timeout=self.timeout
@@ -189,13 +225,15 @@ class GhidraHTTPClient:
     def put(
         self,
         endpoint: str,
-        data: Optional[Dict[str, Any]] = None
+        data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Make PUT request to API.
 
         Args:
             endpoint: API endpoint path
             data: Optional JSON payload
+            params: Optional query string
 
         Returns:
             Parsed JSON response data
@@ -211,9 +249,13 @@ class GhidraHTTPClient:
             "X-Request-ID": f"cli-{int(time.time() * 1000)}"
         }
 
+        planned = self._dry_run("PUT", endpoint, data)
+        if planned is not None:
+            return planned
         try:
             response = self.session.put(
                 url,
+                params=params,
                 json=data,
                 headers=headers,
                 timeout=self.timeout
@@ -228,11 +270,13 @@ class GhidraHTTPClient:
         except requests.exceptions.RequestException as e:
             raise GhidraConnectionError(f"Request failed: {e}") from e
 
-    def delete(self, endpoint: str) -> Dict[str, Any]:
+    def delete(self, endpoint: str,
+               params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Make DELETE request to API.
 
         Args:
             endpoint: API endpoint path
+            params: Optional query string
 
         Returns:
             Parsed JSON response data
@@ -247,9 +291,13 @@ class GhidraHTTPClient:
             "X-Request-ID": f"cli-{int(time.time() * 1000)}"
         }
 
+        planned = self._dry_run("DELETE", endpoint, None)
+        if planned is not None:
+            return planned
         try:
             response = self.session.delete(
                 url,
+                params=params,
                 headers=headers,
                 timeout=self.timeout
             )

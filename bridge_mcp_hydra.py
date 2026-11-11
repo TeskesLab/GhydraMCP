@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.1.1"
+BRIDGE_VERSION = "v3.39.0"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -888,6 +888,53 @@ def _extract_batch_transport_timeout(json_data: dict | None = None) -> int:
     # for the batch it will actually accept.
     return per_target * min(len(targets), MAX_BATCH_TARGETS) + 30
 
+def _connection_never_established(exc: BaseException) -> bool:
+    """Was the connection refused before any request byte was sent?
+
+    "Failed to establish a new connection" is the one transport failure that is
+    always safe to repeat: the request never reached the server, so repeating it
+    cannot make a state-changing call happen twice. A reset *mid-flight* is not
+    this: there the request may already have been acted on.
+    """
+    seen = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text = f"{type(current).__name__}: {current}"
+        lowered = text.lower()
+        if "newconnectionerror" in lowered:
+            return True
+        if "failed to establish a new connection" in lowered:
+            return True
+        if "connection refused" in lowered or "actively refused" in lowered:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _request_with_connection_retry(method: str, url: str, attempts: int = 3,
+                                   **kwargs):
+    """Do the request, retrying only when nothing was ever sent.
+
+    This machine resets or refuses a loopback connection every now and then
+    (measured at ~7% of them). A refusal before the connection exists leaves the
+    server untouched, so the retry is safe for every method - including POST,
+    which is not otherwise retried.
+    """
+    last: BaseException | None = None
+    for attempt in range(attempts):
+        try:
+            return _http_session().request(method, url, **kwargs)
+        except requests.exceptions.ConnectionError as exc:
+            if not _connection_never_established(exc) or attempt == attempts - 1:
+                raise
+            last = exc
+            time.sleep(0.05 * (2 ** attempt))
+    if last is not None:
+        raise last
+    raise RuntimeError("unreachable")
+
+
 def _make_request(method: str, port: int, endpoint: str, params: dict | None = None, 
                  json_data: dict | None = None, data: str | None = None, 
                  headers: dict | None = None) -> dict:
@@ -933,7 +980,7 @@ def _make_request(method: str, port: int, endpoint: str, params: dict | None = N
             request_headers['Content-Type'] = 'text/plain'
 
     try:
-        response = _http_session().request(
+        response = _request_with_connection_retry(
             method,
             url,
             params=params,
@@ -1036,16 +1083,754 @@ def _make_request(method: str, port: int, endpoint: str, params: dict | None = N
             "timestamp": int(time.time() * 1000)
         }
 
+# >>> generated from ghydra/core/digest.py (945a74f28ae18371) — edit the core, then run scripts/gen_core.py
+_CORE_VOLATILE_KEYS = ('id', 'timestamp', 'instance', '_links', 'api_links')
+
+def _core_canonical(value):
+    """The text a digest is taken over: sorted keys, no separator noise."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)
+
+def _core_digest(value):
+    """The SHA-256 of the canonical form of a value."""
+    return hashlib.sha256(_core_canonical(value).encode('utf-8')).hexdigest()
+
+def _core_stable_result(value, volatile=_CORE_VOLATILE_KEYS):
+    """The part of an answer that two identical calls share.
+
+    A dict loses the volatile keys; anything else is returned as it is. The
+    list of volatile keys is a parameter so a caller can widen it, never so it
+    can silently narrow it in one place and not the other.
+    """
+    if isinstance(value, dict):
+        payload = value.get('result', value)
+        if isinstance(payload, dict):
+            dropped = set(volatile)
+            return {key: item for key, item in payload.items() if key not in dropped}
+        return payload
+    return value
+# <<< end generated from ghydra/core/digest.py
+
+
+# >>> generated from ghydra/core/runbook.py (33df1f2b71fa9252) — edit the core, then run scripts/gen_core.py
+_CORE_RUNBOOK_METHODS = ('GET', 'POST', 'PATCH', 'PUT', 'DELETE')
+
+class _CoreBadSteps(ValueError):
+    """The document is not a usable list of steps."""
+
+class _CoreBadEntry(ValueError):
+    """One step is not something the runbook could call."""
+
+def _core_validate_steps(data):
+    """The steps of a parsed document, validated and normalised.
+
+    Args:
+        data: The parsed JSON — a list of steps or ``{"steps": [...]}``.
+
+    Returns:
+        list[dict]: One dict per step, with endpoint, method, params, payload.
+
+    Raises:
+        BadSteps: when the document holds no usable list.
+        BadEntry: when a step is not an object, has no endpoint or a bad method.
+    """
+    items = data.get('steps') if isinstance(data, dict) else data
+    if not isinstance(items, list) or not items:
+        raise _CoreBadSteps("expected a non-empty list of steps or {'steps': [...]}")
+    steps: List[Dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise _CoreBadEntry(f'step #{index + 1} is not an object')
+        endpoint = item.get('endpoint')
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise _CoreBadEntry(f"step #{index + 1}: 'endpoint' is required")
+        method = str(item.get('method') or 'GET').upper()
+        if method not in _CORE_RUNBOOK_METHODS:
+            raise _CoreBadEntry(f'step #{index + 1}: unknown method {method!r}')
+        steps.append({'endpoint': endpoint.strip(), 'method': method, 'params': item.get('params') or None, 'payload': item.get('payload') or None})
+    return steps
+# <<< end generated from ghydra/core/runbook.py
+
+
+# >>> generated from ghydra/core/hints.py (f86a5a58967f95b1) — edit the core, then run scripts/gen_core.py
+_CORE_HINT_PATTERNS = {'source': '\\b(?:de|from|entrada|enters?|input)\\s+[`\\"\']?([A-Za-z_][\\w.]*)', 'sink': '\\b(?:para|to|ate|até|into|sink|reach(?:es)?|alcanc[ae]|alcança|chega(?:r)?)\\s+[`\\"\']?([A-Za-z_][\\w.]*)', 'address': '\\b(0x[0-9A-Fa-f]+)\\b', 'function': '\\b(?:funcao|função|function)\\s+[`\\"\']?([A-Za-z_]\\w*)'}
+
+def _core_parse_goal(goal):
+    """The hints a goal carries, keyed by kind.
+
+    Args:
+        goal: The objective, as the user wrote it (any language in the patterns).
+
+    Returns:
+        dict: The hints that matched; empty when the goal names none of them.
+    """
+    text = str(goal or '')
+    hints: Dict[str, str] = {}
+    for key, pattern in _CORE_HINT_PATTERNS.items():
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            hints[key] = match.group(1)
+    return hints
+# <<< end generated from ghydra/core/hints.py
+
+
+# >>> generated from ghydra/core/cache.py (9e480acbded364a4) — edit the core, then run scripts/gen_core.py
+_CORE_CACHE_VERSION = 1
+
+_CORE_CACHE_IDENTITY_FIELDS = ('programId', 'path', 'executablePath', 'language', 'languageId', 'imageBase', 'creationDate')
+
+_CORE_CACHE_STATISTIC_FIELDS = ('functionCount', 'symbolCount', 'memoryBlockCount')
+
+_CORE_CACHE_FINGERPRINT_FIELDS = (('name', ('name',)), ('executable_path', ('path', 'executablePath')), ('image_base', ('imageBase',)), ('language', ('language', 'languageId')), ('compiler', ('compiler', 'compilerSpecId')))
+
+def _core_cache_fingerprint(program):
+    """The facts that tell one program from another, out of a `/program` payload.
+
+    Args:
+        program: The ``result`` of ``/program`` (any shape; a non-dict is "no
+            fingerprint", which the caller reports rather than guesses).
+
+    Returns:
+        dict: The fingerprint, with the names the callers read: ``name``,
+              ``executable_path``, ``image_base``, ``language`` and
+              ``compiler``. A fact the payload does not carry is absent.
+    """
+    if not isinstance(program, dict):
+        return {}
+    fingerprint: Dict[str, Any] = {}
+    for name, sources in _CORE_CACHE_FINGERPRINT_FIELDS:
+        for source in sources:
+            value = program.get(source)
+            if value is not None:
+                fingerprint[name] = value
+                break
+    return fingerprint
+
+def _core_cache_identity(program):
+    """The identity of a program, from the payload of ``/program``.
+
+    Args:
+        program: The ``result`` of ``/program`` (any shape; a non-dict is "no
+            identity", which the caller reports rather than keys on).
+
+    Returns:
+        dict: The identifying fields that were present, plus the statistics.
+              Empty when the program cannot be identified.
+    """
+    if not isinstance(program, dict):
+        return {}
+    identity = {key: program[key] for key in _CORE_CACHE_IDENTITY_FIELDS if program.get(key) is not None}
+    statistics = program.get('statistics')
+    if isinstance(statistics, dict):
+        identity['statistics'] = {key: statistics[key] for key in _CORE_CACHE_STATISTIC_FIELDS if statistics.get(key) is not None}
+    return identity
+
+def _core_cache_key(identity, kind, request):
+    """The key of one answer: the version, the kind, the program and the question.
+
+    Every part is load-bearing: the version lets a change to the format retire
+    the old entries, the kind keeps two sorts of answer apart, the program keeps
+    two binaries apart, and the request keeps two questions apart.
+    """
+    return _core_digest({'version': _CORE_CACHE_VERSION, 'kind': kind, 'program': identity, 'request': request})
+# <<< end generated from ghydra/core/cache.py
+
+
+# >>> generated from ghydra/core/diff.py (ef204fc8a80da5eb) — edit the core, then run scripts/gen_core.py
+_CORE_DIFF_PROGRAM_FIELDS = tuple((name for name, _ in _CORE_CACHE_FINGERPRINT_FIELDS))
+
+def _core_diff_name_set(values):
+    """The non-empty names of a listing, as a set (order and repeats are noise)."""
+    return {value for value in values if value}
+
+def _core_diff_names(before, after):
+    """The names added and removed between two sets.
+
+    Args:
+        before: The names of the first snapshot.
+        after: The names of the second one.
+
+    Returns:
+        dict: ``added`` and ``removed`` (sorted, so the answer is stable) plus
+              both counts.
+    """
+    return {'added': sorted(after - before), 'removed': sorted(before - after), 'count_a': len(before), 'count_b': len(after)}
+
+def _section_diff(before, after, before_complete, after_complete):
+    """The names added and removed between two listings, and how sure we are.
+
+    A removal is a claim about the *second* listing: "this name is not in B". If
+    B was never read to its end, the name may simply not have been read — so the
+    removal is reported as "not seen in B", and the section says it is
+    incomplete. The same reasoning applies to an addition against A.
+
+    Args:
+        before: The names of the first listing.
+        after: The names of the second one.
+        before_complete: Whether the first listing was read to its end.
+        after_complete: Whether the second listing was read to its end.
+
+    Returns:
+        dict: ``added``, ``removed`` (each with a ``seen`` variant), the counts
+              and ``complete``.
+    """
+    added = sorted(after - before)
+    removed = sorted(before - after)
+    added_certain = added if before_complete else []
+    removed_certain = removed if after_complete else []
+    return {'added': added_certain, 'removed': removed_certain, 'added_not_seen': [] if before_complete else added, 'removed_not_seen': [] if after_complete else removed, 'count_a': len(before), 'count_b': len(after), 'complete': before_complete and after_complete}
+
+def _core_diff_snapshots(a, b):
+    """What changed between two snapshots, section by section.
+
+    Args:
+        a: The first snapshot: ``program``, ``functions``, ``imports``,
+           ``strings`` and the ``*_complete`` flags.
+        b: The second one, in the same shape.
+
+    Returns:
+        dict: ``functions`` (added/removed/renamed, with counts and whether both
+              listings were complete), ``imports``, ``strings``,
+              ``program_changed``, ``changed`` and a ``summary`` of counts.
+    """
+    by_addr_a = {fn['address']: fn for fn in a.get('functions') or [] if fn.get('address')}
+    by_addr_b = {fn['address']: fn for fn in b.get('functions') or [] if fn.get('address')}
+    added: List[Dict[str, Any]] = []
+    removed: List[Dict[str, Any]] = []
+    renamed: List[Dict[str, Any]] = []
+    for address, fn in sorted(by_addr_b.items()):
+        if address not in by_addr_a:
+            added.append({'address': address, 'name': fn.get('name')})
+        elif fn.get('name') != by_addr_a[address].get('name'):
+            renamed.append({'address': address, 'from': by_addr_a[address].get('name'), 'to': fn.get('name')})
+    for address, fn in sorted(by_addr_a.items()):
+        if address not in by_addr_b:
+            removed.append({'address': address, 'name': fn.get('name')})
+    imports = _section_diff(_core_diff_name_set(a.get('imports') or []), _core_diff_name_set(b.get('imports') or []), bool(a.get('imports_complete', True)), bool(b.get('imports_complete', True)))
+    strings = _section_diff(_core_diff_name_set(a.get('strings') or []), _core_diff_name_set(b.get('strings') or []), bool(a.get('strings_complete', True)), bool(b.get('strings_complete', True)))
+    result: Dict[str, Any] = {'program': {'a': a.get('program') or {}, 'b': b.get('program') or {}}, 'program_changed': (a.get('program') or {}) != (b.get('program') or {}), 'functions': {'added': added, 'removed': removed, 'renamed': renamed, 'count_a': len(by_addr_a), 'count_b': len(by_addr_b), 'complete': bool(a.get('functions_complete', True)) and bool(b.get('functions_complete', True))}, 'imports': imports, 'strings': strings}
+    result['changed'] = bool(added or removed or renamed or imports['added'] or imports['removed'] or strings['added'] or strings['removed'] or result['program_changed'])
+    result['complete'] = bool(result['functions']['complete'] and imports['complete'] and strings['complete'])
+    result['incomplete_sections'] = [name for name, section in (('functions', result['functions']), ('imports', imports), ('strings', strings)) if not section.get('complete', True)]
+    result['summary'] = {'functions_added': len(added), 'functions_removed': len(removed), 'functions_renamed': len(renamed), 'imports_added': len(imports['added']), 'imports_removed': len(imports['removed']), 'strings_added': len(strings['added']), 'strings_removed': len(strings['removed']), 'program_changed': result['program_changed']}
+    return result
+# <<< end generated from ghydra/core/diff.py
+
+
+# >>> generated from ghydra/core/fleet.py (c80eb884de60cc6d) — edit the core, then run scripts/gen_core.py
+_CORE_FLEET_KINDS = ('overview', 'has_function', 'has_import', 'has_string', 'xrefs_to')
+
+_CORE_FLEET_IDENTITY_FIELDS = ('programId', 'path', 'executablePath', 'imageBase')
+
+def _core_fleet_identity_of(program):
+    """The key two instances serving the same file share.
+
+    ``programId`` is project + pathname, and is what the plugin already uses to
+    name a program. The path is the fallback. A program with none of them has no
+    identity (``""``), which the caller reports rather than merging every
+    stranger together.
+
+    Args:
+        program: The ``result`` of ``/program`` (any shape).
+
+    Returns:
+        str: The identity, or the empty string when the program has none.
+    """
+    if not isinstance(program, dict):
+        return ''
+    for key in _CORE_FLEET_IDENTITY_FIELDS:
+        value = program.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ''
+
+def _core_fleet_merge(seen, kind, target, unreachable=None):
+    """Merge what every reachable instance answered into one report.
+
+    Args:
+        seen: One entry per instance that answered: ``port``, ``identity``,
+              ``name``, ``program`` and ``answer`` (itself a dict with
+              ``ok``/``present``/``detail``/``complete``).
+        kind: The question, echoed in the report.
+        target: What the question was about (``None`` for an overview).
+        unreachable: The ports that did not answer, with their reason.
+
+    Returns:
+        dict: The envelope — one row per *binary*, the counts, the members that
+              could not answer, the rows that were partial or truncated.
+    """
+    members: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for entry in seen:
+        identity = entry.get('identity')
+        if not identity:
+            continue
+        answer = entry.get('answer') or {}
+        existing = members.get(identity)
+        if existing is None:
+            members[identity] = {'identity': identity, 'name': entry.get('name'), 'ports': [entry.get('port')], 'program': entry.get('program'), 'answer': answer}
+            order.append(identity)
+        else:
+            existing['ports'].append(entry.get('port'))
+            if existing['answer'].get('present') != answer.get('present'):
+                existing.setdefault('disagreements', []).append({'port': entry.get('port'), 'answer': answer})
+    rows = []
+    for identity in order:
+        member = members[identity]
+        answer = member.get('answer') or {}
+        row = {'identity': identity, 'name': member.get('name'), 'ports': member['ports'], 'present': bool(answer.get('present')), 'ok': bool(answer.get('ok')), 'detail': answer.get('detail') or {}}
+        if answer.get('complete') is False:
+            row['complete'] = False
+        if member.get('disagreements'):
+            row['disagreements'] = member['disagreements']
+        rows.append(row)
+    partial = [row['identity'] for row in rows if not row['ok']]
+    truncated = [row['identity'] for row in rows if row.get('complete') is False]
+    missing = list(unreachable or [])
+    return {'success': True, 'result': {'kind': kind, 'target': target, 'binaries': rows, 'count': len(rows), 'with_it': sum((1 for row in rows if row['present'])), 'without_it': sum((1 for row in rows if row['ok'] and (not row['present']))), 'unreachable': missing, 'partial': partial, 'truncated': truncated, 'ok': not partial and (not missing)}}
+# <<< end generated from ghydra/core/fleet.py
+
+
+# >>> generated from ghydra/core/capabilities.py (07aad7e52b759946) — edit the core, then run scripts/gen_core.py
+_CORE_CAPABILITY_RULES = ({'id': 'T1055', 'name': 'Process Injection', 'tactic': 'Defense Evasion / Privilege Escalation', 'imports': ('VirtualAllocEx', 'WriteProcessMemory', 'CreateRemoteThread', 'NtCreateThreadEx', 'QueueUserAPC', 'SetThreadContext', 'NtMapViewOfSection'), 'strings': ()}, {'id': 'T1057', 'name': 'Process Discovery', 'tactic': 'Discovery', 'imports': ('CreateToolhelp32Snapshot', 'Process32First', 'Process32Next', 'EnumProcesses', 'NtQuerySystemInformation'), 'strings': ()}, {'id': 'T1082', 'name': 'System Information Discovery', 'tactic': 'Discovery', 'imports': ('GetSystemInfo', 'GetVersionEx', 'GetComputerName', 'GetUserName', 'GetDiskFreeSpace', 'RegQueryValueEx'), 'strings': ()}, {'id': 'T1105', 'name': 'Ingress Tool Transfer', 'tactic': 'Command and Control', 'imports': ('URLDownloadToFile', 'WinHttpOpen', 'InternetOpenUrl', 'HttpSendRequest', 'curl_easy_perform', 'recv', 'WSARecv'), 'strings': ('http://', 'https://', 'Mozilla/', 'User-Agent', 'download')}, {'id': 'T1071', 'name': 'Application Layer Protocol', 'tactic': 'Command and Control', 'imports': ('WSAConnect', 'InternetConnect', 'HttpOpenRequest', 'WSAStartup', 'connect', 'send'), 'strings': ()}, {'id': 'T1486', 'name': 'Data Encrypted for Impact', 'tactic': 'Impact', 'imports': ('CryptEncrypt', 'CryptGenKey', 'BCryptEncrypt', 'CryptDeriveKey'), 'strings': ('YOUR FILES', 'ransom', 'decrypt', '.locked', 'bitcoin', 'restore your', 'encrypted')}, {'id': 'T1497', 'name': 'Virtualization / Sandbox Evasion', 'tactic': 'Defense Evasion / Discovery', 'imports': ('IsDebuggerPresent', 'CheckRemoteDebuggerPresent', 'GetTickCount', 'Sleep', 'NtQueryInformationProcess'), 'strings': ('VMware', 'VirtualBox', 'QEMU', 'Sandbox', 'VBox', 'ollydbg')}, {'id': 'T1113', 'name': 'Screen Capture', 'tactic': 'Collection', 'imports': ('BitBlt', 'GetDC', 'CreateCompatibleBitmap', 'PrintWindow', 'GetWindowDC'), 'strings': ()}, {'id': 'T1547', 'name': 'Boot or Logon Autostart Execution', 'tactic': 'Persistence', 'imports': ('CreateService', 'OpenSCManager', 'RegSetValueEx', 'ShellExecute'), 'strings': ('\\CurrentVersion\\Run', '\\RunOnce', 'schtasks', 'startup')}, {'id': 'T1027', 'name': 'Obfuscated Files or Information', 'tactic': 'Defense Evasion', 'imports': ('VirtualProtect', 'GetProcAddress', 'LoadLibraryA', 'LoadLibraryW', 'LdrLoadDll'), 'strings': ('base64', 'obfuscat')})
+
+_CORE_CAP_IMPORT_KEYS = ('name', 'label', 'symbol', 'value')
+
+_CORE_CAP_STRING_KEYS = ('value', 'name', 'string', 'text')
+
+_CORE_CAP_ADDRESS_KEYS = ('address', 'addr', 'offset')
+
+def _core_cap_items(response):
+    if not isinstance(response, dict) or not response.get('success', False):
+        return []
+    payload = response.get('result')
+    if not isinstance(payload, list):
+        return []
+    return [item for item in payload if isinstance(item, dict)]
+
+def _core_cap_text(item, keys):
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ''
+
+def _core_cap_address(item):
+    for key in _CORE_CAP_ADDRESS_KEYS:
+        value = item.get(key)
+        if isinstance(value, (str, int)) and value != '':
+            return str(value)
+    return ''
+
+def _core_cap_evidence(items, keys, patterns, kind):
+    found: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        text = _core_cap_text(item, keys)
+        if not text:
+            continue
+        lowered = text.lower()
+        for pattern in patterns:
+            if pattern.lower() in lowered:
+                marker = (kind, text)
+                if marker not in seen:
+                    seen.add(marker)
+                    found.append({'kind': kind, 'name': text[:120], 'address': _core_cap_address(item), 'matched': pattern})
+                break
+    return found
+
+def _core_build_capability_report(program, imports, strings, include_strings=True):
+    """Compose the three envelopes into a ranked capability triage report."""
+    import_items = _core_cap_items(imports)
+    string_items = _core_cap_items(strings) if include_strings else []
+    failures = []
+    for label, response in (('imports', imports), ('strings', strings)):
+        if label == 'strings' and (not include_strings):
+            continue
+        if isinstance(response, dict) and response.get('success') is False:
+            failures.append(label)
+    findings = []
+    for rule in _CORE_CAPABILITY_RULES:
+        import_hits = _core_cap_evidence(import_items, _CORE_CAP_IMPORT_KEYS, rule['imports'], 'import')
+        string_hits = _core_cap_evidence(string_items, _CORE_CAP_STRING_KEYS, rule['strings'], 'string')
+        score = 2 * len(import_hits) + len(string_hits)
+        if score < 2:
+            continue
+        confidence = 'high' if score >= 6 else 'medium' if score >= 3 else 'low'
+        findings.append({'id': rule['id'], 'name': rule['name'], 'tactic': rule['tactic'], 'confidence': confidence, 'score': score, 'import_matches': len(import_hits), 'string_matches': len(string_hits), 'evidence': (import_hits + string_hits)[:6]})
+    findings.sort(key=lambda finding: (-finding['score'], finding['id']))
+    name = ''
+    if isinstance(program, dict) and isinstance(program.get('result'), dict):
+        name = program['result'].get('name') or ''
+    return {'success': True, 'result': {'program': name, 'summary': {'imports_scanned': len(import_items), 'strings_scanned': len(string_items), 'rules': len(_CORE_CAPABILITY_RULES), 'techniques_matched': len(findings)}, 'failures': failures, 'findings': findings, 'method': 'Heuristic import/string matching; a lead for an analyst, not a verdict.'}}
+# <<< end generated from ghydra/core/capabilities.py
+
+
+# >>> generated from ghydra/core/contextpack.py (52886803566460de) — edit the core, then run scripts/gen_core.py
+_CORE_CONTEXT_TEMPLATES = {'what_it_does': re.compile('o que (esse|esse|esta|essa|este|a função|the function|it) |what .*(does|do)|o que faz|descompil|decompil', re.IGNORECASE), 'data_origin': re.compile('de onde|quem (escreve|lê|le|leu|escreveu)|where .*(from|written|read)|who (writes|reads)|xref|referên|referen', re.IGNORECASE), 'what_changed': re.compile('o que mudou|what changed|mudou|diff|desde a última|since last', re.IGNORECASE)}
+
+_CORE_CONTEXT_CHAR_PER_TOKEN = 4
+
+def _core_context_classify(question):
+    """Map a free-form question to one of the three MVP templates."""
+    for template, pattern in _CORE_CONTEXT_TEMPLATES.items():
+        if pattern.search(question or ''):
+            return template
+    return 'overview'
+
+def _core_context_tokens(text):
+    return max(1, len(text) // _CORE_CONTEXT_CHAR_PER_TOKEN)
+
+def _core_build_context_pack(question, template, program, sections, budget_tokens=4000):
+    """Assemble the fetched sections into one budgeted dossier.
+
+    sections: ordered dicts {title, body, citations} in DESCENDING priority —
+    the first section is the answer the caller asked for and is never dropped,
+    only truncated. Everything after it is dropped whole, oldest first, until
+    the pack fits; each drop is recorded with its reason.
+    """
+    budget_tokens = max(200, int(budget_tokens))
+    included = []
+    omitted = []
+    citations = []
+    seen_citations = set()
+    used = 0
+    header = _core_context_tokens(f'Context pack: {question}')
+    for index, section in enumerate(sections):
+        title = str(section.get('title', 'section'))
+        body = str(section.get('body', ''))
+        section_citations = [str(c) for c in section.get('citations') or []]
+        if index == 0:
+            room = budget_tokens - header - used - _core_context_tokens(title)
+            if _core_context_tokens(body) > room > 0:
+                keep_chars = room * _CORE_CONTEXT_CHAR_PER_TOKEN
+                body = body[:keep_chars].rsplit('\n', 1)[0]
+                omitted.append({'section': title, 'reason': f'truncated to fit {budget_tokens} tokens'})
+        elif used + _core_context_tokens(title) + _core_context_tokens(body) + header > budget_tokens:
+            omitted.append({'section': title, 'reason': 'dropped: over the token budget'})
+            continue
+        used += _core_context_tokens(title) + _core_context_tokens(body)
+        included.append({'title': title, 'body': body, 'citations': section_citations})
+        for citation in section_citations:
+            if citation not in seen_citations:
+                seen_citations.add(citation)
+                citations.append(citation)
+    return {'success': True, 'result': {'question': question, 'template': template, 'program': program, 'sections': included, 'citations': citations, 'omitted': omitted, 'budget_tokens': budget_tokens, 'used_tokens': header + used, 'method': 'Composed from already-fetched endpoints; ranked by relevance to the question, truncated by budget. Every address is citable.'}}
+# <<< end generated from ghydra/core/contextpack.py
+
+
+# >>> generated from ghydra/core/telemetry.py (58f503bc88f0d56d) — edit the core, then run scripts/gen_core.py
+_CORE_TELEMETRY_MAX_BYTES = 1000000
+
+_CORE_TELEMETRY_KEEP_LINES = 2000
+
+_CORE_TELEMETRY_INSPECTION_TOOLS = ('functions_get', 'functions_decompile', 'analysis_callers', 'analysis_callees', 'xrefs_list', 'inspect_address')
+
+_CORE_TELEMETRY_LISTING_TOOLS = ('functions_list', 'data_list', 'symbols_list', 'variables_list')
+
+def _core_telemetry_recent(entries, days, now=None):
+    """The entries inside the last ``days`` days.
+
+    Args:
+        entries: The rows of the log (as :func:`read_entries` returns them).
+        days: The size of the window, at least one day.
+        now: The current epoch time; passed in so the answer is reproducible.
+
+    Returns:
+        list: The entries whose timestamp is inside the window.
+    """
+    import time as _time
+    moment = _time.time() if now is None else now
+    cutoff = moment - max(1, int(days)) * 86400
+    return [entry for entry in entries if float(entry.get('ts') or 0) >= cutoff]
+
+def _core_telemetry_recommendations(entries):
+    """Name the composed tool when the log shows the pattern it replaces."""
+    found: List[str] = []
+    counts: Dict[str, int] = {}
+    slow: Dict[str, float] = {}
+    for entry in entries:
+        tool = str(entry.get('tool'))
+        counts[tool] = counts.get(tool, 0) + 1
+        if entry.get('ok'):
+            slow[tool] = max(slow.get(tool, 0.0), float(entry.get('ms') or 0))
+    inspection = sum((counts.get(name, 0) for name in _CORE_TELEMETRY_INSPECTION_TOOLS))
+    if inspection >= 4:
+        found.append(f'{inspection} inspection calls in the window: analysis_context_pack(question, address) answers that pattern in one call, with a token budget and citable addresses.')
+    listing = sum((counts.get(name, 0) for name in _CORE_TELEMETRY_LISTING_TOOLS))
+    if listing >= 4:
+        found.append(f'{listing} listing calls: programs_overview composes the counts and imports in one call, and a page takes limit/offset.')
+    batch = counts.get('functions_decompile', 0)
+    if batch >= 4:
+        found.append(f'{batch} single decompiles: functions_batch_decompile takes a list (async_mode=True for a long batch).')
+    for tool, worst in sorted(slow.items(), key=lambda item: -item[1])[:3]:
+        if worst >= 500:
+            found.append(f'{tool} took up to {worst:.0f} ms: consider async_mode=True or a narrower request.')
+    return found[:5]
+
+def _core_telemetry_summarize(entries, days=7, path=''):
+    """Aggregate the log rows into the report the CLI and the tool share.
+
+    Args:
+        entries: The rows inside the window (see :func:`filter_recent`).
+        days: The window, echoed in the report.
+        path: Where the log lives, echoed so the reader can open it.
+
+    Returns:
+        dict: call and failure totals per tool (the 25 busiest), the error codes
+              seen, the advice, and the path of the log. An empty window says so
+              instead of answering with an empty table.
+    """
+    totals: Dict[str, Dict[str, Any]] = {}
+    codes: Dict[str, int] = {}
+    for entry in entries:
+        tool = str(entry.get('tool'))
+        row = totals.setdefault(tool, {'tool': tool, 'calls': 0, 'failed': 0, 'ms_total': 0.0, 'ms_max': 0.0, 'tokens': 0})
+        row['calls'] += 1
+        if not entry.get('ok'):
+            row['failed'] += 1
+        row['ms_total'] += float(entry.get('ms') or 0)
+        row['ms_max'] = max(row['ms_max'], float(entry.get('ms') or 0))
+        row['tokens'] += int(entry.get('tokens') or 0)
+        code = entry.get('code')
+        if code:
+            codes[str(code)] = codes.get(str(code), 0) + 1
+    rows = []
+    for row in sorted(totals.values(), key=lambda item: -item['calls']):
+        rows.append({**row, 'ms_avg': round(row['ms_total'] / row['calls'], 1), 'ms_max': round(row['ms_max'], 1)})
+    report: Dict[str, Any] = {'days': days, 'calls': len(entries), 'tools': rows[:25], 'error_codes': codes, 'recommendations': _core_telemetry_recommendations(entries), 'path': path}
+    if not entries:
+        report['message'] = 'no telemetry recorded in this window'
+    return report
+# <<< end generated from ghydra/core/telemetry.py
+
+
+# >>> generated from ghydra/core/taint.py (46f670da8b2fa636) — edit the core, then run scripts/gen_core.py
+_CORE_TAINT_PAGE_LIMIT = 1000
+
+_CORE_TAINT_MAX_PAGES = 5
+
+_CORE_TAINT_CALL_OPCODES = {7, 8}
+
+_CORE_TAINT_CONFIDENCE_DIRECT = 'direct'
+
+_CORE_TAINT_CONFIDENCE_REACHABLE = 'reachable'
+
+_CORE_TAINT_DISCLAIMER = "These are hypotheses from pcode and the call graph, not proof of exploitability. Branches are not modelled; a 'direct' finding means the sink call appears after the source call in the same function."
+
+def _core_taint_looks_like_address(text):
+    """Whether a string is an address rather than a name.
+
+    Ghidra writes an address as unprefixed hexadecimal (`00401000`, `140001234`),
+    and every hex digit is also a legal character in a symbol name - so this is a
+    heuristic, used only to decide whether a value that arrived in the `function`
+    field can be read as an address. A name that is all hex digits is rare enough
+    that the alternative (a wasted containing-function lookup) is worse.
+    """
+    value = str(text or '').strip()
+    if not value:
+        return False
+    if value.lower().startswith('0x'):
+        value = value[2:]
+    return bool(value) and all((char in '0123456789abcdefABCDEF' for char in value))
+
+def _core_taint_result_of(envelope):
+    """The payload of a successful envelope, or ``None``.
+
+    A failed answer is not an empty result: it is no result, which the callers
+    report as a gap rather than as an absence of evidence.
+    """
+    if isinstance(envelope, dict) and envelope.get('success', False):
+        return envelope.get('result')
+    return None
+
+def _core_taint_site_for(calls, wanted, wanted_name):
+    """The call site whose target is the wanted address or name.
+
+    Args:
+        calls: The calls of a function, each with ``target`` and ``at``.
+        wanted: The address (or symbol) the sink resolved to.
+        wanted_name: The name of the function the sink resolved to.
+
+    Returns:
+        str | None: The address of the first matching call, or ``None``.
+    """
+    wanted_lower = (wanted or '').lower()
+    for call in calls:
+        target = (call.get('target') or '').lower()
+        if not target:
+            continue
+        if target == wanted_lower or (wanted_name or '').lower() in target:
+            return call['at']
+    return None
+
+def _core_taint_address_key(address):
+    """Sort key for an address: numeric order, unparseable values last.
+
+    Returned as a tuple so ``sorted`` never compares an int with a string — a
+    single odd address would otherwise raise and lose the whole report.
+    """
+    try:
+        return (0, int(str(address), 16))
+    except (TypeError, ValueError):
+        return (1, 0)
+
+def _core_taint_summarize(report):
+    """The counts a report carries, shared by both surfaces.
+
+    ``found`` is true only for a ``direct`` or ``reachable`` hypothesis: a pile
+    of ``weak`` ones is not a finding.
+    """
+    hypotheses = report.get('hypotheses') or []
+    by_confidence: Dict[str, int] = {}
+    for item in hypotheses:
+        key = item.get('confidence') or 'unknown'
+        by_confidence[key] = by_confidence.get(key, 0) + 1
+    return {'total': len(hypotheses), 'direct': by_confidence.get(_CORE_TAINT_CONFIDENCE_DIRECT, 0), 'reachable': by_confidence.get(_CORE_TAINT_CONFIDENCE_REACHABLE, 0), 'weak': by_confidence.get('weak', 0), 'found': bool(by_confidence.get(_CORE_TAINT_CONFIDENCE_DIRECT) or by_confidence.get(_CORE_TAINT_CONFIDENCE_REACHABLE))}
+# <<< end generated from ghydra/core/taint.py
+
+
+# >>> generated from ghydra/core/mission.py (05a2838bbe643615) — edit the core, then run scripts/gen_core.py
+_CORE_MISSION_VERSION = 1
+
+_CORE_MISSION_DEFAULT_CALLS = 60
+
+_CORE_MISSION_DEFAULT_TOKENS = 200000
+
+_CORE_MISSION_DEFAULT_SECONDS = 900
+
+_CORE_MISSION_ERROR_NO_PROGRAM = 'MISSION_NO_PROGRAM'
+
+_CORE_MISSION_ERROR_BUDGET = 'MISSION_BUDGET'
+
+_CORE_MISSION_ERROR_BAD_FILE = 'MISSION_BAD_FILE'
+
+_CORE_MISSION_STATUS_OPEN = 'open'
+
+_CORE_MISSION_STATUS_VERIFIED = 'verified'
+
+_CORE_MISSION_STATUS_UNVERIFIED = 'unverified'
+
+_CORE_MISSION_STATUS_UNKNOWN = 'unknown'
+
+def _core_mission_tokens_of(payload):
+    """The token estimate of one answer: about four characters per token.
+
+    Never zero: a call that answered nothing still cost a call, and a budget
+    that counts it as free would let an empty loop run forever.
+    """
+    text = json.dumps(payload, default=str) if payload is not None else ''
+    return max(1, len(text) // 4)
+
+def _core_mission_budget_exhausted(calls, max_calls, tokens, max_tokens, elapsed, max_seconds=None):
+    """Which budget is spent, in the order that matters, or ``None``.
+
+    Args:
+        calls: Calls already spent.
+        max_calls: The call limit.
+        tokens: Tokens already spent.
+        max_tokens: The token limit.
+        elapsed: Seconds since the mission started.
+        max_seconds: The wall-clock limit, when the surface enforces one.
+
+    Returns:
+        str | None: The reason the mission must stop, in the words the report
+                    uses, or ``None`` when there is room left.
+    """
+    if calls >= max_calls:
+        return f'the call budget ({max_calls}) is spent'
+    if tokens >= max_tokens:
+        return f'the token budget ({max_tokens}) is spent'
+    if max_seconds is not None and elapsed >= max_seconds:
+        return f'the time budget ({max_seconds}s) is spent'
+    return None
+
+def _core_mission_budget_row(calls, max_calls, tokens, max_tokens, seconds, max_seconds=None):
+    """The budget as the report shows it.
+
+    ``max_seconds`` is included only when the caller enforces one, so a surface
+    that has no wall clock does not advertise a limit it never checks.
+    """
+    row: Dict[str, Any] = {'calls': calls, 'max_calls': max_calls, 'tokens': tokens, 'max_tokens': max_tokens, 'seconds': round(float(seconds), 1)}
+    if max_seconds is not None:
+        row['max_seconds'] = max_seconds
+    return row
+
+def _core_mission_dossier(goal, mission_id, program, hints, budget, failed, skipped, findings, verification=None):
+    """The dossier a human reads, and the artifact a CI job keeps.
+
+    Args:
+        goal: The objective, in the words the user gave.
+        mission_id: The id the mission is stored under.
+        program: The program fingerprint (``name``, ``executable_path``).
+        hints: The hints read from the goal.
+        budget: The row from :func:`budget_row`.
+        failed: Why the mission stopped early, when it did.
+        skipped: The steps that were not run, with the reason in their name.
+        findings: The findings, each with id/title/kind/confidence/status and
+                  the evidence digests behind it.
+        verification: The re-read result, when the mission verified itself.
+
+    Returns:
+        str: The Markdown document.
+    """
+    lines = [f'# Mission: {goal}', '', f'- id: `{mission_id}`', f"- program: `{program.get('name') or '?'}` ({program.get('executable_path') or 'no path'})", f'- hints: {json.dumps(hints, ensure_ascii=False)}', f"- budget: {budget['calls']}/{budget['max_calls']} calls, ~{budget['tokens']} tokens, {budget['seconds']}s", '']
+    if failed:
+        lines.extend([f'**The mission stopped: {failed}**', ''])
+    if skipped:
+        lines.extend([f"Skipped steps: {', '.join(skipped)}", ''])
+    lines.extend(['## Findings', ''])
+    if not findings:
+        lines.append('_No finding was recorded._')
+    for finding in findings:
+        lines.append(f"### {finding['id']} — {finding['title']}")
+        lines.append('')
+        lines.append(f"- kind: `{finding.get('kind')}`  confidence: `{finding.get('confidence')}`  status: `{finding.get('status')}`")
+        if finding.get('detail'):
+            detail = str(finding['detail'])
+            cut = len(detail) > 2000
+            lines.extend(['', '```', detail[:2000], '```'])
+            if cut:
+                lines.append(f'_(detail truncated to 2000 of {len(detail)} characters)_')
+        for item in finding.get('evidence') or []:
+            lines.append(f"- evidence: `{item.get('endpoint')}` (digest `{(item.get('digest') or '')[:16]}`)")
+        lines.append('')
+    if verification is not None:
+        lines.extend(['## Verification', '', f"- evidence items re-read: {verification['checked']}", f"- findings verified: {verification['verified']}"])
+        if verification.get('unverified'):
+            lines.append(f"- **unverified: {', '.join(verification['unverified'])}** (their evidence moved or could not be re-read)")
+        elif not verification.get('checked'):
+            lines.append('- no evidence item was re-read, so no conclusion was verified')
+        else:
+            lines.append('- every conclusion still holds against its evidence')
+        lines.append('')
+    unknowns = [item for item in findings if item.get('status') == _CORE_MISSION_STATUS_UNKNOWN]
+    lines.extend(['## Not determined', ''])
+    if not unknowns and failed:
+        lines.append(f'_The mission stopped before it could answer: {failed}_')
+    elif not unknowns and (not findings):
+        lines.append('_No question was answered, so nothing is undetermined yet._')
+    elif not unknowns:
+        lines.append('_Nothing was left undetermined._')
+    for item in unknowns:
+        lines.append(f"- {item['id']}: {item['title']} — {item.get('detail') or ''}".rstrip())
+    lines.append('')
+    return '\n'.join(lines)
+# <<< end generated from ghydra/core/mission.py
+
+
 def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
     """Make GET request to Ghidra instance"""
     return _make_request("GET", port, endpoint, params=params)
 
-def safe_put(port: int, endpoint: str, data: dict) -> dict:
+def safe_put(port: int, endpoint: str, data: dict,
+             params: dict | None = None) -> dict:
     """Make PUT request to Ghidra instance with JSON payload"""
     headers = data.pop("headers", None) if isinstance(data, dict) else None
-    return _make_request("PUT", port, endpoint, json_data=data, headers=headers)
+    return _make_request("PUT", port, endpoint, params=params,
+                         json_data=data, headers=headers)
 
-def safe_post(port: int, endpoint: str, data: Union[dict, str]) -> dict:
+def safe_post(port: int, endpoint: str, data: Union[dict, str],
+              params: dict | None = None) -> dict:
     """Perform a POST request to a specific Ghidra instance with JSON or text payload"""
     headers = None
     json_payload = None
@@ -1057,16 +1842,19 @@ def safe_post(port: int, endpoint: str, data: Union[dict, str]) -> dict:
     else:
         text_payload = data
 
-    return _make_request("POST", port, endpoint, json_data=json_payload, data=text_payload, headers=headers)
+    return _make_request("POST", port, endpoint, params=params,
+                         json_data=json_payload, data=text_payload, headers=headers)
 
-def safe_patch(port: int, endpoint: str, data: dict) -> dict:
+def safe_patch(port: int, endpoint: str, data: dict,
+               params: dict | None = None) -> dict:
     """Perform a PATCH request to a specific Ghidra instance with JSON payload"""
     headers = data.pop("headers", None) if isinstance(data, dict) else None
-    return _make_request("PATCH", port, endpoint, json_data=data, headers=headers)
+    return _make_request("PATCH", port, endpoint, params=params,
+                         json_data=data, headers=headers)
 
-def safe_delete(port: int, endpoint: str) -> dict:
+def safe_delete(port: int, endpoint: str, params: dict | None = None) -> dict:
     """Perform a DELETE request to a specific Ghidra instance"""
-    return _make_request("DELETE", port, endpoint)
+    return _make_request("DELETE", port, endpoint, params=params)
 
 
 # ================= Text Formatters =================
@@ -3051,6 +3839,352 @@ def format_telemetry_summary(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def format_runbook_record(response: dict, **kwargs) -> str:
+    """A recorded runbook: where it went and which steps failed."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [f"Runbook recorded: {result.get('path', '?')} "
+             f"({result.get('steps', 0)} step(s))"]
+    for entry in result.get("failed") or []:
+        lines.append(f"  failed step {entry.get('step')}: "
+                     f"{entry.get('endpoint')} ({entry.get('code') or 'failed'})")
+    return "\n".join(lines)
+
+
+def format_runbook_replay(response: dict, **kwargs) -> str:
+    """A replayed runbook: what is identical, what moved, what failed."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [f"Replay: {result.get('total', 0)} step(s) - "
+             f"{result.get('identical', 0)} identical, "
+             f"{result.get('changed', 0)} changed, "
+             f"{result.get('failed', 0)} failed"]
+    if result.get("program_changed"):
+        lines.append("  note: the program fingerprint changed since the recording")
+    for item in result.get("steps") or []:
+        marker = {"identical": "SAME", "changed": "DIFF", "failed": "FAIL"}.get(
+            item.get("status"), "????")
+        line = f"  [{marker}] step {item.get('step')} {item.get('endpoint')}"
+        if item.get("code"):
+            line += f" ({item['code']})"
+        if item.get("reason"):
+            line += f" - {item['reason']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def format_analysis_diff(response: dict, **kwargs) -> str:
+    """Two snapshots compared: functions, imports and strings."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    summary = result.get("summary") or {}
+    functions = result.get("functions") or {}
+    lines = ["Diff" + (" - the program fingerprint changed"
+                       if result.get("program_changed")
+                       else " - same program fingerprint")]
+    if not functions.get("complete", True):
+        lines.append("  note: a function listing was truncated; the counts are a floor")
+    # A section that was not read to its end supports no removal claim, and the
+    # reader has to know which ones those were.
+    for section_name in ("imports", "strings"):
+        if not (result.get(section_name) or {}).get("complete", True):
+            lines.append(f"  note: the {section_name} listing was truncated; no "
+                         f"removal is claimed from it")
+    lines.append(f"  functions: +{summary.get('functions_added', 0)} "
+                 f"-{summary.get('functions_removed', 0)} "
+                 f"~{summary.get('functions_renamed', 0)} renamed "
+                 f"({functions.get('count_a', 0)} -> {functions.get('count_b', 0)})")
+    lines.append(f"  imports:   +{summary.get('imports_added', 0)} "
+                 f"-{summary.get('imports_removed', 0)}")
+    lines.append(f"  strings:   +{summary.get('strings_added', 0)} "
+                 f"-{summary.get('strings_removed', 0)}")
+
+    def section(title, rows, render):
+        if not rows:
+            return
+        lines.append("")
+        lines.append(f"{title}:")
+        for row in rows[:40]:
+            lines.append("  " + render(row))
+        if len(rows) > 40:
+            lines.append(f"  ... {len(rows) - 40} more")
+
+    section("functions added", functions.get("added") or [],
+            lambda row: f"+ {row.get('address')} {row.get('name') or '?'}")
+    section("functions removed", functions.get("removed") or [],
+            lambda row: f"- {row.get('address')} {row.get('name') or '?'}")
+    section("functions renamed", functions.get("renamed") or [],
+            lambda row: f"~ {row.get('address')} {row.get('from')} -> {row.get('to')}")
+    section("imports added", (result.get("imports") or {}).get("added") or [],
+            lambda row: f"+ {row}")
+    section("imports removed", (result.get("imports") or {}).get("removed") or [],
+            lambda row: f"- {row}")
+    section("strings added", (result.get("strings") or {}).get("added") or [],
+            lambda row: f"+ {str(row)[:100]}")
+    section("strings removed", (result.get("strings") or {}).get("removed") or [],
+            lambda row: f"- {str(row)[:100]}")
+    # What was not seen, kept apart from what is known to be gone.
+    for section_name in ("imports", "strings"):
+        rows = (result.get(section_name) or {}).get("removed_not_seen") or []
+        if rows:
+            lines.append("")
+            lines.append(f"{section_name} not seen in the second listing "
+                         "(the listing was not read to its end):")
+            for row in rows[:40]:
+                lines.append(f"  ? {str(row)[:100]}")
+    return "\n".join(lines)
+
+
+def format_analysis_taint(response: dict, **kwargs) -> str:
+    """Source-to-sink hypotheses: confidence, evidence and the disclaimer."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    source = result.get("source") or {}
+    sink = result.get("sink") or {}
+    counts = _taint_summarize(result)
+    lines = [f"Taint hypotheses: {source.get('name', '?')} -> {sink.get('name', '?')}",
+             f"  source sites: {source.get('sites', 0)}  "
+             f"sink sites: {sink.get('sites', 0)}  "
+             f"functions examined: {result.get('functions_examined', 0)}"]
+    if not counts["found"]:
+        lines.append("  no source-to-sink path was found - this is not proof of "
+                     "safety (the search is linear and bounded)")
+    for item in (result.get("hypotheses") or [])[:20]:
+        lines.append(f"  [{item.get('confidence')}] {item.get('reason')}")
+        if item.get("source_call"):
+            lines.append(f"      source call at {item['source_call']}")
+        if item.get("sink_call"):
+            lines.append(f"      sink call at {item['sink_call']}")
+        hops = item.get("hops") or []
+        if hops:
+            lines.append("      hops: " + " -> ".join(str(hop) for hop in hops))
+    if result.get("disclaimer"):
+        lines.append("")
+        lines.append(result["disclaimer"])
+    return "\n".join(lines)
+
+
+def format_mission_start(response: dict, **kwargs) -> str:
+    """A mission dossier: findings, verification and what was not determined."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    return str(result.get("dossier") or "")
+
+
+def format_cache_stats(response: dict, **kwargs) -> str:
+    """The cache: entries, bytes, programs, age."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+
+    def when(value):
+        if not isinstance(value, (int, float)):
+            return "?"
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(value))
+
+    return "\n".join([
+        f"Decompile cache: {result.get('path', '?')}",
+        f"  entries: {result.get('entries', 0)}  "
+        f"bytes: {result.get('bytes', 0)} of {result.get('max_bytes', 0)}",
+        f"  programs: {result.get('programs', 0)}  "
+        f"kinds: {', '.join(result.get('kinds') or []) or '-'}",
+        f"  oldest: {when(result.get('oldest'))}  "
+        f"newest: {when(result.get('newest'))}",
+    ])
+
+
+def format_fleet_query(response: dict, **kwargs) -> str:
+    """The fleet answer: one row per binary, and what could not be asked."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    kind = result.get("kind")
+    target = result.get("target")
+    lines = ["Fleet: " + str(kind) + (f" {target}" if target else ""),
+             f"  binaries: {result.get('count', 0)}  "
+             f"with it: {result.get('with_it', 0)}  "
+             f"without it: {result.get('without_it', 0)}"]
+    for row in result.get("binaries") or []:
+        marker = "YES" if row.get("present") else ("no " if row.get("ok") else "???")
+        line = (f"  [{marker}] {row.get('name') or row.get('identity')}"
+                f"  ports {','.join(str(port) for port in row.get('ports') or [])}")
+        detail = row.get("detail") or {}
+        if detail.get("address"):
+            line += f"  at {detail['address']}"
+        if detail.get("count") is not None:
+            line += f"  refs {detail['count']}"
+        if detail.get("matched"):
+            line += f"  matched {', '.join(str(m) for m in detail['matched'][:2])}"
+        if row.get("complete") is False:
+            line += "  (listing truncated)"
+        lines.append(line)
+        if row.get("disagreements"):
+            lines.append(f"       the ports disagree: {row['disagreements']}")
+    for item in result.get("unreachable") or []:
+        lines.append(f"  [---] port {item.get('port')} did not answer "
+                     f"({item.get('reason')})")
+    if result.get("partial"):
+        lines.append(f"  note: the question could not be answered for "
+                     f"{len(result['partial'])} member(s)")
+    return "\n".join(lines)
+
+
+def format_bsim_status(response: dict, **kwargs) -> str:
+    """Whether a signature query is possible, and what is missing if not."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    state = "ready" if result.get("ready") else "not ready"
+    lines = [f"BSim: {state}",
+             f"  engine: {'present' if result.get('available') else 'absent'}",
+             f"  database: {result.get('database') or '(none configured)'}"]
+    if result.get("database"):
+        lines.append(f"  database exists: "
+                     f"{'yes' if result.get('database_exists') else 'no'}")
+    if result.get("reason"):
+        lines.append(f"  {result['reason']}")
+    return "\n".join(lines)
+
+
+def format_bsim_ingest(response: dict, **kwargs) -> str:
+    """What the ingest did: how much was scanned, how much BSim inserted."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    if result.get("already_present"):
+        lines = [f"BSim ingest: {result.get('program')} is already in the database",
+                 f"  database: {result.get('database')}",
+                 f"  inserted: 0 functions (nothing to do)"]
+        if result.get("reason"):
+            lines.append(f"  {result['reason']}")
+        return "\n".join(lines)
+    lines = [f"BSim ingest: {result.get('program')}",
+             f"  database: {result.get('database')}"
+             + (" (created)" if result.get("created") else ""),
+             f"  discovered: {result.get('discovered_functions', 0)} functions",
+             f"  scanned: {result.get('scanned_functions', 0)}"
+             f" ({result.get('skipped_functions', 0)} skipped)",
+             f"  described: {result.get('described_functions', 0)}",
+             f"  inserted: {result.get('inserted_functions', 0)} functions"
+             f" into {result.get('inserted_executables', 0)} executable(s)",
+             f"  took: {result.get('seconds', 0)}s"]
+    if result.get("track_call_graph") is False:
+        lines.append("  call graph: not recorded (track_call_graph=false)")
+    if result.get("reason"):
+        lines.append(f"  note: {result['reason']}")
+    return "\n".join(lines)
+
+
+def format_bsim_query(response: dict, **kwargs) -> str:
+    """Which stored functions look like this one, with BSim's numbers."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [f"BSim query: {result.get('function')} at {result.get('address')}",
+             f"  database: {result.get('database')}",
+             f"  threshold: similarity >= {result.get('min_similarity')}",
+             f"  matches: {result.get('returned', 0)}"
+             f" (of {result.get('total_considered', 0)} considered)"]
+    for match in result.get("matches") or []:
+        where = match.get("executable") or "?"
+        path = match.get("path")
+        lines.append(f"  {match.get('similarity')} similarity,"
+                     f" significance {match.get('significance')}:"
+                     f" {match.get('function')} @ {match.get('address')}"
+                     f" in {where}" + (f" ({path})" if path else ""))
+    if result.get("reason"):
+        lines.append(f"  {result['reason']}")
+    return "\n".join(lines)
+
+
+def format_bsim_apply_names(response: dict, **kwargs) -> str:
+    """What apply-names did, or would do, with the match that justified it."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    if result.get("already_named"):
+        return "\n".join([
+            f"BSim apply: {result.get('from')} already carries the matched name",
+            f"  database: {result.get('database')}"])
+    match = result.get("match") or {}
+    lines = [f"BSim apply: {result.get('from')} -> {result.get('to')}",
+             f"  database: {result.get('database')}",
+             f"  from: {match.get('executable') or '?'}"
+             f" {match.get('function')} @ {match.get('address')}",
+             f"  similarity: {match.get('similarity')}"
+             f" (significance {match.get('significance')})",
+             f"  floor: {result.get('min_similarity')}"]
+    if result.get("applied"):
+        lines.append("  applied: yes (undo in Ghidra if the match is wrong)")
+    elif result.get("would_rename"):
+        lines.append("  applied: no (dry run) — pass dry_run=False to rename")
+    if result.get("reason") and not result.get("applied"):
+        lines.append(f"  {result['reason']}")
+    return "\n".join(lines)
+
+
+def format_bsim_diff(response: dict, **kwargs) -> str:
+    """What changed between two versions, paired by signature."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    if not isinstance(result, dict):
+        return str(result)
+    lines = [f"BSim diff: {result.get('program')} against"
+             f" {result.get('other_executable')}",
+             f"  database has {result.get('discovered_functions', 0)} functions"
+             f" in this program; compared {result.get('compared_functions', 0)}"
+             f" ({result.get('not_compared', 0)} not compared)",
+             f"  same: {result.get('same', 0)}, moved: {result.get('moved', 0)},"
+             f" not found: {result.get('not_found', 0)},"
+             f" no signature: {result.get('no_signature', 0)}",
+             f"  threshold: similarity >= {result.get('min_similarity')}"]
+    for pair in result.get("pairs") or []:
+        kind = pair.get("class")
+        if kind in ("same", "moved"):
+            other = pair.get("other") or {}
+            lines.append(f"  [{kind}] {pair.get('function')} @"
+                         f" {pair.get('address')} ->"
+                         f" {other.get('function')} @ {other.get('address')}"
+                         f" ({other.get('similarity')} similar)")
+        else:
+            lines.append(f"  [{kind}] {pair.get('function')} @"
+                         f" {pair.get('address')}")
+    for gap in result.get("query_failures") or []:
+        lines.append(f"  [query failed] {gap.get('function')}:"
+                     f" {gap.get('code')} — {gap.get('reason')}")
+    if not result.get("pairs"):
+        lines.append("  no function was compared")
+    return "\n".join(lines)
+
+
 FORMATTERS = {
     "functions_list": format_functions_list,
     "functions_get": format_function_info,
@@ -3178,6 +4312,19 @@ FORMATTERS = {
     "structs_create": format_generic_dict,
     "structs_delete": format_generic_dict,
     "structs_update_field": format_generic_dict,
+    "runbook_record": format_runbook_record,
+    "runbook_replay": format_runbook_replay,
+    "analysis_diff": format_analysis_diff,
+    "analysis_taint": format_analysis_taint,
+    "mission_start": format_mission_start,
+    "cache_stats": format_cache_stats,
+    "cache_clear": format_cache_stats,
+    "fleet_query": format_fleet_query,
+    "bsim_status": format_bsim_status,
+    "bsim_ingest": format_bsim_ingest,
+    "bsim_query": format_bsim_query,
+    "bsim_apply_names": format_bsim_apply_names,
+    "bsim_diff_versions": format_bsim_diff,
 }
 
 
@@ -4345,64 +5492,93 @@ def instances_discover(host: str | None = None) -> dict:
 
 @mcp.tool()
 @text_output
-def instances_register(port: int, url: str | None = None) -> str:
+def instances_register(port: int, url: str | None = None) -> dict:
     """Register a new Ghidra instance
-    
+
     Args:
         port: Port number of the Ghidra instance
         url: Optional URL if different from default http://host:port
-    
+
     Returns:
-        str: Confirmation message or error
+        dict: The envelope every tool answers in, with the confirmation in
+              ``result.message``
     """
-    return register_instance(port, url)
+    # The envelope, not a bare sentence: `text_output` passes a string through
+    # untouched, so a string answer never reaches the formatter the catalogue
+    # says formats this tool.
+    return {
+        "success": True,
+        "result": {"message": register_instance(port, url)},
+        "timestamp": int(time.time() * 1000),
+    }
 
 @mcp.tool()
 @text_output
-def instances_unregister(port: int) -> str:
+def instances_unregister(port: int) -> dict:
     """Unregister a Ghidra instance
-    
+
     Args:
         port: Port number of the instance to unregister
-    
+
     Returns:
-        str: Confirmation message or error
+        dict: The envelope every tool answers in, with the confirmation in
+              ``result.message``
     """
     with instances_lock:
         if port in active_instances:
             del active_instances[port]
-            return f"Unregistered instance on port {port}"
-        return f"No instance found on port {port}"
+            message = f"Unregistered instance on port {port}"
+        else:
+            message = f"No instance found on port {port}"
+    return {
+        "success": True,
+        "result": {"message": message},
+        "timestamp": int(time.time() * 1000),
+    }
 
 @mcp.tool()
 @text_output
-def instances_use(port: int) -> str:
+def instances_use(port: int) -> dict:
     """Set the current working Ghidra instance
-    
+
     Args:
         port: Port number of the instance to use
-        
+
     Returns:
-        str: Confirmation message or error
+        dict: The envelope every tool answers in, with the confirmation in
+              ``result.message``
     """
     global current_instance_port
-    
+
     # First validate that the instance exists and is active
     if port not in active_instances:
         # Try to register it if not found
         register_instance(port)
         if port not in active_instances:
-            return f"Error: No active Ghidra instance found on port {port}"
-    
+            return {
+                "success": False,
+                "error": {
+                    "code": "INSTANCE_NOT_FOUND",
+                    "message": f"no active Ghidra instance found on port {port}",
+                },
+                "timestamp": int(time.time() * 1000),
+            }
+
     # Set as current instance
     current_instance_port = port
-    
+
     # Return information about the selected instance
     with instances_lock:
         info = active_instances[port]
         program = info.get("file", "unknown program")
         project = info.get("project", "unknown project")
-        return f"Now using Ghidra instance on port {port} with {program} in project {project}"
+        message = (f"Now using Ghidra instance on port {port} with {program} "
+                   f"in project {project}")
+    return {
+        "success": True,
+        "result": {"message": message},
+        "timestamp": int(time.time() * 1000),
+    }
 
 @mcp.tool()
 @text_output
@@ -4452,6 +5628,7 @@ def functions_list(offset: int = 0, limit: int = 100,
                   name_matches_regex: str | None = None,
                   addr_min: str | None = None,
                   addr_max: str | None = None,
+                  count: bool = True,
                   port: int | None = None) -> dict:
     """List functions with filtering and pagination
 
@@ -4462,6 +5639,7 @@ def functions_list(offset: int = 0, limit: int = 100,
         name_matches_regex: Regex name filter
         addr_min: Only return functions at or above this address (hex)
         addr_max: Only return functions at or below this address (hex)
+        count: Compute the total (default True); false skips the counting scan (I10)
         port: Specific Ghidra instance port (optional)
 
     Returns:
@@ -4471,7 +5649,8 @@ def functions_list(offset: int = 0, limit: int = 100,
 
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
+        "count": "true" if count else "false",
     }
     if name_contains:
         params["name_contains"] = name_contains
@@ -4586,6 +5765,7 @@ def functions_decompile(name: str | None = None, address: str | None = None,
                         syntax_tree: bool = False, style: str = "normalize",
                         show_constants: bool = True, timeout: int = DEFAULT_DECOMPILATION_TIMEOUT,
                         start_line: int | None = None, end_line: int | None = None, max_lines: int | None = None,
+                        use_cache: bool = False, max_age: int = 86400,
                         port: int | None = None) -> dict:
     """Get decompiled code for a function with optional line filtering and configurable options
 
@@ -4599,6 +5779,8 @@ def functions_decompile(name: str | None = None, address: str | None = None,
         start_line: Start at this line number (1-indexed, optional)
         end_line: End at this line number (inclusive, optional)
         max_lines: Maximum number of lines to return (optional, takes precedence over end_line)
+        use_cache: Serve an unchanged program from the local cache (default False)
+        max_age: How old a cached answer may be, in seconds (default 86400)
         port: Specific Ghidra instance port (optional)
 
     Returns:
@@ -4647,7 +5829,12 @@ def functions_decompile(name: str | None = None, address: str | None = None,
     else:
         endpoint = f"functions/by-name/{quote(name)}/decompile"
 
-    response = safe_get(port, endpoint, params)
+    if use_cache:
+        response, _cached = _cache_get_or_compute(
+            port, "decompile", {"endpoint": endpoint, "params": params},
+            lambda: safe_get(port, endpoint, params), max_age=max_age)
+    else:
+        response = safe_get(port, endpoint, params)
     simplified = simplify_response(response)
 
     return simplified
@@ -5329,7 +6516,7 @@ def xrefs_list(to_addr: str | None = None, from_addr: str | None = None, type: s
     
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
     }
     if to_addr:
         params["to_addr"] = to_addr
@@ -5383,7 +6570,7 @@ def xrefs_find_by_name(name: str, offset: int = 0, limit: int = 100,
 
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
     }
 
     response = safe_get(port, f"xrefs/to-name/{quote(name)}", params)
@@ -5426,7 +6613,7 @@ def data_list(offset: int = 0, limit: int = 100, addr: str | None = None,
 
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
     }
     # Server filters are label/label_contains; map the friendlier arg names.
     if name:
@@ -5498,7 +6685,7 @@ def data_list_strings(offset: int = 0, limit: int = 2000, filter: str | None = N
     
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
     }
     
     if filter:
@@ -5646,7 +6833,7 @@ def structs_list(offset: int = 0, limit: int = 100, category: str | None = None,
 
     params = {
         "offset": offset,
-        "limit": limit
+        "limit": limit,
     }
     if category:
         params["category"] = category
@@ -8447,7 +9634,7 @@ def scripts_list(port: int | None = None) -> dict:
     """List Ghidra scripts available to run
 
     Requires the server started with script execution enabled
-    (-Dghydra.dev.allowScripts=true or GHYDRA_ALLOW_SCRIPTS=1); otherwise returns 403.
+    (-Dghidra.dev.allowScripts=true or GHYDRA_ALLOW_SCRIPTS=1); otherwise returns 403.
 
     Args:
         port: Specific Ghidra instance port (optional)
@@ -8476,7 +9663,7 @@ def scripts_run(name: str | None = None, source: str | None = None,
     Ghidra launched via pyghidraRun, not just the installed extension.
 
     WARNING: this is arbitrary code execution. It requires the server started with
-    -Dghydra.dev.allowScripts=true (or GHYDRA_ALLOW_SCRIPTS=1); otherwise returns 403.
+    -Dghidra.dev.allowScripts=true (or GHYDRA_ALLOW_SCRIPTS=1); otherwise returns 403.
 
     Args:
         name: Name of an existing script (e.g. "MyScript.java" or "Probe.py")
@@ -8521,198 +9708,20 @@ def scripts_run(name: str | None = None, source: str | None = None,
 # ships as one standalone file and must not import the ghydra package.
 # test_capabilities_summary.py asserts the two copies stay byte-for-byte in
 # agreement, the same way the Kuna error taxonomies are kept in step.
-CAPABILITY_RULES = (
-    {
-        "id": "T1055",
-        "name": "Process Injection",
-        "tactic": "Defense Evasion / Privilege Escalation",
-        "imports": ("VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread",
-                    "NtCreateThreadEx", "QueueUserAPC", "SetThreadContext",
-                    "NtMapViewOfSection"),
-        "strings": (),
-    },
-    {
-        "id": "T1057",
-        "name": "Process Discovery",
-        "tactic": "Discovery",
-        "imports": ("CreateToolhelp32Snapshot", "Process32First", "Process32Next",
-                    "EnumProcesses", "NtQuerySystemInformation"),
-        "strings": (),
-    },
-    {
-        "id": "T1082",
-        "name": "System Information Discovery",
-        "tactic": "Discovery",
-        "imports": ("GetSystemInfo", "GetVersionEx", "GetComputerName",
-                    "GetUserName", "GetDiskFreeSpace", "RegQueryValueEx"),
-        "strings": (),
-    },
-    {
-        "id": "T1105",
-        "name": "Ingress Tool Transfer",
-        "tactic": "Command and Control",
-        "imports": ("URLDownloadToFile", "WinHttpOpen", "InternetOpenUrl",
-                    "HttpSendRequest", "curl_easy_perform", "recv", "WSARecv"),
-        "strings": ("http://", "https://", "Mozilla/", "User-Agent", "download"),
-    },
-    {
-        "id": "T1071",
-        "name": "Application Layer Protocol",
-        "tactic": "Command and Control",
-        "imports": ("WSAConnect", "InternetConnect", "HttpOpenRequest",
-                    "WSAStartup", "connect", "send"),
-        "strings": (),
-    },
-    {
-        "id": "T1486",
-        "name": "Data Encrypted for Impact",
-        "tactic": "Impact",
-        "imports": ("CryptEncrypt", "CryptGenKey", "BCryptEncrypt", "CryptDeriveKey"),
-        "strings": ("YOUR FILES", "ransom", "decrypt", ".locked", "bitcoin",
-                    "restore your", "encrypted"),
-    },
-    {
-        "id": "T1497",
-        "name": "Virtualization / Sandbox Evasion",
-        "tactic": "Defense Evasion / Discovery",
-        "imports": ("IsDebuggerPresent", "CheckRemoteDebuggerPresent",
-                    "GetTickCount", "Sleep", "NtQueryInformationProcess"),
-        "strings": ("VMware", "VirtualBox", "QEMU", "Sandbox", "VBox", "ollydbg"),
-    },
-    {
-        "id": "T1113",
-        "name": "Screen Capture",
-        "tactic": "Collection",
-        "imports": ("BitBlt", "GetDC", "CreateCompatibleBitmap", "PrintWindow",
-                    "GetWindowDC"),
-        "strings": (),
-    },
-    {
-        "id": "T1547",
-        "name": "Boot or Logon Autostart Execution",
-        "tactic": "Persistence",
-        "imports": ("CreateService", "OpenSCManager", "RegSetValueEx", "ShellExecute"),
-        "strings": ("\\CurrentVersion\\Run", "\\RunOnce", "schtasks", "startup"),
-    },
-    {
-        "id": "T1027",
-        "name": "Obfuscated Files or Information",
-        "tactic": "Defense Evasion",
-        "imports": ("VirtualProtect", "GetProcAddress", "LoadLibraryA",
-                    "LoadLibraryW", "LdrLoadDll"),
-        "strings": ("base64", "obfuscat"),
-    },
-)
-
-_CAP_IMPORT_KEYS = ("name", "label", "symbol", "value")
-_CAP_STRING_KEYS = ("value", "name", "string", "text")
-_CAP_ADDRESS_KEYS = ("address", "addr", "offset")
-
-
-def _cap_items(response: object) -> list[dict]:
-    if not isinstance(response, dict) or not response.get("success", False):
-        return []
-    payload = response.get("result")
-    if not isinstance(payload, list):
-        return []
-    return [item for item in payload if isinstance(item, dict)]
-
-
-def _cap_text(item: dict, keys: tuple[str, ...]) -> str:
-    for key in keys:
-        value = item.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return ""
-
-
-def _cap_address(item: dict) -> str:
-    for key in _CAP_ADDRESS_KEYS:
-        value = item.get(key)
-        if isinstance(value, (str, int)) and value != "":
-            return str(value)
-    return ""
-
-
-def _cap_evidence(items: list[dict], keys: tuple[str, ...],
-                  patterns: tuple[str, ...], kind: str) -> list[dict]:
-    found: list[dict] = []
-    seen: set[tuple[str, str]] = set()
-    for item in items:
-        text = _cap_text(item, keys)
-        if not text:
-            continue
-        lowered = text.lower()
-        for pattern in patterns:
-            if pattern.lower() in lowered:
-                marker = (kind, text)
-                if marker not in seen:
-                    seen.add(marker)
-                    found.append({
-                        "kind": kind,
-                        "name": text[:120],
-                        "address": _cap_address(item),
-                        "matched": pattern,
-                    })
-                break
-    return found
+#: Defined once, in the generated core (I1).
+CAPABILITY_RULES = _CORE_CAPABILITY_RULES
 
 
 def build_capability_report(program: object, imports: object, strings: object,
                             include_strings: bool = True) -> dict:
-    """Compose the three envelopes into a ranked capability triage report."""
-    import_items = _cap_items(imports)
-    string_items = _cap_items(strings) if include_strings else []
+    """Compose the three envelopes into a ranked capability triage report.
 
-    failures = []
-    for label, response in (("imports", imports), ("strings", strings)):
-        if label == "strings" and not include_strings:
-            continue
-        if isinstance(response, dict) and response.get("success") is False:
-            failures.append(label)
+    Delegates to the generated core (I1): the CLI and the bridge rank the same
+    evidence with the same rules, so the two cannot disagree about a binary.
+    """
+    return _core_build_capability_report(program, imports, strings,
+                                         include_strings)
 
-    findings = []
-    for rule in CAPABILITY_RULES:
-        import_hits = _cap_evidence(import_items, _CAP_IMPORT_KEYS,
-                                    rule["imports"], "import")
-        string_hits = _cap_evidence(string_items, _CAP_STRING_KEYS,
-                                    rule["strings"], "string")
-        score = 2 * len(import_hits) + len(string_hits)
-        if score < 2:
-            continue
-        confidence = "high" if score >= 6 else ("medium" if score >= 3 else "low")
-        findings.append({
-            "id": rule["id"],
-            "name": rule["name"],
-            "tactic": rule["tactic"],
-            "confidence": confidence,
-            "score": score,
-            "import_matches": len(import_hits),
-            "string_matches": len(string_hits),
-            "evidence": (import_hits + string_hits)[:6],
-        })
-    findings.sort(key=lambda finding: (-finding["score"], finding["id"]))
-
-    name = ""
-    if isinstance(program, dict) and isinstance(program.get("result"), dict):
-        name = program["result"].get("name") or ""
-
-    return {
-        "success": True,
-        "result": {
-            "program": name,
-            "summary": {
-                "imports_scanned": len(import_items),
-                "strings_scanned": len(string_items),
-                "rules": len(CAPABILITY_RULES),
-                "techniques_matched": len(findings),
-            },
-            "failures": failures,
-            "findings": findings,
-            "method": "Heuristic import/string matching; a lead for an analyst, "
-                      "not a verdict.",
-        },
-    }
 
 
 _CAPABILITY_PAGE_LIMIT = 1000      # the server clamps every page to this
@@ -8737,7 +9746,7 @@ def _collect_capability_items(port: int, endpoint: str,
                             {"offset": offset, "limit": _CAPABILITY_PAGE_LIMIT})
         if first is None:
             first = response
-        page = _cap_items(response)
+        page = _core_cap_items(response)
         items.extend(page)
         meta = response.get("meta") if isinstance(response, dict) else None
         total = meta.get("total") if isinstance(meta, dict) else None
@@ -8780,90 +9789,31 @@ def analysis_capabilities_summary(include_strings: bool = True,
     return build_capability_report(program, imports, strings, include_strings)
 
 
-# Context pack (R3): a copy of ghydra/contextpack.py, the way the capability
-# rules are duplicated — the bridge is one standalone file and must not import
-# the ghydra package. test_context_pack.py asserts the copies agree.
-_CONTEXT_CHAR_PER_TOKEN = 4
+# Context pack (R3): generated from ghydra/core/contextpack.py (I1).
+_CONTEXT_CHAR_PER_TOKEN = _CORE_CONTEXT_CHAR_PER_TOKEN
 
-_CONTEXT_TEMPLATES = {
-    "what_it_does": re.compile(
-        r"o que (esse|esse|esta|essa|este|a função|the function|it) "
-        r"|what .*(does|do)|o que faz|descompil|decompil", re.IGNORECASE),
-    "data_origin": re.compile(
-        r"de onde|quem (escreve|lê|le|leu|escreveu)|where .*(from|written|read)"
-        r"|who (writes|reads)|xref|referên|referen", re.IGNORECASE),
-    "what_changed": re.compile(
-        r"o que mudou|what changed|mudou|diff|desde a última|since last",
-        re.IGNORECASE),
-}
+_CONTEXT_TEMPLATES = _CORE_CONTEXT_TEMPLATES
 
 
 def _ctx_classify_question(question: str) -> str:
-    for template, pattern in _CONTEXT_TEMPLATES.items():
-        if pattern.search(question or ""):
-            return template
-    return "overview"
+    """Delegates to the generated core (I1)."""
+    return _core_context_classify(question)
 
 
 def _ctx_tokens(text: str) -> int:
-    return max(1, len(text) // _CONTEXT_CHAR_PER_TOKEN)
+    """Delegates to the generated core (I1)."""
+    return _core_context_tokens(text)
 
 
 def build_context_pack(question: str, template: str, program: str,
                        sections: list, budget_tokens: int = 4000) -> dict:
-    """Assemble fetched sections into one budgeted dossier (R3)."""
-    budget_tokens = max(200, int(budget_tokens))
-    included = []
-    omitted = []
-    citations = []
-    seen_citations = set()
-    used = 0
+    """Assemble the fetched sections into one budgeted dossier (R3).
 
-    header = _ctx_tokens(f"Context pack: {question}")
-    for index, section in enumerate(sections):
-        title = str(section.get("title", "section"))
-        body = str(section.get("body", ""))
-        section_citations = [str(c) for c in section.get("citations") or []]
-
-        if index == 0:
-            # The section the question is about: truncate, never drop.
-            room = budget_tokens - header - used - _ctx_tokens(title)
-            if _ctx_tokens(body) > room > 0:
-                keep_chars = room * _CONTEXT_CHAR_PER_TOKEN
-                body = body[:keep_chars].rsplit("\n", 1)[0]
-                omitted.append({"section": title,
-                                "reason": f"truncated to fit {budget_tokens} "
-                                          f"tokens"})
-        elif used + _ctx_tokens(title) + _ctx_tokens(body) + header > budget_tokens:
-            omitted.append({"section": title,
-                            "reason": "dropped: over the token budget"})
-            continue
-
-        used += _ctx_tokens(title) + _ctx_tokens(body)
-        included.append({"title": title, "body": body,
-                         "citations": section_citations})
-        for citation in section_citations:
-            if citation not in seen_citations:
-                seen_citations.add(citation)
-                citations.append(citation)
-
-    return {
-        "success": True,
-        "result": {
-            "question": question,
-            "template": template,
-            "program": program,
-            "sections": included,
-            "citations": citations,
-            "omitted": omitted,
-            "budget_tokens": budget_tokens,
-            "used_tokens": header + used,
-            "method": "Composed from already-fetched endpoints; ranked by "
-                      "relevance to the question, truncated by budget. Every "
-                      "address is citable.",
-        },
-    }
-
+    Delegates to the generated core (I1): the same budget arithmetic decides
+    what the CLI and the bridge leave out, and why.
+    """
+    return _core_build_context_pack(question, template, program, sections,
+                                    budget_tokens)
 
 def _ctx_section(title: str, response, key: str = "result",
                  citations: tuple = ()) -> dict:
@@ -9074,19 +10024,22 @@ def classes_list(offset: int = 0, limit: int = 100, port: int | None = None) -> 
 
 @mcp.tool()
 @text_output
-def symbols_list(offset: int = 0, limit: int = 100, port: int | None = None) -> dict:
+def symbols_list(offset: int = 0, limit: int = 100, count: bool = True,
+                port: int | None = None) -> dict:
     """List all symbols in the program
 
     Args:
         offset: Pagination offset (default: 0)
         limit: Maximum items to return (default: 100)
+        count: Compute the total (default True); false skips the counting scan (I10)
         port: Specific Ghidra instance port (optional)
 
     Returns:
         dict: List of symbols with name, address, type, and namespace
     """
     port = _get_instance_port(port)
-    params = {"offset": offset, "limit": limit}
+    params = {"offset": offset, "limit": limit,
+              "count": "true" if count else "false"}
     response = safe_get(port, "symbols", params)
     simplified = simplify_response(response)
     if isinstance(simplified, dict) and "error" not in simplified:
@@ -10938,10 +11891,1454 @@ def tasks_cancel(task_id: str) -> dict:
 # or at runtime with tools_load_group). The four tools_* meta-tools are always
 # loaded, and the full catalogue stays searchable even when a tool is hidden.
 
+# ================= Reproducible runbooks and analysis diff (R6) =================
+# The bridge is a standalone script and must not import the ghydra package, so
+# the runbook and diff logic is duplicated from ghydra/runbook.py and
+# ghydra/diff.py. test_runbook.py asserts the two sides agree.
+
+RUNBOOK_VERSION = 1
+_RUNBOOK_VOLATILE_KEYS = ("id", "timestamp", "instance", "_links", "api_links")
+_DIFF_PAGE_LIMIT = 1000
+_DIFF_MAX_PAGES = 20
+#: Defined once, in the core (I1).
+_DIFF_PROGRAM_FIELDS = _CORE_DIFF_PROGRAM_FIELDS
+
+
+def _runbook_canonical(value: Any) -> str:
+    """Delegates to the generated core (I1): one definition, two surfaces."""
+    return _core_canonical(value)
+
+
+def _runbook_digest(value: Any) -> str:
+    """Delegates to the generated core (I1)."""
+    return _core_digest(value)
+
+
+def _runbook_stable_result(envelope: Any) -> Any:
+    """Delegates to the generated core (I1), with the runbook's key set."""
+    return _core_stable_result(envelope, _RUNBOOK_VOLATILE_KEYS)
+
+
+def _runbook_load_steps(steps: str) -> list:
+    """The steps to record: JSON text, or the path of a JSON file.
+
+    A tool parameter that takes a nested object is declared as text because a
+    client flattens what is nested; the same rule makes a file path and an
+    inline document the same parameter.
+    """
+    text = (steps or "").strip()
+    if not text:
+        raise ValueError("steps is required")
+    if not text.startswith(("[", "{")):
+        try:
+            with open(text, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as exc:
+            raise ValueError(f"cannot read {steps}: {exc}") from exc
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise ValueError(f"steps is not valid JSON: {exc}") from exc
+    # The rules live in the generated core (I1): one definition, two surfaces.
+    # _CoreBadSteps/_CoreBadEntry subclass ValueError, which is what this
+    # function's callers already catch.
+    return _core_validate_steps(data)
+
+
+def _runbook_program(port: int) -> dict:
+    response = safe_get(port, "program")
+    payload = response.get("result") if isinstance(response, dict) else None
+    return _core_cache_fingerprint(payload)
+
+
+def _runbook_call(port: int, step: dict) -> dict:
+    method = step["method"]
+    endpoint = step["endpoint"]
+    params = step.get("params")
+    payload = step.get("payload")
+    if method == "GET":
+        return safe_get(port, endpoint, params)
+    # safe_post/safe_patch/safe_put pop "headers" from the payload, so a copy
+    # goes in: the runbook must not lose what it recorded.
+    body = dict(payload) if isinstance(payload, dict) else (payload or {})
+    # The parameters travel with the step: a POST BSim step carries its address
+    # and its dry-run arguments there, and dropping them made the replay a
+    # different request from the one that was recorded.
+    if method == "POST":
+        return safe_post(port, endpoint, body, params=params)
+    if method == "PATCH":
+        return safe_patch(port, endpoint, body, params=params)
+    if method == "PUT":
+        return safe_put(port, endpoint, body, params=params)
+    return safe_delete(port, endpoint, params=params)
+
+
+def _runbook_record(port: int, steps: list) -> dict:
+    header = {"runbook": RUNBOOK_VERSION, "created": int(time.time()),
+              "program": _runbook_program(port), "steps": len(steps)}
+    entries = []
+    for index, step in enumerate(steps, start=1):
+        response = _runbook_call(port, step)
+        ok = bool(isinstance(response, dict) and response.get("success", False))
+        code = None
+        if not ok and isinstance(response, dict):
+            error = response.get("error")
+            if isinstance(error, dict):
+                code = error.get("code")
+        entries.append({
+            "step": index,
+            "request": {key: step[key] for key in
+                        ("method", "endpoint", "params", "payload")
+                        if step.get(key) is not None},
+            "ok": ok, "code": code,
+            "digest": _runbook_digest(_runbook_stable_result(response)),
+        })
+    return {"header": header, "entries": entries}
+
+
+def _runbook_save(document: dict, path: str) -> None:
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(_runbook_canonical(document["header"]) + "\n")
+        for entry in document["entries"]:
+            handle.write(_runbook_canonical(entry) + "\n")
+
+
+def _runbook_load(path: str) -> dict:
+    with open(path, encoding="utf-8") as handle:
+        lines = [line for line in handle.read().splitlines() if line.strip()]
+    if not lines:
+        raise ValueError(f"{path} is empty")
+    header = json.loads(lines[0])
+    if not isinstance(header, dict) or "runbook" not in header:
+        raise ValueError(f"{path}: the first line is not a runbook header")
+    if header.get("runbook") != RUNBOOK_VERSION:
+        raise ValueError(f"runbook version {header.get('runbook')!r} is not supported")
+    entries = []
+    for line in lines[1:]:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return {"header": header, "entries": entries}
+
+
+def _runbook_replay(port: int, document: dict) -> dict:
+    recorded = document.get("entries") or []
+    now = _runbook_program(port)
+    recorded_program = (document.get("header") or {}).get("program") or {}
+    program_changed = bool(recorded_program and now
+                           and _runbook_canonical(recorded_program)
+                           != _runbook_canonical(now))
+    results = []
+    for entry in recorded:
+        request = entry.get("request") or {}
+        step = {"method": request.get("method") or "GET",
+                "endpoint": request.get("endpoint") or "",
+                "params": request.get("params"), "payload": request.get("payload")}
+        response = _runbook_call(port, step)
+        ok = bool(isinstance(response, dict) and response.get("success", False))
+        if not ok:
+            error = response.get("error") if isinstance(response, dict) else None
+            results.append({"step": entry.get("step"),
+                            "endpoint": step["endpoint"], "status": "failed",
+                            "code": (error or {}).get("code") if isinstance(error, dict) else None,
+                            "reason": (error or {}).get("message") if isinstance(error, dict) else None})
+            continue
+        current = _runbook_digest(_runbook_stable_result(response))
+        results.append({
+            "step": entry.get("step"), "endpoint": step["endpoint"],
+            "status": "identical" if current == entry.get("digest") else "changed",
+            "digest_recorded": entry.get("digest"), "digest_current": current,
+        })
+    changed = [item for item in results if item["status"] == "changed"]
+    failed = [item for item in results if item["status"] == "failed"]
+    return {"success": True, "result": {
+        "steps": results, "total": len(results),
+        "identical": len(results) - len(changed) - len(failed),
+        "changed": len(changed), "failed": len(failed),
+        "program_changed": program_changed,
+        "recorded_program": recorded_program, "current_program": now,
+        "ok": not changed and not failed}}
+
+
+def _diff_page(port: int, endpoint: str, keys=("name", "value")) -> dict:
+    """A listing read to its end, saying whether it was read completely."""
+    items = []
+    complete = True
+    offset = 0
+    for _page_number in range(_DIFF_MAX_PAGES):
+        response = safe_get(port, endpoint, {"offset": offset, "limit": _DIFF_PAGE_LIMIT})
+        if not isinstance(response, dict) or not response.get("success", False):
+            return {"items": items, "complete": False, "error": True}
+        payload = response.get("result")
+        page = payload if isinstance(payload, list) else []
+        items.extend(page)
+        meta = response.get("meta") or {}
+        total = meta.get("total") if isinstance(meta, dict) else None
+        if not page or len(page) < _DIFF_PAGE_LIMIT:
+            break
+        if isinstance(total, int) and len(items) >= total:
+            break
+        offset += len(page)
+    else:
+        complete = False
+    names = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key in keys:
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                names.append(value)
+                break
+    return {"items": items, "complete": complete, "error": False, "names": names}
+
+
+def _diff_collect(port: int, include_strings: bool = True) -> dict:
+    response = safe_get(port, "program")
+    payload = response.get("result") if isinstance(response, dict) else None
+    program = _core_cache_fingerprint(payload)
+    functions_page = _diff_page(port, "functions")
+    functions = [{"address": str(item.get("address") or ""),
+                  "name": item.get("name"), "size": item.get("size")}
+                 for item in functions_page["items"] if isinstance(item, dict)]
+    imports_page = _diff_page(port, "symbols/imports", ("name", "label", "symbol"))
+    if include_strings:
+        strings_page = _diff_page(port, "strings", ("value", "name", "string"))
+    else:
+        strings_page = {"items": [], "complete": True, "error": False, "names": []}
+    return {"program": program, "functions": functions,
+            "functions_complete": functions_page["complete"],
+            "imports": sorted(set(imports_page["names"])),
+            "imports_complete": imports_page["complete"],
+            "strings": sorted(set(strings_page["names"])),
+            "strings_complete": strings_page["complete"]}
+
+
+def _diff_names(before: set, after: set) -> dict:
+    """Delegates to the generated core (I1)."""
+    return _core_diff_names(before, after)
+
+
+def _diff_snapshots(a: dict, b: dict) -> dict:
+    """Delegates to the generated core (I1): one comparison, two surfaces."""
+    return _core_diff_snapshots(a, b)
+
+
+@mcp.tool()
+@text_output
+def runbook_record(steps: str, output: str | None = None,
+                   port: int | None = None) -> dict:
+    """Record a reproducible sequence of API calls into a runbook file
+
+    Each step is called once and its answer digested, so a later replay can say
+    what changed. The runbook is JSONL and diffs well in git.
+
+    Args:
+        steps: JSON text (or the path of a JSON file) with the steps: a list of
+            {"endpoint": "...", "method": "GET|POST|PATCH|PUT|DELETE",
+             "params": {...}, "payload": {...}}
+        output: Where to write the runbook (default: CWD/runbook.ghydrarb.jsonl)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The path written, the step count and the steps that failed
+    """
+    port = _get_instance_port(port)
+    try:
+        parsed = _runbook_load_steps(steps)
+    except ValueError as exc:
+        return {"success": False, "error": {"code": "RUNBOOK_BAD_STEPS",
+                                            "message": str(exc)}}
+    document = _runbook_record(port, parsed)
+    target = output or os.path.join(os.getcwd(), "runbook.ghydrarb.jsonl")
+    try:
+        _runbook_save(document, target)
+    except OSError as exc:
+        return {"success": False, "error": {"code": "RUNBOOK_IO",
+                                            "message": f"cannot write {target}: {exc}"}}
+    failed = [{"step": entry["step"],
+               "endpoint": entry["request"].get("endpoint"),
+               "code": entry.get("code")}
+              for entry in document["entries"] if not entry.get("ok")]
+    return {"success": True, "result": {"path": target,
+                                        "steps": len(document["entries"]),
+                                        "failed": failed}}
+
+
+@mcp.tool()
+@text_output
+def runbook_replay(path: str, port: int | None = None) -> dict:
+    """Re-run a runbook and report which answers moved
+
+    Args:
+        path: The runbook file (.ghydrarb.jsonl) to replay
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Per-step identical/changed/failed, and whether the program changed
+    """
+    port = _get_instance_port(port)
+    try:
+        document = _runbook_load(path)
+    except (OSError, ValueError) as exc:
+        return {"success": False, "error": {"code": "RUNBOOK_BAD_FILE",
+                                            "message": str(exc)}}
+    return _runbook_replay(port, document)
+
+
+@mcp.tool()
+@text_output
+def analysis_diff(b_port: int, include_strings: bool = True,
+                  port: int | None = None) -> dict:
+    """Compare this instance with another one and report what changed
+
+    Composes the program fingerprint, the functions (by address, with renames
+    told apart from additions and removals), the imports and the defined
+    strings. A listing that could not be read to its end is reported as a
+    floor, never as a removal.
+
+    Args:
+        b_port: Port of the instance to compare against
+        include_strings: Compare the defined strings (default True)
+        port: Specific Ghidra instance port for the left side (optional)
+
+    Returns:
+        dict: Functions added/removed/renamed, imports and strings added/removed
+    """
+    port = _get_instance_port(port)
+    left = _diff_collect(port, include_strings=include_strings)
+    right = _diff_collect(int(b_port), include_strings=include_strings)
+    return {"success": True, "result": _diff_snapshots(left, right)}
+
+
+# ================= Source-to-sink hypotheses (R5) =================
+# Duplicated from ghydra/taint.py: the bridge is a standalone script and must
+# not import the ghydra package. test_taint.py asserts the two sides agree.
+
+#: All of these are defined once, in the generated core (I1).
+_TAINT_CALL_OPCODES = _CORE_TAINT_CALL_OPCODES
+_TAINT_DISCLAIMER = _CORE_TAINT_DISCLAIMER
+
+
+def _taint_result(envelope: Any) -> Any:
+    if isinstance(envelope, dict) and envelope.get("success", False):
+        return envelope.get("result")
+    return None
+
+
+def _taint_resolve_name(port: int, name: str) -> dict:
+    addresses = []
+    references = []
+    function = _taint_result(safe_get(port, f"functions/by-name/{quote(name)}"))
+    if isinstance(function, dict) and function.get("address"):
+        addresses.append(str(function["address"]))
+    xrefs = _taint_result(safe_get(port, f"xrefs/to-name/{quote(name)}",
+                                   {"limit": 1000}))
+    # `XrefResource.getRefsToName()` answers `{name, symbols, references, total}`,
+    # not a list: testing `isinstance(xrefs, list)` skipped every real reference.
+    if isinstance(xrefs, dict):
+        xrefs = xrefs.get("references")
+    for item in xrefs if isinstance(xrefs, list) else []:
+        if not isinstance(item, dict):
+            continue
+        reference = {
+            "from_address": item.get("fromAddress") or item.get("from_address"),
+            "to_address": item.get("toAddress") or item.get("to_address"),
+            "type": (item.get("refType") or item.get("type")
+                     or item.get("ref_type")),
+            "function": item.get("fromFunction") or item.get("function"),
+            "function_address": (item.get("fromFunctionAddress")
+                                 or item.get("from_function_address")),
+        }
+        references.append(reference)
+        if reference["to_address"]:
+            addresses.append(str(reference["to_address"]))
+    return {"name": name, "addresses": list(dict.fromkeys(addresses)),
+            "references": references}
+
+
+def _taint_calls_in_function(port: int, function_address: str) -> list:
+    payload = _taint_result(safe_get(port, f"functions/{function_address}/pcode"))
+    if not isinstance(payload, dict):
+        return []
+    operations = payload.get("operations")
+    if not isinstance(operations, list):
+        return []
+    calls = []
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        if op.get("opcode") not in _TAINT_CALL_OPCODES:
+            continue
+        inputs = op.get("inputs") or []
+        calls.append({"at": str(op.get("address") or ""),
+                      "target": str(inputs[0]) if inputs else "",
+                      "inputs": [str(value) for value in inputs]})
+    return calls
+
+
+def _taint_site_for(calls: list, wanted: str, wanted_name: str):
+    """Delegates to the generated core (I1)."""
+    return _core_taint_site_for(calls, wanted, wanted_name)
+
+
+def _taint_function_of(port: int, address: str) -> dict:
+    payload = _taint_result(safe_get(port, f"functions/containing/{quote(address)}"))
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
+def _taint_call_path(port: int, source_function: str, sink_function: str,
+                     max_depth: int = 8) -> dict:
+    payload = _taint_result(safe_get(port, "analysis/call-path",
+                                     {"from": source_function,
+                                      "to": sink_function,
+                                      "max_depth": max_depth}))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _taint_address_key(address: str) -> tuple:
+    """Delegates to the generated core (I1)."""
+    return _core_taint_address_key(address)
+
+
+def _taint_functions_referencing(port: int, info: dict,
+                                 examined: list) -> dict:
+    found = {}
+    for reference in info.get("references") or []:
+        address = reference.get("from_address")
+        if not address:
+            continue
+        function_address = reference.get("function_address")
+        if not function_address:
+            function = reference.get("function")
+            if isinstance(function, dict):
+                function_address = (function.get("address")
+                                    or function.get("entry"))
+            elif isinstance(function, str) and _core_taint_looks_like_address(
+                    function):
+                function_address = function
+        if not function_address:
+            containing = _taint_function_of(port, str(address))
+            function_address = containing.get("address") or containing.get("entry")
+        if function_address:
+            found[str(function_address)] = info["name"]
+    for address in info.get("addresses") or []:
+        if not address or str(address) in found:
+            continue
+        containing = _taint_function_of(port, str(address))
+        function_address = containing.get("address") or containing.get("entry")
+        if function_address:
+            found[str(function_address)] = info["name"]
+    examined.extend(found.keys())
+    return found
+
+
+def _taint_find_hypotheses(port: int, source: str, sink: str,
+                           max_depth: int = 8) -> dict:
+    source_info = _taint_resolve_name(port, source)
+    sink_info = _taint_resolve_name(port, sink)
+    examined = []
+    hypotheses = []
+    source_functions = _taint_functions_referencing(port, source_info, examined)
+    sink_functions = _taint_functions_referencing(port, sink_info, examined)
+
+    for function_address in sorted(set(source_functions) & set(sink_functions)):
+        calls = _taint_calls_in_function(port, function_address)
+        source_at = _taint_site_for(calls, (source_info["addresses"] or [""])[0], source)
+        sink_at = _taint_site_for(calls, (sink_info["addresses"] or [""])[0], sink)
+        if not source_at or not sink_at:
+            continue
+        if _taint_address_key(sink_at) <= _taint_address_key(source_at):
+            hypotheses.append({
+                "confidence": "weak",
+                "reason": "the sink call precedes the source call in this function",
+                "source_call": source_at, "sink_call": sink_at,
+                "hops": [function_address]})
+            continue
+        hypotheses.append({
+            "confidence": "direct",
+            "reason": "source and sink are called in the same function, sink after source",
+            "source_call": source_at, "sink_call": sink_at,
+            "hops": [function_address]})
+
+    for source_function in sorted(set(source_functions) - set(sink_functions)):
+        for sink_function in sorted(sink_functions):
+            path = _taint_call_path(port, source_function, sink_function, max_depth)
+            hops = path.get("path") or []
+            if not hops:
+                continue
+            if path.get("truncated"):
+                hypotheses.append({
+                    "confidence": "weak",
+                    "reason": "the call-path search hit its cap; a path was not proven",
+                    "source_call": None, "sink_call": None,
+                    "hops": [str(hop) for hop in hops]})
+                continue
+            hypotheses.append({
+                "confidence": "reachable",
+                "reason": f"a call path connects the source's function to the sink's "
+                          f"({len(hops)} hop(s))",
+                "source_call": None, "sink_call": None,
+                "hops": [str(hop) for hop in hops]})
+
+    return {
+        "source": {"name": source, "addresses": source_info["addresses"],
+                   "sites": len(source_info["references"])},
+        "sink": {"name": sink, "addresses": sink_info["addresses"],
+                 "sites": len(sink_info["references"])},
+        "hypotheses": hypotheses,
+        "functions_examined": len(set(examined)),
+        "max_depth": max_depth,
+        "disclaimer": _TAINT_DISCLAIMER}
+
+
+def _taint_summarize(report: dict) -> dict:
+    """Delegates to the generated core (I1)."""
+    return _core_taint_summarize(report)
+
+
+@mcp.tool()
+@text_output
+def analysis_taint(source: str, sink: str, max_depth: int = 8,
+                   port: int | None = None) -> dict:
+    """Hypothesise whether data from a source reaches a dangerous sink
+
+    Composes the references to each name, the pcode of the functions that call
+    them and the call graph. The answer is a set of hypotheses with evidence
+    addresses and a confidence - not proof of exploitability, and no finding is
+    not proof of safety.
+
+    Args:
+        source: Where the data enters (e.g. recv, ReadFile)
+        sink: Where it would be dangerous (e.g. system, WinExec)
+        max_depth: How many call hops to look for (default 8)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: Hypotheses with confidence, source and sink call sites, and hops
+    """
+    port = _get_instance_port(port)
+    return {"success": True,
+            "result": _taint_find_hypotheses(port, source, sink, max_depth)}
+
+
+# ================= Mission mode (R8) =================
+# Duplicated from ghydra/mission.py: the bridge is a standalone script and must
+# not import the ghydra package. test_mission.py asserts the two sides agree on
+# the hints, the findings and the budget.
+
+_MISSION_VERSION = 1
+#: The hint patterns are generated from ghydra/core/hints.py (I1).
+_MISSION_HINT_PATTERNS = _CORE_HINT_PATTERNS
+
+
+def _mission_parse_goal(goal: str) -> dict:
+    """Delegates to the generated core (I1)."""
+    return _core_parse_goal(goal)
+
+
+def _mission_dir() -> str:
+    base = os.environ.get("GHYDRA_STATE_DIR")
+    root = base if base else os.path.join(os.path.expanduser("~"), ".ghydra")
+    path = os.path.join(root, "missions")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+class _MissionBudget:
+    def __init__(self, max_calls: int, max_tokens: int):
+        self.max_calls = max(1, int(max_calls))
+        self.max_tokens = max(1, int(max_tokens))
+        self.calls = 0
+        self.tokens = 0
+        self.started = time.time()
+
+    def exhausted(self):
+        """Delegates the order of the limits to the generated core (I1)."""
+        return _core_mission_budget_exhausted(
+            self.calls, self.max_calls, self.tokens, self.max_tokens,
+            time.time() - self.started)
+
+    def spend(self, payload) -> None:
+        """The count is the core's; the clock and the calls stay here."""
+        self.calls += 1
+        self.tokens += _core_mission_tokens_of(payload)
+
+    def as_dict(self) -> dict:
+        return _core_mission_budget_row(
+            self.calls, self.max_calls, self.tokens, self.max_tokens,
+            time.time() - self.started)
+
+
+class _Mission:
+    """The state a bridge-side mission carries."""
+
+    def __init__(self, goal: str, budget: _MissionBudget, port: int):
+        self.goal = goal
+        self.id = f"m{int(time.time())}"
+        self.budget = budget
+        self.port = port
+        self.hints = _mission_parse_goal(goal)
+        self.findings = []
+        self.steps = []
+        self.skipped = []
+        self.program = {}
+        self.failed = None
+
+    def add_finding(self, kind: str, title: str, detail: str = "",
+                    confidence: str = "medium", evidence=None,
+                    status: str = "open") -> dict:
+        finding = {"id": f"EV-{len(self.findings) + 1:04d}", "kind": kind,
+                   "title": title, "detail": detail, "confidence": confidence,
+                   "status": status, "evidence": evidence or []}
+        self.findings.append(finding)
+        return finding
+
+    def add_unknown(self, question: str, reason: str) -> dict:
+        return self.add_finding("unknown", question, reason,
+                                confidence="low", status="unknown")
+
+    def evidence(self, endpoint: str, payload, params=None) -> dict:
+        return {"endpoint": endpoint, "params": params,
+                "digest": _runbook_digest(_runbook_stable_result(payload))}
+
+    def as_dict(self) -> dict:
+        return {"mission": _MISSION_VERSION, "id": self.id, "goal": self.goal,
+                "hints": self.hints, "program": self.program,
+                "findings": self.findings, "steps": self.steps,
+                "skipped": self.skipped, "failed": self.failed,
+                "budget": self.budget.as_dict()}
+
+
+def _mission_get(mission: _Mission, endpoint: str, params=None):
+    reason = mission.budget.exhausted()
+    if reason:
+        raise _MissionBudgetSpent(reason)
+    response = safe_get(mission.port, endpoint, params)
+    mission.budget.spend(response)
+    return response
+
+
+class _MissionBudgetSpent(Exception):
+    pass
+
+
+def _mission_result(envelope):
+    if isinstance(envelope, dict) and envelope.get("success", False):
+        return envelope.get("result")
+    return None
+
+
+def _mission_error_code(envelope) -> str:
+    if isinstance(envelope, dict):
+        error = envelope.get("error")
+        if isinstance(error, dict):
+            return str(error.get("code") or "UNKNOWN")
+    return "UNKNOWN"
+
+
+def _mission_step_overview(mission: _Mission) -> None:
+    envelope = _mission_get(mission, "program")
+    payload = _mission_result(envelope)
+    if not isinstance(payload, dict):
+        mission.failed = "MISSION_NO_PROGRAM"
+        mission.add_unknown("What is this binary?",
+                            f"the program could not be read ({_mission_error_code(envelope)})")
+        return
+    mission.program = _core_cache_fingerprint(payload)
+    mission.add_finding("data", "Program fingerprint",
+                        json.dumps(mission.program, ensure_ascii=False),
+                        confidence="high",
+                        evidence=[mission.evidence("program", envelope)])
+
+
+def _mission_step_capabilities(mission: _Mission) -> None:
+    imports_envelope = _mission_get(mission, "symbols/imports", {"limit": 1000})
+    strings_envelope = _mission_get(mission, "strings", {"limit": 1000})
+    report = build_capability_report({"success": True, "result": mission.program},
+                                    imports_envelope, strings_envelope,
+                                    include_strings=True)
+    leads = report.get("findings") or []
+    if not isinstance(leads, list) or not leads:
+        mission.add_unknown("What does this binary do?",
+                            "no ATT&CK/MBC lead matched the imports or strings")
+        return
+    for lead in leads[:10]:
+        if not isinstance(lead, dict):
+            continue
+        mission.add_finding(
+            "data", str(lead.get("technique") or lead.get("name") or "capability lead"),
+            json.dumps(lead.get("evidence") or lead, ensure_ascii=False),
+            confidence=str(lead.get("confidence") or "medium"),
+            evidence=[mission.evidence("symbols/imports", imports_envelope),
+                      mission.evidence("strings", strings_envelope)])
+
+
+def _mission_step_taint(mission: _Mission) -> None:
+    source = mission.hints.get("source")
+    sink = mission.hints.get("sink")
+    if not source or not sink:
+        mission.add_unknown(
+            "Does untrusted data reach a dangerous sink?",
+            "the goal names no source and sink, so no hypothesis was formed")
+        return
+    report = _taint_find_hypotheses(mission.port, source, sink)
+    hypotheses = report.get("hypotheses") or []
+    if not hypotheses:
+        mission.add_unknown(
+            f"Does data from {source} reach {sink}?",
+            "no source-to-sink path was found; the search is linear and "
+            "bounded, so this is not proof of safety")
+        return
+    for hypothesis in hypotheses[:10]:
+        mission.add_finding(
+            "vulnerability",
+            f"{source} -> {sink} ({hypothesis.get('confidence')})",
+            str(hypothesis.get("reason") or ""),
+            confidence="high" if hypothesis.get("confidence") == "direct" else "medium",
+            evidence=[mission.evidence("analysis/call-path",
+                                       {"path": hypothesis.get("hops")},
+                                       {"from": source, "to": sink})])
+
+
+def _mission_step_address(mission: _Mission) -> None:
+    address = mission.hints.get("address")
+    if not address:
+        return
+    envelope = _mission_get(mission, f"inspect/address/{address}")
+    payload = _mission_result(envelope)
+    if not isinstance(payload, dict):
+        mission.add_unknown(f"What is at {address}?",
+                            f"the address could not be inspected ({_mission_error_code(envelope)})")
+        return
+    mission.add_finding("xref", f"Address context at {address}",
+                        json.dumps(payload, ensure_ascii=False)[:2000],
+                        confidence="high",
+                        evidence=[mission.evidence(f"inspect/address/{address}", envelope)])
+
+
+_MISSION_STEPS = (
+    ("overview", _mission_step_overview),
+    ("capabilities", _mission_step_capabilities),
+    ("taint", _mission_step_taint),
+    ("address", _mission_step_address),
+)
+
+
+def _mission_run(mission: _Mission) -> _Mission:
+    for index, (name, step) in enumerate(_MISSION_STEPS):
+        if mission.failed:
+            mission.skipped.extend(other for other, _ in _MISSION_STEPS[index:])
+            break
+        reason = mission.budget.exhausted()
+        if reason:
+            mission.skipped.extend(other for other, _ in _MISSION_STEPS[index:])
+            mission.add_unknown("Was the whole plan run?",
+                                f"{reason}; the steps "
+                                f"{', '.join(other for other, _ in _MISSION_STEPS[index:])} "
+                                f"were not run")
+            break
+        try:
+            step(mission)
+            mission.steps.append({"step": name, "status": "done"})
+        except _MissionBudgetSpent as exc:
+            mission.skipped.append(name)
+            mission.add_unknown("Was the whole plan run?", str(exc))
+            break
+    return mission
+
+
+def _mission_verify(mission: _Mission) -> dict:
+    checked = 0
+    for finding in mission.findings:
+        if finding.get("status") == "unknown" or not finding.get("evidence"):
+            continue
+        verified = True
+        for item in finding["evidence"]:
+            if item.get("endpoint") == "analysis/call-path":
+                continue
+            checked += 1
+            response = safe_get(mission.port, item["endpoint"], item.get("params"))
+            current = _runbook_digest(_runbook_stable_result(response))
+            if current != item.get("digest"):
+                verified = False
+        finding["status"] = "verified" if verified else "unverified"
+    unverified = [f["id"] for f in mission.findings if f["status"] == "unverified"]
+    return {"checked": checked,
+            "verified": sum(1 for f in mission.findings if f["status"] == "verified"),
+            "unverified": unverified, "ok": not unverified}
+
+
+def _mission_markdown(mission: _Mission, verification) -> str:
+    """Delegates the rendering to the generated core (I1)."""
+    return _core_mission_dossier(
+        mission.goal, mission.id, mission.program, mission.hints,
+        mission.budget.as_dict(), mission.failed, mission.skipped,
+        mission.findings, verification)
+
+
+@mcp.tool()
+@text_output
+def mission_start(goal: str, max_calls: int = 60, max_tokens: int = 200000,
+                  output: str | None = None, verify: bool = True,
+                  port: int | None = None) -> dict:
+    """Run an objective against the binary and produce an auditable dossier
+
+    Runs a plan - program fingerprint, capability leads, source-to-sink
+    hypotheses, address context - against a hard budget. It asks nothing: a
+    doubt becomes an ``unknown`` finding. Before keeping a conclusion it
+    re-reads its evidence and compares the digests, so a finding whose evidence
+    moved is reported as ``unverified``.
+
+    Args:
+        goal: The objective, in words (source, sink, address and function hints
+            are read from the text)
+        max_calls: How many API calls the mission may spend (default 60)
+        max_tokens: Approximate token budget for the answers (default 200000)
+        output: Write the dossier here (default: ~/.ghydra/missions/<id>.md)
+        verify: Re-read the evidence before keeping a conclusion (default True)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: The dossier text, where it was written, and the verification
+    """
+    port = _get_instance_port(port)
+    mission = _Mission(str(goal or ""), _MissionBudget(max_calls, max_tokens), port)
+    _mission_run(mission)
+    verification = _mission_verify(mission) if verify else None
+    dossier = _mission_markdown(mission, verification)
+    target = output or os.path.join(_mission_dir(), f"{mission.id}.md")
+    try:
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write(dossier)
+    except OSError as exc:
+        return {"success": False,
+                "error": {"code": "MISSION_IO",
+                          "message": f"cannot write {target}: {exc}"}}
+    return {"success": True,
+            "result": {"id": mission.id, "dossier": dossier, "path": target,
+                       "verification": verification,
+                       "unverified": (verification or {}).get("unverified") or [],
+                       "mission": mission.as_dict()}}
+
+
+# ================= Decompile cache (I11) =================
+# Duplicated from ghydra/cache.py: the bridge is a standalone script and must
+# not import the ghydra package. test_cache.py asserts the two sides agree on
+# the identity, the key and the stored shape.
+
+#: The version comes from the core (I1): one bump retires every entry.
+_CACHE_VERSION = _CORE_CACHE_VERSION
+_CACHE_DEFAULT_MAX_BYTES = 50_000_000
+_CACHE_DEFAULT_MAX_AGE = 24 * 60 * 60
+#: Both defined once, in the core (I1).
+_CACHE_IDENTITY_FIELDS = _CORE_CACHE_IDENTITY_FIELDS
+_CACHE_STATISTIC_FIELDS = _CORE_CACHE_STATISTIC_FIELDS
+
+
+def _cache_canonical(value: Any) -> str:
+    """Delegates to the generated core (I1)."""
+    return _core_canonical(value)
+
+
+def _cache_digest(value: Any) -> str:
+    """Delegates to the generated core (I1)."""
+    return _core_digest(value)
+
+
+def _cache_root() -> str:
+    base = os.environ.get("GHYDRA_STATE_DIR")
+    root = base if base else os.path.join(os.path.expanduser("~"), ".ghydra")
+    return os.path.join(root, "cache")
+
+
+def _cache_entries_dir() -> str:
+    return os.path.join(_cache_root(), f"v{_CACHE_VERSION}")
+
+
+def _cache_program_identity(port: int) -> dict:
+    """Delegates the identity's definition to the generated core (I1)."""
+    response = safe_get(port, "program")
+    payload = response.get("result") if isinstance(response, dict) else None
+    return _core_cache_identity(payload)
+
+
+def _cache_key(identity: dict, kind: str, request: dict) -> str:
+    """Delegates to the generated core (I1): same key on both surfaces."""
+    return _core_cache_key(identity, kind, request)
+
+
+def _cache_entry_path(key: str) -> str:
+    return os.path.join(_cache_entries_dir(), key[:2], f"{key}.json")
+
+
+def _cache_get(key: str, max_age: int = _CACHE_DEFAULT_MAX_AGE):
+    try:
+        with open(_cache_entry_path(key), encoding="utf-8") as handle:
+            entry = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(entry, dict):
+        return None
+    created = entry.get("created")
+    if not isinstance(created, (int, float)):
+        return None
+    if max_age > 0 and time.time() - created > max_age:
+        return None
+    if not isinstance(entry.get("response"), dict):
+        return None
+    return entry
+
+
+def _cache_put(key: str, identity: dict, kind: str, request: dict,
+               response: dict, max_bytes: int = _CACHE_DEFAULT_MAX_BYTES) -> bool:
+    if not isinstance(response, dict):
+        return False
+    path = _cache_entry_path(key)
+    entry = {"key": key, "created": time.time(), "kind": kind,
+             "program": identity, "request": request, "response": response}
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(_cache_canonical(entry))
+        os.replace(temporary, path)
+    except OSError:
+        return False
+    _cache_evict(max_bytes)
+    return True
+
+
+def _cache_iter_entries() -> list:
+    found = []
+    root = _cache_entries_dir()
+    if not os.path.isdir(root):
+        return found
+    for bucket in sorted(os.listdir(root)):
+        bucket_path = os.path.join(root, bucket)
+        if not os.path.isdir(bucket_path):
+            continue
+        for name in sorted(os.listdir(bucket_path)):
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(bucket_path, name)
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    entry = json.load(handle)
+            except (OSError, ValueError):
+                entry = {}
+            found.append((path, entry if isinstance(entry, dict) else {}, size))
+    return found
+
+
+def _cache_stats() -> dict:
+    entries = _cache_iter_entries()
+    created = [entry["created"] for _path, entry, _size in entries
+               if isinstance(entry.get("created"), (int, float))]
+    return {"path": _cache_entries_dir(), "entries": len(entries),
+            "bytes": sum(size for _p, _e, size in entries),
+            "max_bytes": _CACHE_DEFAULT_MAX_BYTES,
+            "oldest": min(created) if created else None,
+            "newest": max(created) if created else None,
+            "programs": len({_cache_canonical(entry.get("program"))
+                             for _p, entry, _s in entries}),
+            "kinds": sorted({str(entry.get("kind")) for _p, entry, _s in entries
+                             if entry.get("kind")})}
+
+
+def _cache_clear() -> int:
+    removed = 0
+    for path, _entry, _size in _cache_iter_entries():
+        try:
+            os.unlink(path)
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def _cache_evict(max_bytes: int = _CACHE_DEFAULT_MAX_BYTES) -> int:
+    entries = _cache_iter_entries()
+    total = sum(size for _p, _e, size in entries)
+    if total <= max_bytes:
+        return 0
+    removed = 0
+
+    def age(item):
+        path, entry, _size = item
+        created = entry.get("created")
+        if isinstance(created, (int, float)):
+            return created
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0.0
+
+    for path, _entry, size in sorted(entries, key=age):
+        if total <= max_bytes:
+            break
+        try:
+            os.unlink(path)
+            total -= size
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
+def _cache_get_or_compute(port: int, kind: str, request: dict, compute,
+                          identity=None, max_age: int = _CACHE_DEFAULT_MAX_AGE):
+    """Serve from the cache, or compute and store. (response, cached)"""
+    identity = identity if identity is not None else _cache_program_identity(port)
+    if not identity:
+        return compute(), False
+    key = _cache_key(identity, kind, request)
+    if max_age == 0:
+        response = compute()
+        if isinstance(response, dict) and response.get("success", False):
+            _cache_put(key, identity, kind, request, response)
+        return response, False
+    entry = _cache_get(key, max_age=max_age)
+    if entry is not None:
+        return entry["response"], True
+    response = compute()
+    if isinstance(response, dict) and response.get("success", False):
+        _cache_put(key, identity, kind, request, response)
+    return response, False
+
+
+@mcp.tool()
+@text_output
+def cache_stats(port: int | None = None) -> dict:
+    """Show what the local decompile cache holds
+
+    The cache is opt-in (``functions_decompile(use_cache=True)``), local only,
+    bounded, and keyed on the program the answer belongs to.
+
+    Args:
+        port: Unused; accepted for symmetry with the other tools (optional)
+
+    Returns:
+        dict: Entries, bytes, programs, kinds and the age of the cache
+    """
+    return {"success": True, "result": _cache_stats()}
+
+
+@mcp.tool()
+@text_output
+def cache_clear(port: int | None = None) -> dict:
+    """Remove every cached decompile answer
+
+    Needed when a program is edited in a way the cache cannot see: the server
+    exposes no modification counter, so a rename does not change the identity
+    the key is built from.
+
+    Args:
+        port: Unused; accepted for symmetry with the other tools (optional)
+
+    Returns:
+        dict: How many entries were removed
+    """
+    removed = _cache_clear()
+    return {"success": True,
+            "result": {"removed": removed,
+                       "message": f"Removed {removed} cached entr"
+                                  f"{'y' if removed == 1 else 'ies'}."}}
+
+
+# ================= Fleet queries (R7) =================
+# Duplicated from ghydra/fleet.py: the bridge is a standalone script and must
+# not import the ghydra package. test_fleet.py asserts the two sides agree.
+
+_FLEET_PAGE_LIMIT = 1000
+_FLEET_MAX_PAGES = 5
+#: Defined once, in the core (I1).
+_FLEET_KINDS = _CORE_FLEET_KINDS
+#: Defined once, in the core (I1).
+_FLEET_IDENTITY_FIELDS = _CORE_FLEET_IDENTITY_FIELDS
+
+
+def _fleet_result(envelope):
+    if isinstance(envelope, dict) and envelope.get("success", False):
+        return envelope.get("result")
+    return None
+
+
+def _fleet_identity_of(program) -> str:
+    """Delegates to the generated core (I1)."""
+    return _core_fleet_identity_of(program)
+
+
+def _fleet_collect_member(port: int) -> dict:
+    response = safe_get(port, "program")
+    program = _fleet_result(response)
+    identity = _fleet_identity_of(program)
+    if not identity:
+        error = (response.get("error") or {}) if isinstance(response, dict) else {}
+        code = error.get("code") if isinstance(error, dict) else None
+        return {"port": port, "reachable": False, "error": code or "FLEET_NO_PROGRAM"}
+    return {"port": port, "reachable": True, "identity": identity,
+            "program": program,
+            "name": program.get("name") if isinstance(program, dict) else None}
+
+
+def _fleet_paged_names(port: int, endpoint: str, keys) -> dict:
+    names = []
+    offset = 0
+    complete = True
+    for _page in range(_FLEET_MAX_PAGES):
+        response = safe_get(port, endpoint, {"offset": offset,
+                                            "limit": _FLEET_PAGE_LIMIT})
+        if not isinstance(response, dict) or not response.get("success", False):
+            return {"names": names, "complete": False, "error": True}
+        payload = response.get("result")
+        page = payload if isinstance(payload, list) else []
+        for item in page:
+            if not isinstance(item, dict):
+                continue
+            for key in keys:
+                value = item.get(key)
+                if isinstance(value, str) and value:
+                    names.append(value)
+                    break
+        meta = response.get("meta") or {}
+        total = meta.get("total") if isinstance(meta, dict) else None
+        if not page or len(page) < _FLEET_PAGE_LIMIT:
+            break
+        if isinstance(total, int) and len(names) >= total:
+            break
+        offset += len(page)
+    else:
+        complete = False
+    return {"names": names, "complete": complete, "error": False}
+
+
+def _fleet_ask(port: int, kind: str, target=None) -> dict:
+    if kind == "overview":
+        response = safe_get(port, "program")
+        program = _fleet_result(response)
+        if not isinstance(program, dict):
+            return {"ok": False, "error": "FLEET_NO_PROGRAM"}
+        return {"ok": True, "present": True,
+                "detail": {"name": program.get("name"),
+                           "path": program.get("executablePath") or program.get("path"),
+                           "language": program.get("language"),
+                           "statistics": program.get("statistics")}}
+    if kind == "has_function":
+        response = safe_get(port, f"functions/by-name/{quote(str(target))}")
+        payload = _fleet_result(response)
+        if isinstance(payload, dict) and payload.get("address"):
+            return {"ok": True, "present": True,
+                    "detail": {"address": str(payload["address"])}}
+        error = (response.get("error") or {}) if isinstance(response, dict) else {}
+        code = error.get("code") if isinstance(error, dict) else None
+        if code in ("FUNCTION_NOT_FOUND", "SYMBOL_NOT_FOUND", "NOT_FOUND"):
+            return {"ok": True, "present": False, "detail": {}}
+        return {"ok": False, "error": code or "FLEET_QUERY_FAILED"}
+    if kind == "has_import":
+        listing = _fleet_paged_names(port, "symbols/imports",
+                                    ("name", "label", "symbol"))
+        wanted = str(target or "").lower()
+        matched = [name for name in listing["names"] if wanted and wanted in name.lower()]
+        result = {"ok": not listing["error"], "present": bool(matched),
+                  "detail": {"matched": matched[:5]},
+                  "complete": listing["complete"]}
+        if listing["error"]:
+            result["error"] = "FLEET_QUERY_FAILED"
+        return result
+    if kind == "has_string":
+        listing = _fleet_paged_names(port, "strings", ("value", "name", "string"))
+        wanted = str(target or "")
+        matched = [value for value in listing["names"] if wanted and wanted in value]
+        result = {"ok": not listing["error"], "present": bool(matched),
+                  "detail": {"matched": matched[:5]},
+                  "complete": listing["complete"]}
+        if listing["error"]:
+            result["error"] = "FLEET_QUERY_FAILED"
+        return result
+    if kind == "xrefs_to":
+        response = safe_get(port, f"xrefs/to-name/{quote(str(target))}")
+        payload = _fleet_result(response)
+        items = payload if isinstance(payload, list) else []
+        meta = response.get("meta") or {} if isinstance(response, dict) else {}
+        total = meta.get("total") if isinstance(meta, dict) else None
+        count = total if isinstance(total, int) else len(items)
+        return {"ok": True, "present": bool(count), "detail": {"count": count}}
+    return {"ok": False, "error": f"FLEET_UNKNOWN_KIND: {kind}"}
+
+
+def _fleet_query(ports, kind: str, target=None) -> dict:
+    if kind not in _FLEET_KINDS:
+        return {"success": False,
+                "error": {"code": "FLEET_UNKNOWN_KIND",
+                          "message": "the kinds are: " + ", ".join(_FLEET_KINDS)}}
+
+    # The merge is pure and generated from the core (I1); the I/O stays here.
+    seen = []
+    unreachable = []
+    for port in sorted(int(p) for p in ports):
+        member = _fleet_collect_member(port)
+        if not member["reachable"]:
+            unreachable.append({"port": port, "reason": member.get("error")})
+            continue
+        seen.append({"port": port, "identity": member["identity"],
+                     "name": member.get("name"),
+                     "program": member.get("program"),
+                     "answer": _fleet_ask(port, kind, target)})
+
+    return _core_fleet_merge(seen, kind, target, unreachable)
+
+
+def _fleet_ports(text) -> list:
+    if isinstance(text, (list, tuple)):
+        return [int(value) for value in text]
+    ports = []
+    for piece in str(text or "").replace(";", ",").split(","):
+        piece = piece.strip()
+        if piece:
+            ports.append(int(piece))
+    return ports
+
+
+@mcp.tool()
+@text_output
+def fleet_query(kind: str, ports: str, target: str | None = None) -> dict:
+    """Ask one question of several instances and merge by file
+
+    A port that does not answer is reported, never dropped; two ports serving
+    the same program are one row (merged on the program's identity, not on the
+    port). An import/string absence is only claimed from a complete listing.
+
+    Args:
+        kind: overview | has_function | has_import | has_string | xrefs_to
+        ports: The instances to ask, comma-separated (e.g. "8192,8193")
+        target: The name, string or value the question is about (not used by
+            overview)
+
+    Returns:
+        dict: One row per binary, with its ports, the answer and what failed
+    """
+    try:
+        parsed = _fleet_ports(ports)
+    except (TypeError, ValueError) as exc:
+        return {"success": False,
+                "error": {"code": "FLEET_BAD_PORTS", "message": str(exc)}}
+    if not parsed:
+        return {"success": False,
+                "error": {"code": "FLEET_BAD_PORTS",
+                          "message": "give at least one port, e.g. \"8192,8193\""}}
+    if kind in ("has_function", "has_import", "has_string", "xrefs_to") and not target:
+        return {"success": False,
+                "error": {"code": "FLEET_MISSING_TARGET",
+                          "message": f"'{kind}' needs a target"}}
+    return _fleet_query(parsed, kind, target)
+
+
+# ================= BSim discovery (R1) =================
+
+
+@mcp.tool()
+@text_output
+def bsim_status(port: int | None = None) -> dict:
+    """Is a BSim signature query possible here, and against which database?
+
+    BSim is a Ghidra feature, not a plugin API, so it is discovered by loading
+    the class: a build may ship without it. The database is configuration
+    (-Dghidra.bsim.database or GHYDRA_BSIM_DATABASE), and the answer names it
+    rather than pretending a query would work.
+
+    Args:
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: available, database, database_exists, ready and the reason
+    """
+    port = _get_instance_port(port)
+    return simplify_response(safe_get(port, "bsim/status"))
+
+
+@mcp.tool()
+@text_output
+def bsim_ingest(max_functions: int = 0, track_call_graph: bool = False,
+                port: int | None = None) -> dict:
+    """Generate BSim signatures for this program and insert them into the database
+
+    Ingests the *open* program: every function with a body is decompiled and its
+    signature stored in the configured database (-Dghidra.bsim.database or
+    GHYDRA_BSIM_DATABASE), which is created when it does not exist yet. That is
+    what makes a signature query possible later, and what a corpus is built from.
+
+    The call graph is **not** recorded by default: measured on Ghidra 12.2/H2, a
+    database created with `trackcallgraph=true` rejects the insert with a
+    duplicate `callgraphtable(src,dest)` key on ordinary recursion, and the
+    signature tables are what a similarity query needs. Pass
+    `track_call_graph=True` to ask for it anyway.
+
+    Re-ingesting a program that is already there is not an error: the answer says
+    `already_present` and inserted 0, because the goal — the program is in the
+    database — is already true.
+
+    Args:
+        max_functions: How many functions to scan at most (0 = all, default 0)
+        track_call_graph: Record the call graph in the database (default False)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: discovered/scanned/described/inserted counts, whether the database
+              was created, and the reason when nothing was inserted
+    """
+    port = _get_instance_port(port)
+    params = {}
+    if max_functions:
+        params["max_functions"] = int(max_functions)
+    params["track_call_graph"] = "true" if track_call_graph else "false"
+    return simplify_response(safe_post(port, "bsim/ingest", params=params))
+
+
+
+
+
+
+
+
+@mcp.tool()
+@text_output
+def bsim_query(address: str = "", name: str = "", min_similarity: float = 0.0,
+               min_significance: float = 0.0, max_matches: int = 0,
+               port: int | None = None) -> dict:
+    """Which stored functions look like this one, according to BSim signatures
+
+    Asks the signature database which of its functions are similar to one
+    function of the open program, and returns BSim's own similarity and
+    significance for each match. Give exactly one of `address` or `name`.
+
+    A match is a **lead, not an identification**: similarity 1.0 means the bytes
+    of the two functions' vectors are the same, not that they are the same
+    source. The corpus is whatever was ingested into the configured database
+    (-Dghidra.bsim.database or GHYDRA_BSIM_DATABASE).
+
+    Args:
+        address: The function address to ask about
+        name: The function name to ask about (when no address is given)
+        min_similarity: Similarity floor, 0..1 (0 = BSim's default 0.7)
+        min_significance: Significance floor (0 = no floor)
+        max_matches: How many matches to return (0 = default 10, cap 200)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: the function asked about, the thresholds used, and the matches
+              with similarity, significance, function, address and executable
+    """
+    port = _get_instance_port(port)
+    params = {}
+    if address:
+        params["address"] = address
+    if name:
+        params["name"] = name
+    if min_similarity:
+        params["min_similarity"] = min_similarity
+    if min_significance:
+        params["min_significance"] = min_significance
+    if max_matches:
+        params["max_matches"] = int(max_matches)
+    return simplify_response(safe_get(port, "bsim/query", params=params or None))
+
+
+
+@mcp.tool()
+@text_output
+def bsim_apply_names(address: str = "", name: str = "", min_similarity: float = 0.0,
+                     dry_run: bool = True, port: int | None = None) -> dict:
+    """Name a function after the stored function it most resembles
+
+    Queries the signature database for this function's best match and renames it
+    to the matched name — **only when asked**: `dry_run` is true by default, so
+    the call reports what it would do and changes nothing. The answer always
+    carries the match's similarity and significance, because a signature match is
+    a heuristic and the rename has to be judgeable (and undoable in Ghidra).
+
+    Nothing is applied below `min_similarity` (default 0.8), and a function that
+    already carries the matched name is reported instead of rewritten.
+
+    Args:
+        address: The function address to name
+        name: The function name to look up (when no address is given)
+        min_similarity: The floor for applying (0 = default 0.8)
+        dry_run: Report the change without making it (default True)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: from/to, whether the rename was applied (or would be), the match
+              with its similarity, and the reason when nothing was applied
+    """
+    port = _get_instance_port(port)
+    params = {"dry_run": "false" if not dry_run else "true"}
+    if address:
+        params["address"] = address
+    if name:
+        params["name"] = name
+    if min_similarity:
+        params["min_similarity"] = min_similarity
+    return simplify_response(
+        safe_post(port, "bsim/apply-names", params=params))
+
+
+
+@mcp.tool()
+@text_output
+def bsim_diff_versions(other_executable: str, max_functions: int = 0,
+                       min_similarity: float = 0.0,
+                       port: int | None = None) -> dict:
+    """What changed between two versions, paired by BSim signature
+
+    The complement of `analysis_diff`: that one compares by address and name,
+    this one **pairs by shape**, so a function that moved address — or lost its
+    name in the rebuild — is reported as the same function relocated instead of
+    as one removal plus one addition. Both versions must have been ingested into
+    the configured database first.
+
+    One BSim query runs per function, measured at about 0.2-0.8 s each, so the
+    walk is bounded by `max_functions` and the answer says how many functions
+    were not compared. A function with no pair is listed, never dropped: a thunk
+    that was never ingested appears as `not_found`, and a function without a body
+    as `no_signature`.
+
+    Args:
+        other_executable: The executable name the database recorded for the other
+            version (the file name, e.g. `app-1.2.exe`)
+        max_functions: How many functions of this program to compare (0 = 25,
+            cap 500)
+        min_similarity: The floor for calling two functions a pair (0 = 0.8)
+        port: Specific Ghidra instance port (optional)
+
+    Returns:
+        dict: one row per function compared with its class (`same`, `moved`,
+              `not_found`, `no_signature`), the counts, and the query failures
+    """
+    port = _get_instance_port(port)
+    params = {"other_executable": other_executable}
+    if max_functions:
+        params["max_functions"] = int(max_functions)
+    if min_similarity:
+        params["min_similarity"] = min_similarity
+    return simplify_response(safe_get(port, "bsim/diff", params=params))
+
+
+
 _TOOL_GROUPS = {
     "core": {"programs", "project", "projects", "instances", "ui", "doctor",
-             "evidence", "session", "tasks", "tools"},
-    "functions": {"functions", "analysis", "inspect", "variables", "memory"},
+             "evidence", "session", "tasks", "tools", "mission", "cache"},
+    "functions": {"functions", "analysis", "inspect", "variables", "memory",
+                  "bsim"},
     "data": {"data", "xrefs", "scalars", "comments", "segments"},
     "types": {"structs", "datatypes", "classes", "raw", "symbols",
               "namespaces"},
@@ -10949,6 +13346,8 @@ _TOOL_GROUPS = {
     "headless": {"headless"},
     "kuna": {"kuna"},
     "x64dbg": {"x64dbg"},
+    "runbook": {"runbook"},
+    "fleet": {"fleet"},
 }
 
 _META_NAMESPACE = "tools"
@@ -11184,8 +13583,9 @@ def tools_unload_group(group: str) -> dict:
 # GHYDRA_STATE_DIR), one JSON object per call, capped at ~1 MB. Disabled with
 # GHYDRA_TELEMETRY=0. The recorder must never break a tool call, so every
 # failure in it is swallowed.
-_TELEMETRY_MAX_BYTES = 1_000_000
-_TELEMETRY_KEEP_LINES = 2000
+#: Both defined once, in the generated core (I1).
+_TELEMETRY_MAX_BYTES = _CORE_TELEMETRY_MAX_BYTES
+_TELEMETRY_KEEP_LINES = _CORE_TELEMETRY_KEEP_LINES
 
 
 def _telemetry_path() -> str:
@@ -11270,41 +13670,8 @@ def _telemetry_read(max_entries: int = 5000) -> list:
 
 
 def _telemetry_recommendations(entries: list) -> list:
-    """Name the composed tool when the log shows the pattern it replaces."""
-    recommendations = []
-    counts: Dict[str, int] = {}
-    slow: Dict[str, float] = {}
-    for entry in entries:
-        tool = str(entry.get("tool"))
-        counts[tool] = counts.get(tool, 0) + 1
-        if entry.get("ok"):
-            slow[tool] = max(slow.get(tool, 0.0), float(entry.get("ms") or 0))
-
-    inspection = sum(counts.get(name, 0) for name in (
-        "functions_get", "functions_decompile", "analysis_callers",
-        "analysis_callees", "xrefs_list", "inspect_address"))
-    if inspection >= 4:
-        recommendations.append(
-            f"{inspection} inspection calls in the window: "
-            f"analysis_context_pack(question, address) answers that pattern "
-            f"in one call, with a token budget and citable addresses.")
-    listing = sum(counts.get(name, 0) for name in (
-        "functions_list", "data_list", "symbols_list", "variables_list"))
-    if listing >= 4:
-        recommendations.append(
-            f"{listing} listing calls: programs_overview composes the counts "
-            f"and imports in one call, and a page takes limit/offset.")
-    batch = counts.get("functions_decompile", 0)
-    if batch >= 4:
-        recommendations.append(
-            f"{batch} single decompiles: functions_batch_decompile takes a "
-            f"list (async_mode=True for a long batch).")
-    for tool, worst in sorted(slow.items(), key=lambda item: -item[1])[:3]:
-        if worst >= 500:
-            recommendations.append(
-                f"{tool} took up to {worst:.0f} ms: consider async_mode=True "
-                f"or a narrower request.")
-    return recommendations[:5]
+    """Delegates to the generated core (I1)."""
+    return _core_telemetry_recommendations(entries)
 
 
 @mcp.tool()
@@ -11313,7 +13680,12 @@ def telemetry_summary(days: int = 7) -> dict:
     """Summarize what this bridge has actually done, from the local log
 
     The log is local only (never sent anywhere): one JSON object per tool
-    call under ~/.ghydra/telemetry.jsonl, capped at about 1 MB. This tool
+    call under ~/.ghydra/telemetry.jsonl, capped at about 1 MB and trimmed
+    oldest first. A record holds the tool name, a timestamp, whether the call
+    failed, its error code, the duration and an estimate of the answer's size —
+    never the arguments, the results, a path, a symbol, an address or any
+    binary content, and no identifier of any kind. Set GHYDRA_TELEMETRY=0 to
+    stop recording; deleting the file erases what was recorded. This tool
     aggregates it — calls, failures, latency and estimated token volume per
     tool, the error codes seen — and names the composed tool when the log
     shows a pattern one of them replaces.
@@ -11324,48 +13696,12 @@ def telemetry_summary(days: int = 7) -> dict:
     Returns:
         dict: totals, per-tool rows, error codes and recommendations
     """
-    cutoff = time.time() - max(1, int(days)) * 86400
-    entries = [entry for entry in _telemetry_read()
-               if float(entry.get("ts") or 0) >= cutoff]
-    if not entries:
-        return {"success": True,
-                "result": {"days": days, "calls": 0, "tools": [],
-                           "error_codes": {},
-                           "recommendations": [],
-                           "path": _telemetry_path(),
-                           "message": "no telemetry recorded in this window"}}
-
-    totals: Dict[str, dict] = {}
-    codes: Dict[str, int] = {}
-    for entry in entries:
-        tool = str(entry.get("tool"))
-        row = totals.setdefault(tool, {"tool": tool, "calls": 0, "failed": 0,
-                                       "ms_total": 0.0, "ms_max": 0.0,
-                                       "tokens": 0})
-        row["calls"] += 1
-        if not entry.get("ok"):
-            row["failed"] += 1
-        row["ms_total"] += float(entry.get("ms") or 0)
-        row["ms_max"] = max(row["ms_max"], float(entry.get("ms") or 0))
-        row["tokens"] += int(entry.get("tokens") or 0)
-        code = entry.get("code")
-        if code:
-            codes[str(code)] = codes.get(str(code), 0) + 1
-
-    rows = []
-    for row in sorted(totals.values(), key=lambda item: -item["calls"]):
-        rows.append({**row,
-                     "ms_avg": round(row["ms_total"] / row["calls"], 1),
-                     "ms_max": round(row["ms_max"], 1)})
+    # The window and the aggregate are pure and generated from the core (I1);
+    # reading the file and finding its path stay here.
+    entries = _core_telemetry_recent(_telemetry_read(), days)
     return {"success": True,
-            "result": {
-                "days": days,
-                "calls": len(entries),
-                "tools": rows[:25],
-                "error_codes": codes,
-                "recommendations": _telemetry_recommendations(entries),
-                "path": _telemetry_path(),
-            }}
+            "result": _core_telemetry_summarize(entries, days,
+                                               _telemetry_path())}
 
 
 # ================= Startup =================

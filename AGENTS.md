@@ -15,11 +15,11 @@ decompilation, annotation, and data manipulation.
   subsequent instances walk up to `MAX_PORT_ATTEMPTS` = 256 ports (8192–8447).
 - The bridge auto-discovers instances on startup and on a daemon timer, but `QUICK_DISCOVERY_RANGE`
   only scans **8192–8201**. Instances above 8202 need `instances_register` / the CLI.
-- 121 MCP tools in 31 namespaces: `analysis_*`, `classes_*`, `comments_*`, `data_*`, `datatypes_*`,
-  `doctor_*`, `evidence_*`, `functions_*`, `headless_*`, `inspect_*`, `instances_*`, `kuna_*`,
-  `memory_*`, `namespaces_*`, `programs_*`, `project_*`, `projects_*`, `raw_image_*`, `scalars_*`,
+- 134 MCP tools in 36 namespaces: `analysis_*`, `bsim_*`, `classes_*`, `comments_*`, `data_*`, `cache_*`, `datatypes_*`,
+  `doctor_*`, `evidence_*`, `fleet_*`, `functions_*`, `headless_*`, `inspect_*`, `instances_*`, `kuna_*`,
+  `memory_*`, `mission_*`, `namespaces_*`, `programs_*`, `project_*`, `projects_*`, `raw_image_*`, `scalars_*`,
   `scripts_*`, `segments_*`, `session_*`, `structs_*`, `symbols_*`, `tasks_*`, `telemetry_*`, `tools_*`, `ui_*`,
-  `variables_*`, `x64dbg_*`, `xrefs_*`.
+  `variables_*`, `x64dbg_*`, `runbook_*`, `xrefs_*`.
 - v3.0.0 migrated `HttpServer` → **Javalin** with service/DTO/resource layering. `API_VERSION` is
   **3000** (breaking: fully-qualified names everywhere).
 - The `kuna_*` namespace is **local**: it drives the Kuna decompiler CLI as a subprocess, so it
@@ -89,6 +89,13 @@ is only safe to traverse under the EDT, so:
   split pattern: DB half in `runRead`, `DecompInterface` work outside.
 
 Read timeout is `-Dghidra.mcp.read.timeout` seconds (default 900).
+
+The address the server binds is `-Dghidra.mcp.bind.host` (default: every
+interface), and the origins the browser bridge may come from are
+`-Dghidra.mcp.cors.origin`. The variable listing scans at most
+`-Dghidra.mcp.localvar.scan` functions (default 100) and says when a page is
+incomplete, and a transaction that has to wait for the lock waits
+`-Dghidra.mcp.write.timeout` seconds (default 900).
 
 ## Performance
 
@@ -170,7 +177,7 @@ Services own transactions; resources never call DB mutators directly. Reads use 
 3. Register the resource in `GhydraPlugin.java`'s `server.register(...)` list — **required for a new
    resource class**; adding a route to an already-registered resource needs no extra step.
 4. Build responses with `hateoas/Response` (`Response.ok(ctx, port, data).self(...)`). Every
-   response envelope carries `success`, `id`, `instance`, `result`, `_links` — `test_http_api.py`
+   response envelope carries `success`, `id`, `instance`, `result`, `_links` — `tests/test_http_api.py`
    asserts this.
 5. Use `GhidraUtil` for type resolution and address parsing.
 6. For non-GET action links use `Response.linkWithMethod(rel, href, "POST", args)`. Do **not**
@@ -204,7 +211,7 @@ callable; a link that does not map to a registered tool is left out rather than 
 protocol uses for a tool's parameters, so a client that re-encodes the container loses the value
 — the call goes through with no arguments and the tool does something else instead of failing. It
 happened to `x64dbg_call`, and the unit tests did not catch it because they called the function
-instead of the protocol: `test_x64dbg.py` now drives a tool through `mcp.call_tool(...)`, and a
+instead of the protocol: `tests/test_x64dbg.py` now drives a tool through `mcp.call_tool(...)`, and a
 guard asserts that no bridge tool declares a parameter the protocol reserves.
 
 **The tool list is groupable** (I15): 120 tools in one list degrade selection, so the bridge groups
@@ -273,22 +280,38 @@ python run_tests.py --rea                # the four gaps closed against the REA
 A green run against no Ghidra means nothing — confirm tests actually executed before trusting it.
 Tests need Ghidra with a binary open, and a loaded binary with functions (`skipTest` otherwise).
 
-**The exception is `--kuna`**: `test_kuna.py` needs neither Ghidra nor the Kuna binary, so it always
+**The exception is `--kuna`**: `tests/test_kuna.py` needs neither Ghidra nor the Kuna binary, so it always
 runs and always gives a signal. It covers the Kuna opt-in precedence, the bridge/CLI contract
 (every `kuna_*` tool has a `FORMATTERS` entry and is registered in MCP; none takes a `port`) and
 the export readers.
 
-**`--x64dbg` is the other one that always runs**: `test_x64dbg.py` needs neither Ghidra nor
+**`--x64dbg` is the other one that always runs**: `tests/test_x64dbg.py` needs neither Ghidra nor
 x64dbg, because it starts a fake plugin that answers like the real one (JSON-RPC over HTTP, a
 bearer token, the tool catalogue with `annotations.readOnlyHint`). It covers the client, the
 config precedence, the address model, the bridge tools and the error taxonomy.
 
-**`--rea` is half of each**: `test_rea_parity.py` splits the contract (the tools are registered, each
+**`--rea` is half of each**: `tests/test_rea_parity.py` splits the contract (the tools are registered, each
 one has a formatter, the CLI has the command, the list of targets is read in every shape — none of
 which needs a Ghidra) from the live half (the API and the bridge over the wire — which does). A skip
 there is usually a stale premise rather than an absence: the suite looks for a caller/callee pair by
 the `CALL` family of reference types, and Ghidra calls them `UNCONDITIONAL_CALL`,
 `CALL_OVERRIDE` and `CALL_INDIRECT`.
+
+**A test that can hang has no verdict.** `run_tests.py` bounds every suite
+(`GHYDRA_SUITE_TIMEOUT`, 300 s by default, `0` for none): a suite that overruns
+raises `TimeoutExpired`, which the runner already reports as a FAILED line
+naming the suite. Without it a hung subprocess held the whole run with no name
+and no end — measured on this machine, where the script-execution suite hung
+about one run in eight.
+
+The cause of that hang was a fixture answering **HTTP/1.0**: the server closed
+the socket after every reply, and the bridge keeps one keep-alive session per
+thread, so the next request travelled on a socket the server had already closed
+and waited for an answer that never came. A real Jetty answers HTTP/1.1, so the
+fixture does too (`protocol_version`), and every reply carries its
+`Content-Length`. The x64dbg fixture is the opposite and stays HTTP/1.0 on
+purpose: the released plugin closes the connection after every response, and
+the client does not pool.
 
 **The x64dbg suite is not immune to the network stack.** A local TCP connection is reset every
 now and then on this machine (measured: 7%), so a suite that opens dozens of connections will
@@ -298,12 +321,15 @@ repeating is safe. When a test fails there, look at the transport before the log
 `X64DBG_UNCERTAIN` when the tool changes the debuggee (the request was delivered and its
 answer was lost, so it was not repeated) and as `X64DBG_MISSING` when it did not leave.
 
-Target selection is inconsistent and worth knowing:
-- `test_javalin_port.py` honors `GHYDRAMCP_TEST_HOST` **and** `GHYDRAMCP_TEST_PORT`.
-- `test_http_api.py` honors only `GHYDRAMCP_TEST_HOST`; its port is hardcoded to 8192.
-- `TESTING.md` documents the flags and the headless Java integration tests.
+Target selection: every live suite honors `GHYDRAMCP_TEST_HOST` **and**
+`GHYDRAMCP_TEST_PORT`. The port matters: the instance that serves a program is
+not always on 8192 — Ghidra gives the first port to whoever asks first, and the
+CodeBrowser opened for a program lands on the next free one.
+`scripts/prepare_ghidra_instance.py` prepares one: it writes the extension's
+state so Ghidra stops asking "New Plugins Found!", and it opens the program
+through Ghidra's own *GhidraGo* interface. `docs/TESTING.md` has the recipe.
 
-`mvn test` (14 JUnit tests) covers only pure logic — anything needing a live `Program` can't
+`mvn test` (26 JUnit tests) covers only pure logic — anything needing a live `Program` can't
 run there, because the plugin's Ghidra deps are system-scoped jars in `lib/` and Ghidra ships
 no test framework. Service tests live in `src/test/ghidra/` as GhidraScripts run under
 `analyzeHeadless` (see TESTING.md); they throw on first failure so they work as a CI gate.
@@ -461,7 +487,7 @@ tools work with any Ghidra version.
   says it came from this binary, with the mtime it has now — another binary, or the same path
   rebuilt, is analysed again instead of answered with stale artifacts.
 - **The performance numbers are measured, not remembered.** `scripts/bench_kuna.py` produces the
-  table in `GHYDRA_KUNA.md` and is committed with it. A Kuna upgrade changes the numbers, so they
+  table in `docs/GHYDRA_KUNA.md` and is committed with it. A Kuna upgrade changes the numbers, so they
   are re-measured rather than quoted.
 - **The export is addressed by its digest, not by the job.** The digest is 12 hex characters,
   survives a restart of the bridge, and is what `kuna_export_read(directory=...)`, the
@@ -478,7 +504,7 @@ tools work with any Ghidra version.
 - **One error taxonomy on both sides.** The bridge and the CLI carry the same 14 codes
   (`KUNA_DISABLED`, `KUNA_MISSING`, `KUNA_TIMEOUT`, `KUNA_LAUNCH`, `KUNA_FAILED`, `KUNA_NO_JSON`,
   `KUNA_TOO_LARGE`, `KUNA_NO_FILE`, `KUNA_IO`, `KUNA_NO_DIR`, `KUNA_NO_INDEX`, `KUNA_BAD_ARTIFACT`,
-  `KUNA_NO_FUNCTION`, `KUNA_ERROR`). `test_kuna.py` asserts the two lists are identical, so adding
+  `KUNA_NO_FUNCTION`, `KUNA_ERROR`). `tests/test_kuna.py` asserts the two lists are identical, so adding
   a code to one side without the other fails the suite.
 - **The `kuna_*` tools take no `port`.** They are not part of the plugin API, so they take no
   instance either.
@@ -566,7 +592,7 @@ plugin API, so it changes neither `API_VERSION` nor the Java side.
 
 The same API, served by a headless Ghidra run: the binary is imported, analysed, and the API
 answers for that analysis, with nobody watching. `ghydra headless start|status|stop`, and
-`ghydra report build` for the report. See `GHYDRA_HEADLESS.md`.
+`ghydra report build` for the report. See `docs/GHYDRA_HEADLESS.md`.
 
 - **The bootstrap lives in `server/GhydraServerFactory`**, not in the plugin. Both paths - the
   CodeBrowser plugin and the headless run - go through it, so the same twenty-one resources are
@@ -721,72 +747,7 @@ Three things that exist because the work outlives the moment it was done.
   Kuna ones are. The two sides have to agree about the file formats: the ledger and the sessions
   are read and written by both.
 
-## The four gaps closed against the REA
 
-`REA_PARITY.md` compared this project with the REA (139 tools in `rea-agents` 6.0.0) and named four
-gaps that were native and cheap. All four are closed, on the three surfaces at once, and
-`test_rea_parity.py` is what proves they agree:
-
-| REA | REST API | Bridge tool | CLI |
-| --- | --- | --- | --- |
-| `batch_decompile` | `POST /functions/decompile-batch` | `functions_batch_decompile` | `ghydra functions decompile-batch --targets '["main"]'` |
-| `find_xrefs_to_name` | `GET /xrefs/to-name/{name}` | `xrefs_find_by_name` | `ghydra xrefs find-by-name strlen` |
-| `inspect_address_context` | `GET /inspect/address/{address}` | `inspect_address` | `ghydra inspect-address 0x140001008` |
-| `trace_call_path` | `GET /analysis/call-path?from=&to=` | `analysis_trace_call_path` | `ghydra analysis trace-call-path --from main --to strcmp` |
-
-- **A batch reports each target separately.** A target that resolves to nothing comes back as a failed
-  entry with the reason, and the other targets are still decompiled: a triage pass wants to know which
-  ones were wrong, not lose the nine that were right. The server caps a batch at 200 targets.
-- **The list of targets is text.** `functions_batch_decompile` declares `targets` as a `str` (JSON text),
-  because a client that hands over a nested list flattens it - every value arrives as a string. The
-  schema asks for the form that survives the client, and the parser reads a JSON array, a bare name or
-  a comma-separated list.
-- **The deadline of a batch covers the batch.** The server runs the targets one after the other and
-  each of them may take the whole timeout, so the transport deadline is the timeout times the number
-  of targets the server accepts (200). The timeout of a batch travels in the body and not in the
-  query, so a deadline derived from the query alone is one function long - and the bridge answers
-  `REQUEST_TIMEOUT` while the server is still decompiling the targets that are left.
-- **A name is a name.** `xrefs_find_by_name` resolves the name to the symbols that carry it (a bare name
-  matches every namespace, a qualified one matches that namespace) and returns the references to them.
-  A name that resolves to nothing is a 404 with `SYMBOL_NOT_FOUND`, not an empty list. The page is cut
-  before the DTOs are built: each reference resolves the functions on both of its sides, so a hot
-  symbol would make every page pay for the references it does not return.
-- **The address context is one traversal.** `inspect_address` gathers the symbol, the containing
-  function, the data, the instruction, both comments and the references on both sides inside a single
-  `GhidraSwing.runRead`, so the answer is consistent and the agent pays one round trip.
-- **The call path is the shortest one.** `analysis_trace_call_path` is a breadth-first walk over the
-  call edges, bounded by the depth limit (16 at most) and by a cap on the functions it visits. When
-  there is no path it says how many functions it explored and why it gave up - it never says "not
-  found" without saying what it looked at. The path is rebuilt from the last hop back to the source,
-  and every link of it is a node of the path: the function in the middle is not dropped, and the
-  source is not put in twice. When the cap of visited functions cut the search short, the reason
-  says so - a path beyond the cap was not looked for, and "there is none" is not the same answer.
-
-## The composed calls
-
-Four more that the REA has and this project did not, closed the same way: one tool, one command,
-one formatter each. None of them needed a new endpoint - they compose what was already there.
-
-| REA | Bridge tool | CLI | What it composes |
-| --- | --- | --- | --- |
-| `procedure_callers` | `analysis_callers` | `ghydra analysis callers ADDR` | `GET /analysis/callers/{address}` |
-| `procedure_callees` | `analysis_callees` | `ghydra analysis callees ADDR` | `GET /analysis/callees/{address}` |
-| `analyze_function` | `functions_analyze` | `ghydra functions analyze --address ADDR` | the function, its decompilation, its callers, its callees and its references |
-| `binary_overview` | `programs_overview` | `ghydra analysis overview` | the program, its segments, its counts and its imports |
-
-**The callers and the callees existed in the API and in neither of the other two surfaces.** The
-endpoints were there since v3.0.0; the bridge and the CLI simply never exposed them, which is the
-kind of gap that only a real comparison finds.
-
-**A page that is not the whole list says so.** The callers and the callees take an `offset` and a
-`limit`, and the text of the answer says how many there are in total when the page holds fewer - a
-list of 100 that reads as "there are 100" when there are 136 is a lie an agent cannot see.
-
-**A composed answer must not hide a failure.** `functions_analyze` and `programs_overview` gather
-several answers into one, and a part that failed is reported as empty rather than as the whole
-thing having failed. The one part that decides the success is the one the caller asked for: the
-function, and the program. The CLI follows the same rule: a caller, a callee or a reference that
-fails does not throw away the function that was found and the decompilation that came with it.
 
 ## The target triage
 
@@ -850,57 +811,64 @@ Python side is where the platform shows:
 - **A box without Python is normal** (the Forgejo host has no `python3`): the CLI and
   the suite run in a container, and the workflows install what they need.
 
-## Known drift
-
-Verified rough edges — check before trusting anything downstream:
-
-- **Transaction failures return `409 TRANSACTION_FAILED`.** `TransactionHelper.TransactionException` has
-  a handler in `GhydraServer`. It is deliberately **unchecked**: resources guard service calls with
-  `catch (RuntimeException e) { throw e; }` then a broader `catch (Exception e) { throw new
-  RuntimeException(...) }`, so a checked exception would be rewrapped and surface as 500. Keep it a
-  `RuntimeException` or the 409 mapping breaks.
-- **Committed `lib/*.jar` are Ghidra 12.0.1, and `pom.xml` defaults to `ghidra.version=12.0.1`** so a
-  bare `mvn package` (no `GHIDRA_HOME`) builds and stamps honestly. Building against a real install needs
-  both: `GHIDRA_HOME=/path/to/ghidra_12.1.2_PUBLIC mvn clean package -Dghidra.version=12.1.2`. GitHub
-  Actions does exactly that per matrix leg. Refresh `lib/` and bump the pom default if you want the
-  no-flag build to target a newer Ghidra.
-- **A jar built against `lib/` runs against the installed Ghidra, and the two do not have the same
-  signatures.** `DataTypeComponent.setFieldName(String)` returns `void` in 12.0.1 and
-  `DataTypeComponent` in 12.2, and the return type is part of the JVM descriptor: a call site compiled
-  against `lib/` asks for `setFieldName(Ljava/lang/String;)V` and the installed 12.2 only has
-  `setFieldName(Ljava/lang/String;)Lghidra/program/model/data/DataTypeComponent;`. It fails at runtime
-  with a `NoSuchMethodError`, and an `Error` is not an `Exception`: `TransactionHelper` catches
-  `Exception`, so nothing is logged, the exception escapes Javalin, and the answer is a `500` with an
-  **empty body**. The jar must be compiled against the Ghidra that will run it — the install's own
-  jars first on the classpath, `lib/` last. The symptom to recognise: a `500` with no body and nothing
-  in the log is a build that was compiled against the wrong series.
-
-- **`ghydra functions set-variable` is the only variable-editing CLI command.** The duplicate
-  `update-variable` was removed in 3.0.0.
-- **Ghidra 12.2 (2026-10-22) needs JDK 25 and moved the data type removal API.** Two
-  consequences, both handled:
-  - `javac` cannot read a class file newer than itself, so building against 12.2 with
-    JDK 21 fails with `bad class file` on every Ghidra class — for any source, not just
-    the change that triggered it. The workflow derives the JDK from the distribution
-    instead of hardcoding it: the class file major version is 44 plus the JDK number
-    (65 = 21, 69 = 25), with a floor of 21 because the extension targets Java 21.
-  - `remove(DataType, TaskMonitor)` is gone; 12.2 has `remove(DataType)` and
-    `remove(List<DataType>, TaskMonitor)`. No overload exists in 11.x, 12.0-12.1 and
-    12.2 at once, so `GhidraUtil.removeDataType` resolves the call by name.
-- The pom's Ghidra dependency `<version>` tags are hardcoded to `12.1.2`; `-Dghidra.version` only
-  rewrites the `ghidraVersion` property in `extension.properties`, not those tags. They're
-  system-scoped, so this is cosmetic — the `systemPath` jars are what matter.
-- **The rich tables used to break on a Windows pipe.** `TableFormatter` renders with rich's default
-  `HEAVY_HEAD` box, whose frame characters are outside cp1252; piped on a Western Windows
-  (`sys.stdout.encoding == 'cp1252'`) `click.echo` raised `UnicodeEncodeError`. Fixed: the CLI
-  entrypoint now reconfigures stdout/stderr to UTF-8 with `errors="replace"` before any output
-  (covered by `test_errors.py`, which runs the CLI under `PYTHONIOENCODING=cp1252`). The Kuna
-  tables keep `box=box.ASCII` as defense in depth.
 
 ## Key documentation
 
-`README.md` (install, MCP client setup), `GHIDRA_HTTP_API.md` (REST reference, API_VERSION 3000),
-`GHYDRA_CLI.md` (CLI reference), `GHYDRA_KUNA.md` (the Kuna integration: opt-in, tools, export
-layout), `GHYDRA_X64DBG.md` (the x64dbg integration: the contract, the address model, the tools),
+`README.md` (install, MCP client setup), `docs/GHIDRA_HTTP_API.md` (REST reference, API_VERSION 3000),
+`docs/GHYDRA_CLI.md` (CLI reference), `docs/GHYDRA_KUNA.md` (the Kuna integration: opt-in, tools, export
+layout), `docs/GHYDRA_X64DBG.md` (the x64dbg integration: the contract, the address model, the tools),
 `CONTRIBUTING.md` (PR/release process),
-`TESTING.md` (stale on flags), `CHANGELOG.md` (release history — also the release-notes source).
+`docs/TESTING.md` (stale on flags), `CHANGELOG.md` (release history — also the release-notes source).
+
+## Read-only mode, audit trail and CI assertions
+
+- **Read-only is one handler** (`middleware/ReadOnlyGuard`, I12): with
+  `-Dghidra.mcp.readOnly=true` or `GHYDRA_READ_ONLY=1`, every `POST`/`PUT`/`PATCH`/`DELETE`
+  is refused with `403 READ_ONLY_MODE` before the resource runs. It is registered in
+  `GhydraServer` right after CORS, so a mutation added later cannot bypass it. Do not
+  add a per-service check: that is how one endpoint ends up unfenced.
+- **Every mutation is recorded** (`middleware/AuditTrail`, I12): one JSONL line per
+  state-changing request (`ts`, `request_id`, `method`, `path`, `status`, `ms`, `port`)
+  under `~/.ghydra/audit.jsonl`, bounded and local; the request body is deliberately
+  not recorded. `/capabilities` carries `features.read_only` and `features.audit_log`.
+- **`--dry-run` is client-side** (`GhydraHTTPClient._dry_run`, I12): a mutating method
+  returns the plan as its result instead of sending it, so a dry run cannot change
+  anything even if the server disagrees about the method. `ghydra audit` reads the trail.
+- **`ghydra assert` (I16)** evaluates a JSON list of assertions and exits non-zero on a
+  failure (`--format text|junit|sarif`). An absence claim against a truncated listing is
+  `inconclusive`, never a pass: proving "no import X" needs the whole list.
+- **`?count=false` (I10)** skips the counting walk. The page stays exact; `meta.total` is
+  omitted and `meta.counted` is false, and `next` comes from a full page. `Pagination`
+  carries `counted`, `PaginatedResult` honours it, and the two listing services take a
+  `count` flag; the bridge exposes it as `count` on `functions_list`/`symbols_list`.
+
+## The single core (I1)
+
+The bridge is one file and must not import `ghydra`, so the pure helpers it shares with
+the CLI are **generated** into it instead of retyped.
+
+- **The source is `ghydra/core/`** — pure functions only (no I/O, no globals). A generated
+  copy of a pure function is identical on both sides; anything else is not safe to generate.
+- **`python scripts/gen_core.py`** writes each module into `bridge_mcp_hydra.py` between
+  `# >>> generated from …` and `# <<< end generated …`. Never edit that region by hand: edit
+  the core and regenerate.
+- **`--check` is the guard**, and both CI pipelines run it before compiling. A core change
+  that was not regenerated fails instead of leaving the two surfaces disagreeing — the
+  failure mode this mechanism exists to remove. `tests/test_core.py` (`--core`) asserts the region
+  is current, byte-identical to a fresh generation, and that a tampered region is caught.
+- **What has moved so far:** `ghydra/core/digest.py` (canonical form, SHA-256, the stable
+  view of an answer), `ghydra/core/runbook.py` (step validation, with `BadSteps`/`BadEntry`
+  so each surface keeps its own error codes) and `ghydra/core/hints.py` (the mission goal
+  hints). The bridge's `_runbook_digest`, `_cache_digest`, `_runbook_load_steps` and
+  `_mission_parse_goal` are delegations.
+- **A region goes right after the imports.** Inserting one further down puts the generated
+  names after the helpers that use them, which is a `NameError` at import time. The anchor
+  is `def safe_get(` on purpose.
+## Known drift, the REA gaps and the composed calls
+
+**Moved to [GHYDRA_INTERNALS.md](docs/GHYDRA_INTERNALS.md)**, which is a reference to
+open when a symptom points at it — not an instruction that has to be loaded with
+every task. It covers the verified rough edges (Ghidra 12.2's JDK, the `lib/`
+jars, a `500` with no body), the four gaps closed against the REA and the four
+composed calls, in that order.
+

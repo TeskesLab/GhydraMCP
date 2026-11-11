@@ -1,6 +1,6 @@
 [project]
 name = "ghydramcp"
-version = "3.1.1"
+version = "3.39.0"
 description = "Multi-instance Ghidra plugin with HATEOAS REST API and MCP bridge for AI-assisted reverse engineering, binary analysis, and decompilation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -29,6 +29,9 @@ dependencies = [
 [project.scripts]
 ghydramcp = "bridge_mcp_hydra:main"
 ghydra = "ghydra.cli.main:cli"
+# The gateway, as its own script: an MCP server on stdio must own stdout,
+# and the CLI's root command prints.
+ghydra-gateway = "ghydra.gateway:main"
 
 [build-system]
 requires = ["hatchling"]

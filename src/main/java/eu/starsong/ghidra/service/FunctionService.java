@@ -65,13 +65,28 @@ public class FunctionService {
      */
     public PagedCollector.Page<FunctionSummaryDto> list(Program program, FunctionFilter filter,
                                                           int offset, int limit) {
+        return list(program, filter, offset, limit, true);
+    }
+
+    /**
+     * List one page, optionally without counting the matches.
+     *
+     * @param count false skips the walk that computes {@code meta.total}:
+     *              the page is still exact, and the answer says the total was
+     *              not computed instead of paying for a full scan the caller
+     *              did not ask for ({@code ?count=false}).
+     */
+    public PagedCollector.Page<FunctionSummaryDto> list(Program program, FunctionFilter filter,
+                                                          int offset, int limit, boolean count) {
         if (filter == null) {
             // The total has to be walked: Ghidra's own function counter does
             // not agree with what the iterator yields, and using it would
             // change the meta.total the client sees. The walk is cached per
             // program state, so only the first request pays for it.
-            int total = ProgramCache.shared().count(program, "functions",
-                () -> GhidraSwing.runRead(() -> countFunctions(program)));
+            int total = count
+                ? ProgramCache.shared().count(program, "functions",
+                    () -> GhidraSwing.runRead(() -> countFunctions(program)))
+                : 0;
             return GhidraSwing.runRead(() -> PagedCollector.collectPage(
                 program.getFunctionManager().getFunctions(true), offset, limit,
                 FunctionSummaryDto::from, total));

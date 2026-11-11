@@ -1,0 +1,81 @@
+{
+  "twin_version": 1,
+  "built_at": 1794200000.0,
+  "source": "http://localhost:8192",
+  "name": "example-snapshot",
+  "program": {
+    "name": "example.dll",
+    "md5": "0123456789abcdef0123456789abcdef",
+    "language": "x86:LE:64:default",
+    "image_base": "0x180000000"
+  },
+  "statistics": {
+    "functionCount": 6
+  },
+  "counts": {
+    "functions": 6,
+    "imports": 4,
+    "exports": 2,
+    "strings": 5,
+    "functions_total": 6
+  },
+  "functions": [
+    {
+      "name": "entry",
+      "address": "0x180001000",
+      "return_type": "undefined8",
+      "parameter_count": 0
+    },
+    {
+      "name": "ParseConfig",
+      "address": "0x1800010a0",
+      "return_type": "int",
+      "parameter_count": 2
+    },
+    {
+      "name": "OpenRegistry",
+      "address": "0x1800011f0",
+      "return_type": "int",
+      "parameter_count": 1
+    },
+    {
+      "name": "DecodeBuffer",
+      "address": "0x1800012c0",
+      "return_type": "char *",
+      "parameter_count": 2
+    },
+    {
+      "name": "FUN_180001400",
+      "address": "0x180001400",
+      "return_type": "undefined8",
+      "parameter_count": 1
+    },
+    {
+      "name": "FUN_180001500",
+      "address": "0x180001500",
+      "return_type": "void",
+      "parameter_count": 0
+    }
+  ],
+  "imports": [
+    "CreateFileW",
+    "RegOpenKeyExW",
+    "ReadFile",
+    "CloseHandle"
+  ],
+  "exports": [
+    "DllMain",
+    "ExampleInit"
+  ],
+  "strings": [
+    "C:\\config\\settings.ini",
+    "SOFTWARE\\Example",
+    "https://update.example.invalid/check",
+    "%TEMP%\\cache.bin",
+    "example.dll"
+  ],
+  "truncated": {
+    "functions": false,
+    "strings": false
+  }
+}

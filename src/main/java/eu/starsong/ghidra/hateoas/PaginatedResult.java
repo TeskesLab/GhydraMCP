@@ -20,14 +20,27 @@ public class PaginatedResult<T> {
     private final int offset;
     private final int limit;
     private final String basePath;
+    private final boolean counted;
     private Function<T, Map<String, Object>> itemLinksBuilder;
 
     public PaginatedResult(List<T> items, int total, int offset, int limit, String basePath) {
+        this(items, total, offset, limit, basePath, true);
+    }
+
+    /**
+     * @param counted when false the total was never computed: the metadata
+     *                omits {@code total}, says {@code counted: false}, and the
+     *                next link is emitted from the page being full rather than
+     *                from a total that does not exist.
+     */
+    public PaginatedResult(List<T> items, int total, int offset, int limit,
+                           String basePath, boolean counted) {
         this.items = items;
         this.total = total;
         this.offset = offset;
         this.limit = limit;
         this.basePath = basePath;
+        this.counted = counted;
     }
 
     /**
@@ -62,6 +75,10 @@ public class PaginatedResult<T> {
      * Check if there is a next page.
      */
     public boolean hasNext() {
+        if (!counted) {
+            // Without a total the only honest signal is a full page.
+            return items.size() >= limit;
+        }
         return offset + items.size() < total;
     }
 
@@ -99,7 +116,20 @@ public class PaginatedResult<T> {
         Response r = ctx != null
             ? Response.ok(ctx, port, resultItems)
             : Response.ok(resultItems);
-        return r.pagination(offset, limit, total, items.size(), basePath);
+        if (counted) {
+            return r.pagination(offset, limit, total, items.size(), basePath);
+        }
+        // Uncounted: no total, and the client is told why it is missing.
+        r.meta("offset", offset).meta("limit", limit).meta("counted", false);
+        r.link("self", basePath + "?offset=" + offset + "&limit=" + limit);
+        if (items.size() >= limit) {
+            r.link("next", basePath + "?offset=" + (offset + limit) + "&limit=" + limit);
+        }
+        if (offset > 0) {
+            r.link("prev", basePath + "?offset=" + Math.max(0, offset - limit)
+                + "&limit=" + limit);
+        }
+        return r;
     }
 
     /**
@@ -107,7 +137,13 @@ public class PaginatedResult<T> {
      */
     public Map<String, Object> metadata() {
         Map<String, Object> meta = new LinkedHashMap<>();
-        meta.put("total", total);
+        if (counted) {
+            meta.put("total", total);
+        } else {
+            // No total was computed; saying so is better than a number the
+            // caller would take for the count of matches.
+            meta.put("counted", false);
+        }
         meta.put("offset", offset);
         meta.put("limit", limit);
         meta.put("count", items.size());
@@ -117,15 +153,13 @@ public class PaginatedResult<T> {
     /**
      * Build pagination links map.
      *
-     * <p>Delegates to the canonical pagination builder in {@link Response} so
-     * the self/next/prev rels, hrefs and the {@code offset + count < total}
-     * "next" rule have a single implementation, then returns just the links.
+     * <p>Delegates to {@link #toResponse()} so the self/next/prev rels, the
+     * hrefs and the counted/uncounted "next" rule have a single
+     * implementation, then returns just the links.
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> links() {
-        Map<String, Object> built = Response.ok()
-            .pagination(offset, limit, total, items.size(), basePath)
-            .build();
+        Map<String, Object> built = toResponse().build();
         Object links = built.get("_links");
         return links instanceof Map
             ? (Map<String, Object>) links

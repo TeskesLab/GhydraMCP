@@ -276,3 +276,128 @@ changes land. Factor that in before committing to a shared-repo layout.
 - x64dbg SDK binding: `src/core/bridge.zig:338-395` (33 runtime-resolved symbols).
 - GhidraMCP server: `src/main/java/eu/starsong/ghidra/api/ApiConstants.java` (`API_VERSION` 3000,
   port range), `GhydraPlugin.java` (resource registration).
+
+---
+
+## 8. Progress
+
+Updated as the plan is executed. A phase is "done" for a side only when the
+`--contract` suite proves it there.
+
+### Phase 1 — GhydraMCP side: done (2026-11-09)
+
+The plan said this side needed nothing for the unification itself, and offered one
+optional item (expose metadata as MCP resources — those already exist:
+`ghidra://instance/{port}`, and the function resources). What Phase 1 *did* need from
+this repository is the contract, and that now exists:
+
+| Contract rule | Where it lives | Proof |
+| --- | --- | --- |
+| vocabulary (`namespace_verb`, snake_case, no reserved parameter) | `contract/vocabulary.json`, `contract/tools.json` (generated) | `tests/test_contract.py`: 134 names match, 0 reserved, 134 formatters |
+| address model (`TargetDescriptor`, both address forms, identity) | `contract/target-descriptor.schema.json`, `ghydra/target.py` | conversion round-trips; a descriptor over two different files is **not correlatable**; the schema rejects a bad one |
+| error envelope (stable code + human text) | `contract/error-codes.json` (generated) | 112 codes, shaped, unique, each with its side and its `file:line` |
+| conformance | `tests/test_contract.py`, run as `--contract` (and in CI) | 24 tests |
+
+The vocabulary half is now complete on this side: the 80 flat tools are mapped to
+their namespaced names in [`contract/x64dbg-vocabulary.json`](../contract/x64dbg-vocabulary.json),
+generated from the plugin's own registry (`danalec/x64dbg-mcp-server` at `9d7a93e`),
+with the read-only flags carried across and **zero collisions** with the tools this
+repository already has. That is the whole cost of adopting the rule on the other
+side, and it is a table a colleague can apply without running anything.
+
+What this does **not** do is fix the x64dbg side. Its nine Phase-1 defects are
+untouched — including the data race (#1) and the UI-thread call (#2), which are the
+two that make it unsafe to point at a real debugging session. Those live in
+`danalec/x64dbg-mcp-server` (verified at `9d7a93e`, 80 flat tools), and the plan's
+own rule applies: do not entangle the repositories.
+
+### What Phase 2 and 3 still need
+
+- **Phase 2** — one agent surface: a combined MCP client configuration that registers
+  both servers, with the two sides separately toggleable. It depends on the x64dbg
+  side adopting the vocabulary, or on aliases.
+- **Phase 3** — the gateway: `analyze_open → function_locate → breakpoint_set →
+  run_to → decompile`. The `TargetDescriptor` is its first requirement and it now
+  exists on this side; the gateway still needs the debugger's `module_base` and
+  `module_path` from a second server, and the path-identity refusal it already has.
+
+### Phase 2 — one agent surface: done (2026-11-09)
+
+`ghydra mcp-config` builds the combined client configuration: the bridge over
+stdio and the debugger over HTTP, as **separate entries** so either can be disabled,
+with the tool groups opt-in (`--groups core,functions`) rather than all-or-nothing.
+The debugger entry is omitted, with the reason, when its token is unknown — a
+configuration that names a server nobody can authenticate against is worse than one
+that says what is missing.
+
+Proof: `tests/test_mcp_config.py` (`--mcp-config`), 19 tests. Two of them exist
+because of mistakes made while writing it: the configuration sets only variables
+`bridge_mcp_hydra.py` actually reads (an invented `GHIDRA_HYDRA_PORT` was caught),
+and the printed JSON is not wrapped by the terminal renderer — a wrapped Windows
+path is not JSON, and `ghydra mcp-config | jq` failed for no visible reason until
+the command wrote its output unwrapped.
+
+Phase 2 still depends on the x64dbg side for its *vocabulary*: the configuration
+registers that server separately, which is what makes the names tolerable until its
+tools carry the `x64dbg_` prefix.
+
+### Phase 3 — the gateway: started (2026-11-09)
+
+The chain the plan asks for is `analyze_open → function_locate → breakpoint_set →
+run_to → decompile`. Three of the five exist now as **CLI commands over one
+descriptor**, which is the part that needs the address model:
+
+| Step | Command | What it does |
+| --- | --- | --- |
+| `analyze_open` | `ghydra target describe` | both sides → one `TargetDescriptor` + identity verdict |
+| `function_locate` | `ghydra target locate <name>` | the static address Ghidra knows |
+| `breakpoint_set` | `ghydra target breakpoint <name>` | locate → translate → set, or refuse |
+| `run_to` | `ghydra target run-to <name>` | translate, resume to it, report the registers |
+| `decompile` | `ghydra target decompile <name>` | the recovered C, addressed statically |
+
+All five steps exist. `run_to` carries the same refusal as `breakpoint_set` and a
+worse consequence if it were wrong — resuming a different build is not a breakpoint
+in the wrong place, it is a process running — and its timeout defaults below the
+client's read timeout, because the debugger's own default (30 s) is exactly that
+boundary and a full-length run would lose its answer.
+
+The refusal is what the tests pin: `tests/test_target.py` (`--target`) asserts that a
+descriptor built from two **different** files raises `TARGET_NOT_SAME_BINARY` and
+that the fake debugger recorded **no `SetBreakpoint` call at all** — a refusal that
+still writes to the debugger is not a refusal.
+
+The gateway process now exists too, **in this repository**: `ghydra-gateway` is an
+MCP server on stdio whose five tools are the five steps (`target_open`,
+`target_locate`, `target_breakpoint`, `target_run_to`, `target_decompile`), each a
+thin wrapper over `ghydra/target.py` — so the refusals the tests pin are the ones the
+agent meets. `ghydra mcp-config --gateway` emits the one-entry client configuration
+for it. The plan suggested a third repository for the contract and the gateway; the
+contract's rules are data and can move there, and the gateway turned out small enough
+to live next to the code it calls.
+
+### The x64dbg side: four defects fixed (2026-11-09)
+
+The plugin repository builds again here (Zig 0.14.0, `zig build` and
+`zig build test` green), and the four defects below are fixed on
+`fix/thread-safety-and-honest-frames` (`81d4936`, pushed to
+`danalec/x64dbg-mcp-server`):
+
+| # | Defect | What was wrong | Fix |
+| --- | --- | --- | --- |
+| 1 | data race | `.single_threaded = true` while threads came from Win32 `CreateThread`; five structures written by callbacks and read by HTTP threads | `single_threaded` false, one mutex for the rings/SSE table, `server_running` atomic, and **no slice into a ring escapes the lock** (`getEvent` copies) |
+| 3 | silent JSON truncation | `JsonWriter.raw` dropped bytes on overflow, so a too-large answer became malformed JSON | the writer records the overflow; the response paths answer a JSON-RPC internal error instead of the truncated frame |
+| 5 | CORS | `Access-Control-Allow-Origin: *`, and `OPTIONS` answered **before** the token check | no wildcard; the preflight is answered like every other request |
+| 7 | a lying tool | `ListCommandsByCategory` declared a category, ignored it, listed the MCP tools | a non-empty category is refused with the reason; the description says what it lists |
+
+Docs corrected against the code (#8): 80 tools (not 84), the default bind is
+`127.0.0.1` (not `0.0.0.0`), Zig 0.14.0 (not 0.16-dev), Disassemble default 10,
+WaitForPause default 30000.
+
+**Still open:** #9 (the two plugin commands share x64dbg's global command namespace)
+— a rename there breaks users' scripts, so the decision is an alias plus a
+deprecation note, not a silent break. And #4/#6 were already addressed by the
+plugin's own fixed port walk and the bridge's retry rules.
+
+The rename table's staleness rule was refined because of this work: it now compares
+the **mapping**, not the recorded commit — otherwise these four unrelated commits
+made the table report stale.

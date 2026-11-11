@@ -19,7 +19,7 @@ import java.util.function.Function;
  * Dev-only endpoint that shuts Ghidra down so the build/deploy/restart loop can be
  * automated (no manual cmd.exe step). DISABLED by default.
  *
- * <p>Enable with {@code -Dghydra.dev.allowShutdown=true} (or env {@code GHYDRA_DEV_SHUTDOWN=1}).
+ * <p>Enable with {@code -Dghidra.dev.allowShutdown=true} (or env {@code GHYDRA_DEV_SHUTDOWN=1}).
  * When disabled, POST /dev/shutdown returns 403 and does nothing. With unsaved changes the call
  * refuses (409) unless {@code ?save=true} (save all changed programs, then exit) or
  * {@code ?force=true} (discard and exit) is given, so an accidental call cannot silently lose
@@ -40,13 +40,19 @@ public class DevResource implements Resource {
         this.port = port;
     }
 
+    /** System property that turns the dev shutdown endpoint on. */
+    public static final String PROPERTY = "ghidra.dev.allowShutdown";
+
+    /** Environment variable that turns the dev shutdown endpoint on. */
+    public static final String ENV = "GHYDRA_DEV_SHUTDOWN";
+
     /** Whether the dev shutdown endpoint is enabled (off unless explicitly opted in). */
     public static boolean shutdownEnabled() {
-        String prop = System.getProperty("ghydra.dev.allowShutdown");
+        String prop = System.getProperty(PROPERTY);
         if (prop != null) {
             return prop.equalsIgnoreCase("true") || prop.equals("1");
         }
-        String env = System.getenv("GHYDRA_DEV_SHUTDOWN");
+        String env = System.getenv(ENV);
         return env != null && (env.equalsIgnoreCase("true") || env.equals("1"));
     }
 
@@ -59,8 +65,8 @@ public class DevResource implements Resource {
         if (!shutdownEnabled()) {
             ctx.status(403);
             ctx.json(Response.error(ctx.ctx(), port, "SHUTDOWN_DISABLED",
-                "Dev shutdown is disabled. Start Ghidra with -Dghydra.dev.allowShutdown=true "
-                    + "(or GHYDRA_DEV_SHUTDOWN=1) to enable.").build());
+                "Dev shutdown is disabled. Start Ghidra with -D" + PROPERTY + "=true "
+                    + "(or " + ENV + "=1) to enable.").build());
             return;
         }
 

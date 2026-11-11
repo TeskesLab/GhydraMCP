@@ -266,8 +266,13 @@ def get_function(ctx, name, address):
 @click.option('--start-line', type=int, help='Start line (1-indexed)')
 @click.option('--end-line', type=int, help='End line (inclusive)')
 @click.option('--max-lines', type=int, help='Maximum lines to return')
+@click.option('--cache', 'use_cache', is_flag=True,
+              help='Serve an unchanged program from the local cache (I11)')
+@click.option('--max-age', type=int, default=86400, show_default=True,
+              help='How old a cached answer may be, in seconds')
 @click.pass_context
-def decompile(ctx, name, address, syntax_tree, style, no_constants, timeout, start_line, end_line, max_lines):
+def decompile(ctx, name, address, syntax_tree, style, no_constants, timeout,
+              start_line, end_line, max_lines, use_cache, max_age):
     """Decompile a function to C pseudocode.
 
     Either --name or --address must be specified.
@@ -317,7 +322,18 @@ def decompile(ctx, name, address, syntax_tree, style, no_constants, timeout, sta
         original_timeout = client.timeout
         client.timeout = max(original_timeout, timeout + 30)
         try:
-            response = client.get(endpoint, params=params)
+            if use_cache:
+                from .. import cache as cache_helper
+                response, cached = cache_helper.get_or_compute(
+                    client, 'decompile',
+                    {'endpoint': endpoint, 'params': params},
+                    lambda: client.get(endpoint, params=params),
+                    max_age=max_age)
+                if cached:
+                    # On stderr: the answer itself stays parseable.
+                    rich_echo("[dim](served from the local cache)[/dim]", err=True)
+            else:
+                response = client.get(endpoint, params=params)
         finally:
             client.timeout = original_timeout
 

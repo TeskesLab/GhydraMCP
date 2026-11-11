@@ -82,6 +82,7 @@ public final class GhydraServerFactory {
 
         server.register(
             new RootResource(isBaseInstance),
+            new BSimResource(),
             new FunctionResource(functionService, decompilerService),
             new SymbolResource(),
             new DataResource(),

@@ -64,6 +64,24 @@ public class GhydraPlugin extends Plugin implements ApplicationLevelPlugin {
         Msg.info(this, "GhydraMCP loaded on port " + port);
         System.out.println("[GhydraMCP] Plugin loaded on port " + port);
 
+        // The flags that turn the guarded endpoints on are read from the
+        // system properties and from the environment. A user who sets one and
+        // finds the endpoint still refusing needs to see what the plugin saw:
+        // the name of the property, the name of the environment variable, and
+        // whether the endpoint ended up on.
+        Msg.info(this, "GhidraMCP flags: scripts="
+            + eu.starsong.ghidra.resource.ScriptResource.scriptsEnabled()
+            + " (" + eu.starsong.ghidra.resource.ScriptResource.PROPERTY + "="
+            + System.getProperty(eu.starsong.ghidra.resource.ScriptResource.PROPERTY)
+            + ", " + eu.starsong.ghidra.resource.ScriptResource.ENV + "="
+            + System.getenv(eu.starsong.ghidra.resource.ScriptResource.ENV)
+            + "), devShutdown="
+            + eu.starsong.ghidra.resource.DevResource.shutdownEnabled()
+            + " (" + eu.starsong.ghidra.resource.DevResource.PROPERTY + "="
+            + System.getProperty(eu.starsong.ghidra.resource.DevResource.PROPERTY)
+            + ", " + eu.starsong.ghidra.resource.DevResource.ENV + "="
+            + System.getenv(eu.starsong.ghidra.resource.DevResource.ENV) + ")");
+
         startServer();
     }
 

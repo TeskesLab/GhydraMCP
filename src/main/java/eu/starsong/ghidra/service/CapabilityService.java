@@ -51,6 +51,23 @@ public final class CapabilityService {
         features.put("call_path", true);
         features.put("xrefs_by_name", true);
         features.put("ui_cursor", !ctx.isHeadless());
+        // Discovered by loading the class, never from the Ghidra version: a
+        // build may ship without the BSim feature (R1).
+        features.put("bsim", eu.starsong.ghidra.service.BSimService.available());
+        // Ingest writes to the signature database: present only when the engine
+        // is there *and* a database is named (it creates the file if missing).
+        features.put("bsim_ingest", eu.starsong.ghidra.service.BSimService.available()
+            && eu.starsong.ghidra.service.BSimService.database() != null);
+        // A query needs the engine, a named database and the file on disk.
+        features.put("bsim_query", eu.starsong.ghidra.service.BSimService.available()
+            && eu.starsong.ghidra.service.BSimService.databaseExists());
+        // Applying a match writes to the program: it needs the query and a
+        // writable program, and the read-only guard blocks the route otherwise.
+        features.put("bsim_apply_names",
+            eu.starsong.ghidra.service.BSimService.available()
+            && eu.starsong.ghidra.service.BSimService.databaseExists());
+        features.put("read_only", eu.starsong.ghidra.middleware.ReadOnlyGuard.enabled());
+        features.put("audit_log", eu.starsong.ghidra.middleware.AuditTrail.enabled());
         features.put("capabilities", true);
         data.put("features", features);
 

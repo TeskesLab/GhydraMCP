@@ -64,6 +64,24 @@ class GhidraConfig:
         }
         return data
 
+    def x64dbg_section(self) -> Dict[str, Any]:
+        """The x64dbg settings as the section `ghydra.x64dbg.resolve_config` takes.
+
+        The file nests them under "x64dbg" and the object keeps them flat; a caller
+        that read an attribute named `x64dbg` got None and silently ignored the
+        configuration. This is the one place that knows the four keys.
+        """
+        section: Dict[str, Any] = {}
+        if self.x64dbg_host:
+            section["host"] = self.x64dbg_host
+        if self.x64dbg_port:
+            section["port"] = self.x64dbg_port
+        if self.x64dbg_token:
+            section["token"] = self.x64dbg_token
+        if self.x64dbg_path:
+            section["path"] = self.x64dbg_path
+        return section
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "GhidraConfig":
         """Create config from dictionary."""

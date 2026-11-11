@@ -1,0 +1,867 @@
+{
+  "contract_version": 1,
+  "generated_by": "scripts/gen_contract.py",
+  "envelope": {
+    "rule": "an error carries a stable machine-readable code next to its human text; a client branches on the code, never on the prose",
+    "code_pattern": "^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$",
+    "required_on_failure": [
+      "success",
+      "error.code",
+      "error.message"
+    ],
+    "success_field": "success"
+  },
+  "counts": {
+    "codes": 121,
+    "families": 38
+  },
+  "codes": [
+    {
+      "code": "ANALYSIS_RUNNING",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Analysis is already running",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/AnalysisResource.java:66`"
+    },
+    {
+      "code": "ASSERTION_BAD_FILE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/assertions.py:35`"
+    },
+    {
+      "code": "ASSERTION_BAD_SPEC",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/assertions.py:36`"
+    },
+    {
+      "code": "ASSERTION_UNKNOWN_KIND",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/assertions.py:37`"
+    },
+    {
+      "code": "BAD_REQUEST",
+      "side": "Java",
+      "http_status": null,
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:203`"
+    },
+    {
+      "code": "BSIM_BELOW_THRESHOLD",
+      "side": "Java",
+      "http_status": "400",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:213`"
+    },
+    {
+      "code": "BSIM_CREATE_FAILED",
+      "side": "Java",
+      "http_status": "409",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:225`"
+    },
+    {
+      "code": "BSIM_DISABLED",
+      "side": "Java",
+      "http_status": "503",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:165`"
+    },
+    {
+      "code": "BSIM_INCOMPLETE_INGEST",
+      "side": "Java",
+      "http_status": "409",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:272`"
+    },
+    {
+      "code": "BSIM_INGEST_FAILED",
+      "side": "Java",
+      "http_status": "500",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:261`"
+    },
+    {
+      "code": "BSIM_INIT_FAILED",
+      "side": "Java",
+      "http_status": "409",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:231`"
+    },
+    {
+      "code": "BSIM_INSERT_FAILED",
+      "side": "Java",
+      "http_status": "500",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:237`"
+    },
+    {
+      "code": "BSIM_NO_BODY",
+      "side": "Java",
+      "http_status": "400",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:189`"
+    },
+    {
+      "code": "BSIM_NO_DATABASE",
+      "side": "Java",
+      "http_status": "400",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:171`"
+    },
+    {
+      "code": "BSIM_NO_FUNCTION",
+      "side": "Java",
+      "http_status": "400",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:183`"
+    },
+    {
+      "code": "BSIM_NO_MATCH",
+      "side": "Java",
+      "http_status": "400",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:201`"
+    },
+    {
+      "code": "BSIM_NO_NAME",
+      "side": "Java",
+      "http_status": "400",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:207`"
+    },
+    {
+      "code": "BSIM_NO_PROGRAM",
+      "side": "Java",
+      "http_status": "400",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:177`"
+    },
+    {
+      "code": "BSIM_NO_TARGET",
+      "side": "Java",
+      "http_status": "400",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:195`"
+    },
+    {
+      "code": "BSIM_QUERY_FAILED",
+      "side": "Java",
+      "http_status": "500",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:249`"
+    },
+    {
+      "code": "BSIM_RENAME_FAILED",
+      "side": "Java",
+      "http_status": "500",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:255`"
+    },
+    {
+      "code": "BSIM_RENAME_REFUSED",
+      "side": "Java",
+      "http_status": "400",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:219`"
+    },
+    {
+      "code": "BSIM_SCAN_FAILED",
+      "side": "Java",
+      "http_status": "500",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:243`"
+    },
+    {
+      "code": "CONNECTION_ERROR",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:1069`"
+    },
+    {
+      "code": "DIFF_READ_FAILED",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/diff.py:38`"
+    },
+    {
+      "code": "EVIDENCE_BAD_ID",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/evidence.py:357`"
+    },
+    {
+      "code": "EVIDENCE_BAD_KIND",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11514`"
+    },
+    {
+      "code": "EVIDENCE_IO",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11619`"
+    },
+    {
+      "code": "EVIDENCE_NO_FILE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/evidence.py:253`"
+    },
+    {
+      "code": "EVIDENCE_NO_LEDGER",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/evidence.py:234`"
+    },
+    {
+      "code": "FLEET_BAD_PORTS",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:13134`"
+    },
+    {
+      "code": "FLEET_MISSING_TARGET",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:13141`"
+    },
+    {
+      "code": "FLEET_UNKNOWN_KIND",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:13082`"
+    },
+    {
+      "code": "FUNCTION_NOT_FOUND",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:5045`"
+    },
+    {
+      "code": "HEADLESS_ALREADY_RUNNING",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/headless.py:816`"
+    },
+    {
+      "code": "HEADLESS_BAD_PORT",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/headless.py:636`"
+    },
+    {
+      "code": "HEADLESS_BAD_PROJECT_DIR",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11161`"
+    },
+    {
+      "code": "HEADLESS_DIED",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11206`"
+    },
+    {
+      "code": "HEADLESS_LAUNCH",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11169`"
+    },
+    {
+      "code": "HEADLESS_LIMITATION",
+      "side": "Java",
+      "http_status": null,
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:183`"
+    },
+    {
+      "code": "HEADLESS_NO_FILE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11134`"
+    },
+    {
+      "code": "HEADLESS_NO_GHIDRA",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11141`"
+    },
+    {
+      "code": "HEADLESS_NO_JDK",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11147`"
+    },
+    {
+      "code": "HEADLESS_NO_LAUNCHER",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/headless.py:194`"
+    },
+    {
+      "code": "HEADLESS_NO_PORT",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/headless.py:422`"
+    },
+    {
+      "code": "HEADLESS_NO_RUN",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11248`"
+    },
+    {
+      "code": "HEADLESS_PORT_IN_USE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11151`"
+    },
+    {
+      "code": "HEADLESS_TIMEOUT",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11219`"
+    },
+    {
+      "code": "INCOMPATIBLE_GHIDRA_BUILD",
+      "side": "Java",
+      "http_status": null,
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:220`"
+    },
+    {
+      "code": "INSTANCE_NOT_FOUND",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:5561`"
+    },
+    {
+      "code": "INTERNAL_ERROR",
+      "side": "Java",
+      "http_status": null,
+      "message": "Internal server error:",
+      "origin": "`src/main/java/eu/starsong/ghidra/middleware/ErrorHandler.java:27`"
+    },
+    {
+      "code": "INVALID_BASE64",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:6429`"
+    },
+    {
+      "code": "INVALID_DIMENSIONS",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:10426`"
+    },
+    {
+      "code": "INVALID_HEX",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:6439`"
+    },
+    {
+      "code": "INVALID_JSON",
+      "side": "Java",
+      "http_status": null,
+      "message": "Malformed JSON body:",
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:209`"
+    },
+    {
+      "code": "INVALID_RESPONSE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:4888`"
+    },
+    {
+      "code": "INVALID_TARGETS",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:5924`"
+    },
+    {
+      "code": "KUNA_BAD_ARTIFACT",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:8050`"
+    },
+    {
+      "code": "KUNA_DISABLED",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:360`"
+    },
+    {
+      "code": "KUNA_FAILED",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:452`"
+    },
+    {
+      "code": "KUNA_IO",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:7821`"
+    },
+    {
+      "code": "KUNA_LAUNCH",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:7879`"
+    },
+    {
+      "code": "KUNA_MISSING",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/kuna.py:131`"
+    },
+    {
+      "code": "KUNA_NO_DIR",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:7983`"
+    },
+    {
+      "code": "KUNA_NO_FILE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:371`"
+    },
+    {
+      "code": "KUNA_NO_FUNCTION",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:8075`"
+    },
+    {
+      "code": "KUNA_NO_INDEX",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:8026`"
+    },
+    {
+      "code": "KUNA_NO_JSON",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:442`"
+    },
+    {
+      "code": "KUNA_TIMEOUT",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/kuna.py:166`"
+    },
+    {
+      "code": "KUNA_TOO_LARGE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:448`"
+    },
+    {
+      "code": "LAUNCHER_NO_GHIDRA",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/launcher.py:125`"
+    },
+    {
+      "code": "LAUNCHER_NO_JDK",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/launcher.py:339`"
+    },
+    {
+      "code": "LAUNCHER_NO_UTILITY",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/launcher.py:462`"
+    },
+    {
+      "code": "MISSING_PARAMETER",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:5026`"
+    },
+    {
+      "code": "MISSION_IO",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:12721`"
+    },
+    {
+      "code": "NON_JSON_RESPONSE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:1028`"
+    },
+    {
+      "code": "NO_PROGRAM_LOADED",
+      "side": "Java",
+      "http_status": null,
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:166`"
+    },
+    {
+      "code": "NO_PROJECT_OPEN",
+      "side": "Java",
+      "http_status": null,
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:171`"
+    },
+    {
+      "code": "ORIGIN_NOT_ALLOWED",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:971`"
+    },
+    {
+      "code": "READ_ONLY_MODE",
+      "side": "Java",
+      "http_status": null,
+      "message": "this instance runs in read-only mode, so",
+      "origin": "`src/main/java/eu/starsong/ghidra/middleware/ReadOnlyGuard.java:83`"
+    },
+    {
+      "code": "REPORT_NO_FILE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/report.py:534`"
+    },
+    {
+      "code": "REPORT_NO_INSTANCE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/report.py:581`"
+    },
+    {
+      "code": "REPORT_WRONG_BINARY",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/report.py:548`"
+    },
+    {
+      "code": "REQUEST_TIMEOUT",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:1059`"
+    },
+    {
+      "code": "RUNBOOK_BAD_ENTRY",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/runbook.py:34`"
+    },
+    {
+      "code": "RUNBOOK_BAD_FILE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:12187`"
+    },
+    {
+      "code": "RUNBOOK_BAD_STEPS",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:12153`"
+    },
+    {
+      "code": "RUNBOOK_IO",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:12160`"
+    },
+    {
+      "code": "SAVE_FAILED",
+      "side": "Java",
+      "http_status": "500",
+      "message": "Save before shutdown failed (not shutting down):",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/DevResource.java:84`"
+    },
+    {
+      "code": "SCRIPTS_DISABLED",
+      "side": "Java",
+      "http_status": "403",
+      "message": "Script execution is disabled. Start Ghidra with -D",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/ScriptResource.java:88`"
+    },
+    {
+      "code": "SESSION_ALREADY",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11738`"
+    },
+    {
+      "code": "SESSION_BAD_NAME",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/sessions.py:155`"
+    },
+    {
+      "code": "SESSION_NOT_RUNNING",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11799`"
+    },
+    {
+      "code": "SESSION_NO_SUCH",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11811`"
+    },
+    {
+      "code": "SHUTDOWN_DISABLED",
+      "side": "Java",
+      "http_status": "403",
+      "message": "Dev shutdown is disabled. Start Ghidra with -D",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/DevResource.java:67`"
+    },
+    {
+      "code": "TAINT_READ_FAILED",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/taint.py:45`"
+    },
+    {
+      "code": "TARGET_BAD_ADDRESS",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:217`"
+    },
+    {
+      "code": "TARGET_NOT_FOUND",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:215`"
+    },
+    {
+      "code": "TARGET_NOT_IN_IMAGE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:221`"
+    },
+    {
+      "code": "TARGET_NOT_LOADED",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:214`"
+    },
+    {
+      "code": "TARGET_NOT_SAME_BINARY",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:216`"
+    },
+    {
+      "code": "TARGET_NO_CODE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:222`"
+    },
+    {
+      "code": "TARGET_NO_PROGRAM",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/target.py:213`"
+    },
+    {
+      "code": "TASK_NOT_FOUND",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:11850`"
+    },
+    {
+      "code": "TOOL_GROUP_CORE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:13562`"
+    },
+    {
+      "code": "TOOL_GROUP_UNAVAILABLE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:13422`"
+    },
+    {
+      "code": "TOOL_GROUP_UNKNOWN",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:13414`"
+    },
+    {
+      "code": "TRANSACTION_FAILED",
+      "side": "Java",
+      "http_status": null,
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:196`"
+    },
+    {
+      "code": "TRIAGE_ERROR",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:10727`"
+    },
+    {
+      "code": "TRIAGE_NO_FILE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:10721`"
+    },
+    {
+      "code": "UNEXPECTED_ERROR",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:1079`"
+    },
+    {
+      "code": "UNSAVED_CHANGES",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Refusing to shut down:",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/DevResource.java:92`"
+    },
+    {
+      "code": "X64DBG_BAD_ARGS",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:9202`"
+    },
+    {
+      "code": "X64DBG_DISABLED",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/gateway.py:98`"
+    },
+    {
+      "code": "X64DBG_ERROR",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:9242`"
+    },
+    {
+      "code": "X64DBG_MISSING",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/x64dbg.py:369`"
+    },
+    {
+      "code": "X64DBG_NO_FILE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/x64dbg.py:852`"
+    },
+    {
+      "code": "X64DBG_NO_MATCH",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/x64dbg.py:899`"
+    },
+    {
+      "code": "X64DBG_TIMEOUT",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/x64dbg.py:379`"
+    },
+    {
+      "code": "X64DBG_UNAUTHORIZED",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/x64dbg.py:419`"
+    },
+    {
+      "code": "X64DBG_UNCERTAIN",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/x64dbg.py:380`"
+    }
+  ]
+}

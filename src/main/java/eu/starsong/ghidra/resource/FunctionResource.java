@@ -116,8 +116,10 @@ public class FunctionResource implements Resource {
             ctx.queryParam("addr_max")
         );
 
-        var page = functionService.list(program, filter, pagination.offset(), pagination.limit());
-        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(), pagination.limit(), "/functions")
+        var page = functionService.list(program, filter, pagination.offset(),
+            pagination.limit(), pagination.counted());
+        var result = new PaginatedResult<>(page.items(), page.total(), pagination.offset(),
+            pagination.limit(), "/functions", pagination.counted())
             .withItemLinks(fn -> Links.builder()
                 .self("/functions/{}", fn.address())
                 .link("decompile", "/functions/{}/decompile", fn.address())

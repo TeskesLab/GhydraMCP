@@ -23,6 +23,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+import os
+import glob
 
 ROOT = Path(__file__).resolve().parent.parent
 BRIDGE = ROOT / "bridge_mcp_hydra.py"
@@ -106,6 +108,293 @@ def version_copy_ok() -> bool:
     return '"version": __version__' in text and '"version": "3.' not in text
 
 
+# --------------------------------------------------------------- catalogue
+def catalogue_problems() -> list:
+    """The generated tool catalogue must be current."""
+    sys.path.insert(0, ROOT)
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "gen_tools_doc", os.path.join(ROOT, "scripts", "gen_tools_doc.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as failure:  # noqa: BLE001 - the guard reports, it does not crash
+        return [f"cannot load scripts/gen_tools_doc.py: {failure}"]
+    try:
+        rendered = module.render(module.collect())
+    except Exception as failure:  # noqa: BLE001
+        return [f"the tool catalogue cannot be generated: {failure}"]
+    document = os.path.join(ROOT, "docs", "GHYDRA_TOOLS.md")
+    if not os.path.exists(document):
+        return ["GHYDRA_TOOLS.md is missing: run scripts/gen_tools_doc.py"]
+    with open(document, encoding="utf-8") as handle:
+        current = handle.read()
+    if rendered != current:
+        return ["GHYDRA_TOOLS.md is stale: run scripts/gen_tools_doc.py"]
+    return []
+
+
+# ------------------------------------------------------- duplicate headings
+#: Where a repeated heading is the design (one section per release).
+REPEATING_HEADINGS_ALLOWED = {"CHANGELOG.md"}
+
+
+def duplicate_heading_problems() -> list:
+    """A document that repeats a heading at the same level has been edited badly.
+
+    The index is generated from the headings, so a duplicate makes the index
+    ambiguous — and in practice it means a block was pasted twice (measured: the
+    CLI reference carried the same 17-line section 18 times).
+    """
+    problems = []
+    for relative in sorted(INDEXED_DOCUMENTS):
+        path = os.path.join(ROOT, relative)
+        if not os.path.exists(path) or relative in REPEATING_HEADINGS_ALLOWED:
+            continue
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        in_toc = False
+        seen = {}
+        parents = {}          # level -> the title of the enclosing section
+        for number, line in enumerate(text.splitlines(), start=1):
+            stripped = line.strip()
+            if stripped == "<!-- toc -->":
+                in_toc = True
+                continue
+            if stripped == "<!-- /toc -->":
+                in_toc = False
+                continue
+            if in_toc or not line.startswith("#"):
+                continue
+            level = len(line) - len(line.lstrip("#"))
+            if level < 2:
+                continue
+            title = line[level:].strip()
+            # A heading is identified by where it sits: `### Tests` under
+            # "Troubleshooting" and under "Adding New Tests" are two sections,
+            # not a duplicate. The same title under the *same* parent is.
+            parent = parents.get(level - 1)
+            key = (level, title, parent)
+            if key in seen:
+                where = f" under '{parent}'" if parent else ""
+                problems.append(
+                    f"{relative}:{number}: heading '{title}' repeats level {level}"
+                    f"{where} (first at line {seen[key]})")
+            else:
+                seen[key] = number
+            parents[level] = title
+            for deeper in [key_level for key_level in parents if key_level > level]:
+                del parents[deeper]
+    return problems
+
+
+def _load_script(name: str):
+    """Import a sibling script as a module, or return the failure."""
+    sys.path.insert(0, ROOT)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(ROOT, "scripts", name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def documented_commands_problems() -> list:
+    """Every `ghydra …` command a document shows must exist."""
+    try:
+        module = _load_script("check_doc_commands")
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load scripts/check_doc_commands.py: {failure}"]
+    problems = []
+    for path in sorted(glob.glob(os.path.join(ROOT, "*.md"))):
+        relative = os.path.basename(path)
+        with open(path, encoding="utf-8") as handle:
+            problems.extend(module.problems_in(relative, handle.read()))
+    return problems
+
+
+def runner_flags_problems() -> list:
+    """Every suite the runner has must be named in the testing document.
+
+    The document lists the flags by hand, because each carries a description
+    the runner does not know. That is a list that can fall behind, and it did:
+    a suite was added and the document was not updated. The runner's own usage
+    line is generated from the suites, so this is the second half of the same
+    promise.
+    """
+    document = os.path.join(ROOT, "docs", "TESTING.md")
+    if not os.path.exists(document):
+        return ["docs/TESTING.md is missing"]
+    try:
+        runner = _load_script("../run_tests")
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load run_tests.py: {failure}"]
+    with open(document, encoding="utf-8") as handle:
+        text = handle.read()
+    return [f"docs/TESTING.md does not mention the suite {flag}"
+            for flag in sorted(runner.SUITES) if flag not in text]
+
+
+def x64dbg_vocabulary_problems() -> list:
+    """The rename table must be current — or, without the plugin repo, consistent."""
+    try:
+        module = _load_script("gen_x64dbg_vocabulary")
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load scripts/gen_x64dbg_vocabulary.py: {failure}"]
+    if not module.repository():
+        # The other repository is not a dependency of this one: validate what is
+        # committed instead of pretending it was regenerated.
+        if not os.path.exists(module.DOCUMENT):
+            return ["contract/x64dbg-vocabulary.json is missing"]
+        code = module.check(module.DOCUMENT)
+        return [] if code == 0 else ["the committed x64dbg vocabulary is inconsistent"]
+    try:
+        rendered = module.render(module.repository())
+    except Exception as failure:  # noqa: BLE001
+        return [f"the x64dbg vocabulary cannot be generated: {failure}"]
+    with open(module.DOCUMENT, encoding="utf-8") as handle:
+        current = handle.read()
+    if rendered != current:
+        return ["contract/x64dbg-vocabulary.json is stale: "
+                "run scripts/gen_x64dbg_vocabulary.py"]
+    return []
+
+
+def cheatsheet_current_problems() -> list:
+    """The generated cheat sheet must match the CLI."""
+    try:
+        module = _load_script("gen_cheatsheet")
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load scripts/gen_cheatsheet.py: {failure}"]
+    try:
+        rendered = module.render()
+    except SystemExit as failure:
+        return [f"the cheat sheet names commands that no longer exist: {failure}"]
+    document = os.path.join(ROOT, "docs", "GHYDRA_CHEATSHEET.md")
+    if not os.path.exists(document):
+        return ["GHYDRA_CHEATSHEET.md is missing: run scripts/gen_cheatsheet.py"]
+    with open(document, encoding="utf-8") as handle:
+        current = handle.read()
+    if rendered != current:
+        return ["GHYDRA_CHEATSHEET.md is stale: run scripts/gen_cheatsheet.py"]
+    return []
+
+
+def errors_current_problems() -> list:
+    """The generated error reference must be current."""
+    sys.path.insert(0, ROOT)
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "gen_errors_doc", os.path.join(ROOT, "scripts", "gen_errors_doc.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load scripts/gen_errors_doc.py: {failure}"]
+    try:
+        rendered = module.render()
+    except Exception as failure:  # noqa: BLE001
+        return [f"the error reference cannot be generated: {failure}"]
+    document = os.path.join(ROOT, "docs", "GHYDRA_ERRORS.md")
+    if not os.path.exists(document):
+        return ["GHYDRA_ERRORS.md is missing: run scripts/gen_errors_doc.py"]
+    with open(document, encoding="utf-8") as handle:
+        current = handle.read()
+    if rendered != current:
+        return ["GHYDRA_ERRORS.md is stale: run scripts/gen_errors_doc.py"]
+    return []
+
+
+def index_current_problems() -> list:
+    """The big references must carry a current generated index."""
+    sys.path.insert(0, ROOT)
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "gen_toc", os.path.join(ROOT, "scripts", "gen_toc.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as failure:  # noqa: BLE001
+        return [f"cannot load scripts/gen_toc.py: {failure}"]
+    problems = []
+    for relative, depth in module.INDEXED.items():
+        path = os.path.join(ROOT, relative)
+        if not os.path.exists(path):
+            problems.append(f"{relative} is missing")
+            continue
+        with open(path, encoding="utf-8") as handle:
+            current = handle.read()
+        try:
+            updated = module.apply(current, depth)
+        except SystemExit as failure:
+            problems.append(f"{relative}: {failure}")
+            continue
+        if updated != current:
+            problems.append(f"{relative}: the index is stale, run scripts/gen_toc.py")
+    return problems
+
+
+#: The documents the guards read: the generated ones and the big references.
+INDEXED_DOCUMENTS = ("docs/GHIDRA_HTTP_API.md", "docs/GHYDRA_CLI.md",
+                     "docs/DOCUMENTATION.md", "docs/GHYDRA_CONCEPTS.md",
+                     "docs/GHYDRA_RECIPES.md", "docs/GHYDRA_TROUBLESHOOTING.md",
+                     "docs/ARCHITECTURE.md", "docs/GHYDRA_TOOLS.md",
+                     "docs/GHYDRA_GETTING_STARTED.md", "docs/TESTING.md",
+                     "CHANGELOG.md")
+
+# ------------------------------------------------------------------- links
+def index_link_problems() -> list:
+    """Every local document linked from the index must exist."""
+    index = os.path.join(ROOT, "docs", "DOCUMENTATION.md")
+    if not os.path.exists(index):
+        return ["DOCUMENTATION.md is missing: the documentation has no map"]
+    with open(index, encoding="utf-8") as handle:
+        text = handle.read()
+    problems = []
+    # Links are relative to the document that holds them, not to the repository.
+    base = os.path.dirname(index)
+    for target in sorted(set(re.findall(r"\]\(([^)#]+\.md)\)", text))):
+        if target.startswith(("http://", "https://")):
+            continue
+        if not os.path.exists(os.path.join(base, target)):
+            problems.append(f"DOCUMENTATION.md links {target}, which does not exist")
+    return problems
+
+
+# -------------------------------------------------------------------- links
+def broken_link_problems() -> list:
+    """Every local link in every document must resolve, from where the file is.
+
+    A relative link means "next to me", so the base is the document's directory.
+    A link to a heading (`#section`) or to the web is not checked here.
+    """
+    problems = []
+    # Only the documents the repository ships: `docs/` also holds gitignored notes
+    # that are not maintained as part of it (and are written from the root).
+    try:
+        listed = subprocess.run(["git", "ls-files", "*.md"], cwd=ROOT,
+                                capture_output=True, text=True, check=True)
+        documents = [os.path.join(ROOT, line.strip())
+                     for line in listed.stdout.splitlines() if line.strip()]
+    except Exception:  # noqa: BLE001 - no git: fall back to the tree
+        documents = sorted(glob.glob(os.path.join(ROOT, "*.md")))
+        documents.extend(sorted(glob.glob(os.path.join(ROOT, "docs", "**", "*.md"),
+                                         recursive=True)))
+    for document in documents:
+        relative = os.path.relpath(document, ROOT).replace(os.sep, "/")
+        with open(document, encoding="utf-8") as handle:
+            text = handle.read()
+        for target in sorted(set(re.findall(r"\]\(([^)\s]+)\)", text))):
+            if target.startswith(("http://", "https://", "#", "mailto:")):
+                continue
+            local = target.split("#")[0]
+            if not local:
+                continue
+            if not os.path.exists(os.path.join(os.path.dirname(document), local)):
+                problems.append(f"{relative} links {target}, which does not exist")
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", action="store_true", help="print the counts")
@@ -121,6 +410,17 @@ def main() -> int:
         cwd=ROOT, capture_output=True, text=True)
     if check.returncode != 0:
         problems.append("scripts/version.py --check failed: " + check.stdout.strip())
+
+    problems.extend(catalogue_problems())
+    problems.extend(index_link_problems())
+    problems.extend(duplicate_heading_problems())
+    problems.extend(broken_link_problems())
+    problems.extend(index_current_problems())
+    problems.extend(errors_current_problems())
+    problems.extend(documented_commands_problems())
+    problems.extend(cheatsheet_current_problems())
+    problems.extend(x64dbg_vocabulary_problems())
+    problems.extend(runner_flags_problems())
     if not version_copy_ok():
         problems.append(
             "ghydra/x64dbg.py must use __version__ (scripts/version.py's sixth copy)")

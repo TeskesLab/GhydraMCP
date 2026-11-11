@@ -33,6 +33,17 @@ public class SymbolService {
      * the symbols on the page are turned into DTOs.
      */
     public PagedCollector.Page<SymbolDto> list(Program program, SymbolFilter filter, int offset, int limit) {
+        return list(program, filter, offset, limit, true);
+    }
+
+    /**
+     * List one page, optionally without counting the matches.
+     *
+     * @param count false skips the walk that computes {@code meta.total}, for
+     *              a caller that asked for a page only ({@code ?count=false}).
+     */
+    public PagedCollector.Page<SymbolDto> list(Program program, SymbolFilter filter,
+                                               int offset, int limit, boolean count) {
         SymbolTable symbolTable = program.getSymbolTable();
 
         if (filter == null) {
@@ -40,8 +51,10 @@ public class SymbolService {
             // agree with what the iterator yields, and using it would change
             // the meta.total the client sees. The walk is cached per program
             // state, so only the first request pays for it.
-            int total = ProgramCache.shared().count(program, "symbols",
-                () -> GhidraSwing.runRead(() -> countSymbols(symbolTable)));
+            int total = count
+                ? ProgramCache.shared().count(program, "symbols",
+                    () -> GhidraSwing.runRead(() -> countSymbols(symbolTable)))
+                : 0;
             return GhidraSwing.runRead(() -> PagedCollector.collectPage(
                 symbolTable.getAllSymbols(true), offset, limit, SymbolDto::from, total));
         }

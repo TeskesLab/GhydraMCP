@@ -19,16 +19,20 @@ Three surfaces, one assistant:
 
 | | What it is | What it gives the assistant |
 | --- | --- | --- |
-| **Ghidra** | The plugin, inside the CodeBrowser | 96 tools over the program: functions, data, structures, xrefs, the CFG, the decompiler, capability negotiation and triage, background tasks |
+| **Ghidra** | The plugin, inside the CodeBrowser | **115 tools** over the program: functions, data, structures, xrefs, the CFG, the decompiler, capability negotiation, triage, signature similarity (BSim), source-to-sink hypotheses, budgeted dossiers, missions, assertions, runbooks, fleet queries, background tasks |
 | **x64dbg** | A plugin that lives inside the debugger | The debugger's own 80 tools over the live process: registers, memory, breakpoints, stepping |
 | **Kuna** | A separate decompiler CLI | A second opinion on the same binary, and the recovered C as MCP resources |
 
-The bridge exposes **115 tools** in total: the 96 above, 6 over x64dbg (the pass-through that reaches
-the debugger's own 80), and 13 for the Kuna exports.
+The bridge exposes **134 tools** in total — the 115 above, 6 over x64dbg (the pass-through that
+reaches the debugger's own 80), and 13 for the Kuna exports — grouped into 10 workflow profiles so a
+client can load only what it needs.
 
 The two debugger sides share one model of addresses, so a static address from Ghidra can be turned
 into a live one for x64dbg — and a breakpoint the assistant sets lands on the instruction the
 static analysis was talking about.
+
+Documentation is mapped in [DOCUMENTATION.md](docs/DOCUMENTATION.md); the tool catalogue is
+generated, so it cannot fall behind the code.
 
 Neither of the two new integrations changes the Ghidra REST API: `API_VERSION` is still **3000**,
 and the plugin gains no endpoint. They are local — a plugin on this machine, and a CLI on this
@@ -58,8 +62,76 @@ Through it, an assistant can:
 - Follow HATEOAS links between resources
 - Set breakpoints in a live debugger, from an address Ghidra found
 - Read the recovered C of a whole binary as MCP resources
+- Answer a question with **one budgeted dossier** instead of a dozen calls, and see what was left out
+- Turn an analysis into a **CI test** (SARIF/JUnit assertions, runbooks replayable with digests)
+- Find a function across a **corpus** by its compiled shape, and rename it from the match
+- Ask about a binary **after** Ghidra is closed, from a snapshot
 
 GhydraMCP started as a fork of [GhidraMCP by Laurie Wired](https://github.com/LaurieWired/GhidraMCP/) and added multi-instance support, data manipulation, and a HATEOAS REST API.
+
+## What it can do
+
+The plugin started as a set of endpoints. Most of what it answers now is
+*composed*: several endpoints, one answer, with the evidence attached.
+
+| Ask | Get | Surface |
+| --- | --- | --- |
+| "what does this function do?" | `analysis_context_pack` — a dossier, ranked by relevance, cut to a token budget, with the omissions listed | MCP · CLI |
+| "does data from `recv` reach `system`?" | `analysis_taint` — hypotheses with a confidence (`direct`/`reachable`/`weak`) and **no claim of proof** | MCP · CLI |
+| "what is this binary capable of?" | `analysis_capabilities_summary` — ATT&CK-style leads ranked from imports and strings | MCP · CLI |
+| "is this build still what it should be?" | `ghydra assert --format sarif` — assertions with an exit code, for a pipeline | CLI |
+| "reproduce that session" | `ghydra runbook record` / `replay --fail-on-change` — every answer with a digest | MCP · CLI |
+| "what changed between these two builds?" | `analysis_diff` (by address and name) and `bsim diff` (paired by **signature**) | MCP · CLI |
+| "does any of my binaries import X?" | `fleet_query` — one question, N instances, merged by **file identity** | MCP · CLI |
+| "what does this function resemble?" | `bsim ingest` / `bsim query` / `bsim apply-names` — a local H2 signature database | MCP · CLI |
+| "answer again, with Ghidra closed" | `ghydra twin build` / `twin query` — a snapshot that answers offline | CLI |
+| "run this against a machine I do not trust" | read-only mode, a local audit trail, and `--dry-run` on every mutation | MCP · CLI |
+
+Measured numbers, not estimates: BSim ingest of `where.exe` — 94 functions in
+3.1 s; a snapshot answers a name search **715x** faster than the API and builds in
+66 ms (see [GHYDRA_BSIM.md](docs/GHYDRA_BSIM.md) and `scripts/bench_twin.py`).
+
+### What it does not do
+
+- **It does not find vulnerabilities.** It produces hypotheses with evidence and
+  confidence, and says so in the answer. False positives are expected; it is a lead
+  generator for a human or an agent to confirm.
+- **An absence is not a proof.** A listing that was truncated is reported as
+  `inconclusive`/`complete: false`, never as a pass.
+- **A signature match is not an identification.** `bsim` answers with similarity
+  and significance, and a 1.0 match means the vectors agree, not that the source is
+  the same.
+- **A twin is a snapshot.** It cannot decompile, read memory, or see a change made
+  after it was taken — which is why it carries the executable md5 and the time it
+  was built.
+
+## Documentation
+
+**Start at [DOCUMENTATION.md](docs/DOCUMENTATION.md)** — it is the map: what to read
+for which job, and the reading paths by audience.
+
+| Document | What is in it |
+| --- | --- |
+| [DOCUMENTATION.md](docs/DOCUMENTATION.md) | The map of all documentation |
+| [GHYDRA_GETTING_STARTED.md](docs/GHYDRA_GETTING_STARTED.md) | Install → first dossier, with real output |
+| [GHYDRA_CONCEPTS.md](docs/GHYDRA_CONCEPTS.md) | The mental model: surfaces, envelope, budgets, profiles |
+| [GHYDRA_RECIPES.md](docs/GHYDRA_RECIPES.md) | Twelve jobs with their commands and traps |
+| [GHYDRA_TOOLS.md](docs/GHYDRA_TOOLS.md) | **Generated** catalogue of the 134 tools |
+| [GHYDRA_ERRORS.md](docs/GHYDRA_ERRORS.md) | **Generated** reference of every error code |
+| [GHYDRA_CHEATSHEET.md](docs/GHYDRA_CHEATSHEET.md) | **Generated** one line per command |
+| [GHYDRA_TROUBLESHOOTING.md](docs/GHYDRA_TROUBLESHOOTING.md) | Symptom → cause → fix |
+| [GHYDRA_OUTPUT.md](docs/GHYDRA_OUTPUT.md) | Text vs JSON vs table vs report, the envelope, exit codes |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | The tiers, the single core, the rules that hold them |
+| [GHYDRA_INTERNALS.md](docs/GHYDRA_INTERNALS.md) | Known drift, the REA gaps, the composed calls |
+| [GHYDRA_CLI.md](docs/GHYDRA_CLI.md) | The whole command-line surface, command by command |
+| [GHIDRA_HTTP_API.md](docs/GHIDRA_HTTP_API.md) | The REST reference — 106 routes, `API_VERSION` 3000 |
+| [GHYDRA_BSIM.md](docs/GHYDRA_BSIM.md) | Signature similarity: setup, building a corpus, querying, applying a match, comparing versions, and the traps measured on Ghidra 12.2 |
+| [GHYDRA_HEADLESS.md](docs/GHYDRA_HEADLESS.md) | The API with no window: `ghydra headless start/stop`, and the report |
+| [GHYDRA_KUNA.md](docs/GHYDRA_KUNA.md) | The Kuna decompiler integration: opt-in, exports, measured costs |
+| [GHYDRA_X64DBG.md](docs/GHYDRA_X64DBG.md) | The debugger integration: contract, address model, retry rules |
+| [TESTING.md](docs/TESTING.md) | How to run the 23 suites, and what each of them proves |
+| [REA_PARITY.md](docs/REA_PARITY.md) | The comparison against another agent's tool catalogue |
+| [AGENTS.md](AGENTS.md) | The conventions this codebase is built on (also `CLAUDE.md`) |
 
 ## What's new
 
@@ -104,7 +176,7 @@ in a headless Ghidra run and serves the same REST API from it — the same twent
 same decompiler service, the same middleware. `ghydra report build <binary>` puts Ghidra and Kuna
 side by side in one report and writes the annotations for the debugger, so a human opens it and
 finds the interesting functions already marked. Full reference:
-[GHYDRA_HEADLESS.md](GHYDRA_HEADLESS.md).
+[GHYDRA_HEADLESS.md](docs/GHYDRA_HEADLESS.md).
 
 ### The doctor
 
@@ -142,7 +214,7 @@ ghydra session close s-3f9a21c4
 The assistant can now drive a live debugger, with the static analysis and the dynamic one sharing
 one address model. Six tools, an address translation that works on a real process, and a failure
 taxonomy that tells an agent whether the debugger already acted. Full reference:
-[GHYDRA_X64DBG.md](GHYDRA_X64DBG.md).
+[GHYDRA_X64DBG.md](docs/GHYDRA_X64DBG.md).
 
 ### The Kuna exports are MCP resources
 
@@ -160,7 +232,7 @@ kuna://export/{digest}/README.md            what the export is
 
 That is the retrieval loop with **exact** addressing: list the exports, read the index, read one
 function. A corpus with an exact index does not need embeddings — they would retrieve the wrong
-function more often than the right one. Full reference: [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
+function more often than the right one. Full reference: [GHYDRA_KUNA.md](docs/GHYDRA_KUNA.md).
 
 ### The resources a client can actually read
 
@@ -182,7 +254,7 @@ document.
 
 ### 3.0.0
 
-`API_VERSION` is **3000** — see [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) for the full reference
+`API_VERSION` is **3000** — see [GHIDRA_HTTP_API.md](docs/GHIDRA_HTTP_API.md) for the full reference
 and [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 **Breaking — fully-qualified symbol names.** Functions, symbols, data labels, variables, and
@@ -479,7 +551,7 @@ Two rules keep a stale export from answering for the wrong thing:
   analysed again instead of answered with stale artifacts.
 
 Full reference, including the fourteen error codes and the export readers:
-[GHYDRA_KUNA.md](GHYDRA_KUNA.md).
+[GHYDRA_KUNA.md](docs/GHYDRA_KUNA.md).
 
 # The Ghidra plugin
 
@@ -629,6 +701,27 @@ ghydra memory read --address 0x401000 --length 64
 
 # JSON output for scripting and piping
 ghydra --json functions decompile --name main
+
+# One question, one dossier with a token budget
+ghydra analysis context-pack -q "what does this function do?" -a 0x401000
+
+# Analysis as a CI test: assertions with an exit code, SARIF for code scanning
+ghydra assert -f examples/asserts.json --format sarif -o report.sarif
+
+# Source-to-sink hypotheses, with a confidence and a disclaimer
+ghydra analysis taint --source recv --sink system
+
+# A mission: goal + hard budget -> a dossier that re-reads its own evidence
+ghydra mission start -g "does data from recv reach system?"
+
+# Signature similarity against a local H2 database
+ghydra bsim ingest --max-functions 500
+ghydra bsim query --name main --min-similarity 0.9
+ghydra bsim apply-names --address 0x140001010 --apply
+
+# A snapshot that answers with Ghidra closed
+ghydra twin build --name app-1.2
+ghydra twin query app-1.2.json --kind functions --match str
 ```
 
 The `--json` flag goes **before** the subcommand. The config precedence is CLI flag >
@@ -662,7 +755,7 @@ downloading one.
 
 The bridge resolves the Kuna binary from `PATH` or from the `kuna.path` key in
 `~/.ghydra/config.json`, which is the way to point at a binary installed outside the
-default profile. See [GHYDRA_KUNA.md](GHYDRA_KUNA.md).
+default profile. See [GHYDRA_KUNA.md](docs/GHYDRA_KUNA.md).
 
 Timeout defaults are intentionally high for large binaries:
 - CLI/bridge HTTP timeout default: `900s` (`GHYDRA_TIMEOUT`)
@@ -689,7 +782,7 @@ Any MCP client works. The bridge is a stdio server:
 }
 ```
 
-The bridge exposes **121 tools in 31 namespaces**. The namespaces are:
+The bridge exposes **134 tools in 36 namespaces**. The namespaces are:
 
 `analysis_*` · `classes_*` · `comments_*` · `data_*` · `datatypes_*` · `doctor_*` ·
 `evidence_*` · `functions_*` · `headless_*` · `inspect_*` · `instances_*` · `kuna_*` ·
@@ -707,7 +800,7 @@ The MCP client setup for Claude Desktop, Claude Code, Cline and 5ire is in
 Every Ghidra-backed tool is also a REST endpoint, and the bridge is a thin layer over them. The
 local integrations are not: the 13 `kuna_*` tools drive the Kuna CLI as a subprocess and the 6
 `x64dbg_*` tools talk to the debugger plugin, so neither has an HTTP route and neither appears in
-[GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md). The full list of the REST surface is there; what
+[GHIDRA_HTTP_API.md](docs/GHIDRA_HTTP_API.md). The full list of the REST surface is there; what
 follows is the shape of it.
 
 ```bash
@@ -762,12 +855,45 @@ ghydra functions get-pcode --address 0x401000
 ghydra raw-image define --address 0x401000 --width 320 --height 200 --format RGB565
 ghydra raw-image cleanup --address 0x401000
 
-# The local integrations
+# Composed answers: several endpoints, one answer, evidence attached
+ghydra analysis overview
+ghydra analysis context-pack -q "what changed?" -a 0x401000 --budget 1200
+ghydra analysis capabilities-summary
+ghydra analysis taint --source recv --sink system
+ghydra analysis diff --b-port 8193
+ghydra functions analyze --address 0x401000
+ghydra inspect-address 0x401008
+ghydra xrefs find-by-name strlen
+
+# Analysis as a pipeline step
+ghydra assert -f asserts.json --format jwt -o report.xml
+ghydra runbook record 'steps.json' -o session.ghydrarb.jsonl
+ghydra runbook replay session.ghydrarb.jsonl --fail-on-change
+
+# A goal against a budget, producing a dossier
+ghydra mission start -g "does data from recv reach system?" -o dossier.md
+
+# Several instances at once, merged by file identity
+ghydra fleet has-import CreateFileW --ports 8192,8193
+
+# Signature similarity (a local H2 database; see GHYDRA_BSIM.md)
+ghydra bsim status
+ghydra bsim ingest
+ghydra bsim query --address 0x140001010
+ghydra bsim diff app-1.2.exe --max-functions 50
+
+# A snapshot that answers offline
+ghydra twin build --name app-1.2
+ghydra twin diff app-1.1.json app-1.2.json
+
+# The other local integrations
 ghydra x64dbg status
 ghydra x64dbg call ListModules
 ghydra x64dbg breakpoint 0x140001234
 ghydra kuna status
 ghydra kuna export ./challenge.exe
+ghydra headless start ./challenge.exe
+ghydra doctor
 ```
 
 ## Client Setup
@@ -1132,15 +1258,19 @@ The links let a client discover related resources without hardcoding URLs.
 
 # Testing
 
-GhydraMCP has test suites for the HTTP API and the MCP bridge. See [TESTING.md](TESTING.md) for how to run them.
+There are **28 suites**. Most need a running Ghidra; the contract suites do not, and they are
+what CI runs on every push. See [TESTING.md](docs/TESTING.md) for what each one proves.
 
 ```bash
-python run_tests.py                       # all suites
-python run_tests.py --http --mcp --data --comments --port --kuna --x64dbg
+python run_tests.py --no-ghidra           # the 22 suites that execute without Ghidra
+python run_tests.py                       # everything (skips what needs no instance)
 ```
 
-Every suite skips itself when Ghidra is not running, so a green run against no Ghidra means
-nothing — confirm the tests actually executed before trusting it.
+A suite that needs Ghidra **skips** itself when there is none, so a green run against no Ghidra
+means nothing — confirm the tests actually executed before trusting it. The contract suites are the
+exceptions and always give a signal: `--kuna`, `--x64dbg` (a fake plugin that answers like the real
+one), `--surface`, `--capabilities`, `--scripts`, `--compatibility`, `--runner`, `--docs`,
+`--core` (the single-core generator), `--twin`, `--examples`, `--contract`, `--mcp-config`, `--target`, `--gateway`, and the composed-answer suites.
 
 ## HTTP API Tests
 

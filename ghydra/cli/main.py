@@ -35,11 +35,13 @@ class GhydraCLI(click.Group):
 @click.option('--port', '-p', type=int, envvar='GHYDRA_PORT', help='Ghidra port (default: from config or 8192)')
 @click.option('--json', 'output_json', is_flag=True, envvar='GHYDRA_JSON',
               help='Output raw JSON instead of formatted text (accepted in any position)')
+@click.option('--dry-run', 'dry_run', is_flag=True,
+              help='Describe mutating requests instead of sending them')
 @click.option('--no-color', is_flag=True, help='Disable colored output')
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
 @click.version_option(version=__version__, prog_name='ghydra')
 @click.pass_context
-def cli(ctx, host, port, output_json, no_color, verbose):
+def cli(ctx, host, port, output_json, dry_run, no_color, verbose):
     """Ghydra CLI - Interact with Ghidra reverse engineering tool.
 
     This CLI provides command-line access to all Ghidra functionality exposed
@@ -100,7 +102,8 @@ def cli(ctx, host, port, output_json, no_color, verbose):
     client = GhidraHTTPClient(
         host=config.default_host,
         port=config.default_port,
-        timeout=config.timeout
+        timeout=config.timeout,
+        dry_run=dry_run,
     )
 
     # Create formatter
@@ -116,6 +119,10 @@ def cli(ctx, host, port, output_json, no_color, verbose):
     ctx.obj['client'] = client
     ctx.obj['formatter'] = formatter
     ctx.obj['output_json'] = output_json
+    # The debugger and target commands build their own clients, so the flag has to
+    # be in the context as well: attaching it to `GhidraHTTPClient` alone left
+    # `ghydra --dry-run x64dbg call Run` calling the debugger's Run tool.
+    ctx.obj['dry_run'] = dry_run
 
 
 # Import and register command groups
@@ -151,6 +158,16 @@ from . import (
 )
 
 from .stats import stats as stats_command
+from .assertions_cmd import assert_cmd
+from .audit import audit_cmd
+from .runbook_cmd import runbook as runbook_group
+from .mission_cmd import mission as mission_group
+from .cache_cmd import cache as cache_group
+from .fleet_cmd import fleet as fleet_group
+from .bsim_cmd import bsim as bsim_group
+from .twin_cmd import twin as twin_group
+from .mcp_config import mcp_config as mcp_config_command
+from .target_cmd import target_group
 
 cli.add_command(instances.instances)
 cli.add_command(functions.functions)
@@ -180,6 +197,16 @@ cli.add_command(evidence.evidence)
 cli.add_command(session.session)
 cli.add_command(inspect.inspect)
 cli.add_command(stats_command)
+cli.add_command(assert_cmd)
+cli.add_command(audit_cmd)
+cli.add_command(runbook_group)
+cli.add_command(mission_group)
+cli.add_command(cache_group)
+cli.add_command(fleet_group)
+cli.add_command(bsim_group)
+cli.add_command(twin_group)
+cli.add_command(mcp_config_command)
+cli.add_command(target_group)
 cli.add_command(inspect_address.inspect_address)
 
 

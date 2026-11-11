@@ -241,17 +241,25 @@ def check_project(project_dir: str = "") -> Check:
     # A project that is locked has a run that has it open. The next run of
     # the same binary will refuse to open it, and the reason it gives is
     # about a lock file rather than about the run that holds it.
-    locked = []
+    # Ghidra leaves a `<name>.lock` and a `<name>.lock~` behind, and they are
+    # one project: the run that holds it and the copy it made of the lock. Listing
+    # both told the user a project was locked twice.
+    locked = set()
     try:
         for name in os.listdir(directory):
-            if name.endswith(".lock") or name.endswith(".lock~"):
-                locked.append(name.replace(".lock~", "").replace(".lock", ""))
+            if name.endswith(".lock~"):
+                locked.add(name[:-len(".lock~")])
+            elif name.endswith(".lock"):
+                locked.add(name[:-len(".lock")])
     except OSError:
-        locked = []
+        locked = set()
     if locked:
         return Check(
             "project", STATUS_WARN,
-            f"{directory} - the project(s) {', '.join(sorted(locked))} are locked, "
+            f"{directory} - the "
+            f"{'project' if len(locked) == 1 else 'projects'} "
+            f"{', '.join(sorted(locked))} "
+            f"{'is' if len(locked) == 1 else 'are'} locked, "
             "so a run has them open",
             "Stop the run that has it (ghydra headless status), or wait for it. "
             "A lock left by a run that was killed is removed by the next stop.",

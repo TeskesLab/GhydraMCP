@@ -260,9 +260,27 @@ def open_session(binary: str,
                 code="SESSION_ALREADY",
             )
 
-    runner = _build_runner(binary, port=port, ghidra_home=ghidra_home,
-                           java_home=java_home)
-    instance = runner.start(timeout=timeout)
+    # The provider's failure is translated into this layer's taxonomy: the code
+    # it carries is kept, so the reason is still machine-readable, and the
+    # caller has one type to handle instead of two.
+    #
+    # The whole provider interaction is inside the guard, not only the start:
+    # building the runner is where the installation is looked for, so on a
+    # machine without Ghidra the failure comes from the constructor and not
+    # from the run.
+    try:
+        runner = _build_runner(binary, port=port, ghidra_home=ghidra_home,
+                               java_home=java_home)
+        instance = runner.start(timeout=timeout)
+    except Exception as exc:
+        from .headless import HeadlessError
+
+        if isinstance(exc, HeadlessError):
+            raise SessionError(str(exc),
+                               code=getattr(exc, "code", "SESSION_ERROR")) from exc
+        if isinstance(exc, SessionError):
+            raise
+        raise
 
     now = time.time()
     project_dir = str(getattr(instance, "project_dir", "") or "")

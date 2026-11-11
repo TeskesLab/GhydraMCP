@@ -136,7 +136,25 @@ public class GhidraContext {
     public Pagination pagination() {
         int offset = queryParamAsInt("offset", 0);
         int limit = queryParamAsInt("limit", 100);
-        return new Pagination(offset, limit);
+        return new Pagination(offset, limit, countRequested());
+    }
+
+    /**
+     * Does the client want the total?
+     *
+     * <p>A listing of a large binary pays for a walk over every entity to
+     * count page matches. {@code ?count=false} says the caller only wants the
+     * page: the walk is skipped, {@code meta.total} is absent and
+     * {@code meta.counted} is false, so the client knows the number was not
+     * computed rather than reading a wrong one.
+     */
+    private boolean countRequested() {
+        String raw = queryParam("count");
+        if (raw == null || raw.isBlank()) {
+            return true;
+        }
+        String text = raw.trim().toLowerCase(java.util.Locale.ROOT);
+        return !(text.equals("false") || text.equals("0") || text.equals("no"));
     }
 
     // -------------------------------------------------------------------------
@@ -245,11 +263,16 @@ public class GhidraContext {
     // Pagination helper class
     // -------------------------------------------------------------------------
 
-    public record Pagination(int offset, int limit) {
+    public record Pagination(int offset, int limit, boolean counted) {
         public Pagination {
             if (offset < 0) offset = 0;
             if (limit < 1) limit = 100;
             if (limit > 1000) limit = 1000;
+        }
+
+        /** A counted page: the historical behaviour, and the default. */
+        public Pagination(int offset, int limit) {
+            this(offset, limit, true);
         }
     }
 

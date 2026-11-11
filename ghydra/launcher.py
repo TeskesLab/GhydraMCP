@@ -324,6 +324,20 @@ def find_java_home(explicit: Optional[str] = None,
     JDK. When the caller asked for a specific one and it is too old, that is
     an error rather than a silent substitution.
     """
+    # What the caller asked for is an order, not a hint: if that JDK is older
+    # than the installation asks for, the answer is an error and not a
+    # substitution. Every other layer is a place the search may stop.
+    if explicit and os.path.isdir(explicit):
+        version = java_version(explicit)
+        if version is not None and required_major and version[0] < required_major:
+            raise LauncherError(
+                f"the JDK that was asked for ({explicit}) is JDK {version[0]}, "
+                f"and this Ghidra asks for JDK {required_major} or newer. Its "
+                "VM arguments carry flags that only the newer JVMs take, so "
+                "the run would die with a message about a flag rather than "
+                "about the JDK. Point at a newer one.",
+                code="LAUNCHER_NO_JDK")
+
     layers: List[Tuple[str, str]] = []
     if explicit:
         layers.append(("the requested JDK", explicit))

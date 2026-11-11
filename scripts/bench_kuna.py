@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure what the Kuna integration costs, and print the table for the docs.
 
-The numbers quoted in GHYDRA_KUNA.md are only as good as the version they
+The numbers quoted in docs/GHYDRA_KUNA.md are only as good as the version they
 were measured with, and Kuna keeps moving. This script measures the three
 commands the integration actually runs, on the binaries the docs quote, and
 prints a Markdown table ready to paste.

@@ -6,101 +6,112 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Everything here is newer than **3.1.1** and not released yet.
+
 ### Added
-- **Local telemetry and `ghydra stats` (I14)**: the bridge records what it
-  actually did — one JSON object per call (tool, ok, error code, latency,
-  estimated tokens) under `~/.ghydra/telemetry.jsonl`, capped at ~1 MB, never
-  sent anywhere and disabled with `GHYDRA_TELEMETRY=0`. The new
-  `telemetry_summary` tool and `ghydra stats` aggregate it (calls, failures,
-  latency and token volume per tool, the error codes seen) and **recommend the
-  composed tool when the log shows the pattern one replaces** — 4+ inspection
-  calls point at `analysis_context_pack`, 4+ listings at `programs_overview`,
-  4+ decompiles at `functions_batch_decompile`, and a slow tool at
-  `async_mode`. The recorder swallows every failure: telemetry never breaks a
-  call. `test_telemetry.py` covers the recorder, the bound, the state dir, the
-  disable switch, the summarizers' parity and the CLI/tool renderers;
-  `--telemetry` joins `--no-ghidra`.
-- **Progressive tool discovery (I15)**: 120 tools in one list degrade tool
-  selection. The bridge now groups them by workflow (`core`, `functions`,
-  `data`, `types`, `scripts`, `headless`, `kuna`, `x64dbg`) and loads only the
-  groups a session asks for — with `GHYDRA_TOOL_GROUPS=core,functions` at
-  startup, or at runtime. Four meta-tools are always loaded:
-  `tools_groups` (the groups, their sizes and whether they are loaded),
-  `tools_search` (searches the FULL catalogue, including hidden tools, and
-  says which group to load), `tools_load_group` and `tools_unload_group`.
-  `core` can never be unloaded, and the meta-tools survive every profile, so a
-  hidden tool is always findable and recoverable. The catalogue is captured
-  before any profile is applied; a client that caches the list must re-read it
-  after a runtime change (a restart with the env var gives a guaranteed
-  profile). `test_tool_groups.py` covers the map, the profile switch, the
-  stash/restore and the four tools; `--tool-groups` joins `--no-ghidra`.
-- **`context_pack`: one answered question within a token budget (R3)**: the
-  `analysis_context_pack` tool and `ghydra analysis context-pack` compose the
-  endpoints a question needs into ONE ranked dossier — three question models
-  (what it does / where the data comes from / what changed, PT or EN) with
-  exact-endpoint retrieval, graph expansion (callers/callees/xrefs), an
-  approximate token budget, **citable addresses** for every section, and an
-  explicit list of what was omitted and why. A section that fails is reported
-  with its error code, never hidden. The builder lives in
-  `ghydra/contextpack.py` with a copy in the bridge (parity asserted by
-  `test_context_pack.py`).
-- **Actionable HATEOAS (I8)**: every text answer now ends with a `Next:` line
-  built from the envelope's `_links` — the hrefs carry real values, so the
-  suggestion is the bridge call that follows (`functions_decompile(address="…")`),
-  including the next page for paginated listings. A link that does not map to a
-  registered tool is left out: a wrong suggestion is worse than none.
-- **`--json` anywhere and UTF-8 output (I4)**: the CLI entrypoint reconfigures
-  stdout/stderr to UTF-8 with `errors="replace"` before any output, so Rich tables
-  no longer raise `UnicodeEncodeError` on a cp1252 Windows pipe, and a custom root
-  group lifts a `--json` found in any position into `GHYDRA_JSON` — both
-  `ghydra --json functions list` and `ghydra functions list --json` work now, and so
-  does the environment variable alone. `test_errors.py` runs the CLI under
-  `PYTHONIOENCODING=cp1252` to prove it.
-- **Machine-readable error contract (I9)**: a static guard asserts every
-  `Response.error(...)` call site in the Java sources passes a non-empty,
-  code-shaped literal as its first string argument — no handler can ship an error an
-  agent cannot branch on — and the bridge's `format_error` now keeps the envelope's
-  request id in the text (`Error [CODE]: msg (request id: ...)`), so an agent that
-  wants the server's log line for the exact failure has the handle to ask with.
-- **Background tasks for long operations (I7)**: `functions_batch_decompile`
-  and `headless_start` gain `async_mode=True` — a task handle (`T-0001`)
-  comes back immediately, the blocking call runs in a background thread, and
-  the new `tasks_get`/`tasks_list`/`tasks_cancel` tools poll and cancel it.
-  The synchronous default is unchanged (a plain call behaves exactly as
-  before). Cancelling is honest about what it stops: the waiting, not the
-  server-side work — a batch keeps decompiling and a headless run keeps
-  running (that is what `headless_stop` is for); the task's result is
-  discarded. The registry generalizes the Kuna job pattern and lives in the
-  bridge process, like the jobs. `test_tasks.py` covers the lifecycle, the
-  cancel semantics, the fallback and the tool contract; `--tasks` joins
-  `--no-ghidra`.
-- **Capability triage (R4)**: `analysis_capabilities_summary` (bridge),
-  `ghydra analysis capabilities-summary` (CLI) composes the program, imported
-  symbols and defined strings into one ranked ATT&CK/MBC-style report — each
-  technique with its confidence, score and the evidence (name + address) behind
-  it, plus the explicit "a lead for an analyst, not a verdict" method line. A
-  technique is only reported when an import or string actually matches one of
-  the 10 rules; failures are listed, never hidden. The rule pack lives in
-  `ghydra/capabilities.py` with a byte-identical copy in the bridge (parity
-  asserted by `test_capabilities_summary.py`, the Kuna-taxonomy pattern);
-  `--capability-summary` joins `--no-ghidra`. No new endpoint: it composes
-  `/program` + `/symbols/imports` + `/strings`, so `API_VERSION` stays 3000.
-- **Honest CI (I6)**: `run_tests.py` now accepts any number of suite flags in one
-  invocation and reports each result separately, plus `--no-ghidra`, which expands
-  to the suites that always execute. Both the GitHub Actions and Gitea Actions
-  `build.yml` install the Python package and run exactly that set on every push/PR,
-  so a green run is real evidence instead of a summary made of skipped suites.
-  `test_runner.py` covers the new multi-flag behaviour and the `--no-ghidra`
-  contract; `TESTING.md` documents it.
-- **Documentation drift guard (I13)**: `scripts/check_docs.py` counts
-  `@mcp.tool()`/`@mcp.prompt()`/`@mcp.resource()` and `FORMATTERS` entries from the
-  AST, counts REST routes in the Java resources, and compares them with the
-  "N tools in M namespaces" claims in `README.md` and `AGENTS.md`. It also runs
-  `scripts/version.py --check` and verifies that `ghydra/x64dbg.py` uses
-  `__version__` instead of a second hardcoded release number. Wired into CI as the
-  `--docs` suite (part of `--no-ghidra`); `test_docs.py` covers the pure checks.
-- **Sync with upstream v3.1.1**: incorporates the merged PyGhidra fix (PR #12)
-  plus the maintainer's runtime-preservation and regression work.
+
+- **BSim, end to end**: ingest (with the caps and the agents split), query,
+  apply-names and diff — each slice validated against a live Ghidra 12.2. The
+  ingest counts the functions of **the one executable**, so the imported
+  libraries Ghidra adds to the description manager no longer make a stored
+  program look incomplete.
+- **The digital twin (R2)**: a snapshot of a program that answers queries
+  **with no Ghidra running**. A snapshot states its own completeness, and a
+  truncated listing is reported as incomplete rather than as a removal.
+- **The unification contract (Phase 1)**: [`contract/`](contract/README.md) —
+  the tools, the error codes, the target descriptor — with the half that can be
+  derived from this repository **generated** and guarded
+  (`scripts/gen_contract.py --check`).
+- **The cross-tool workflow (Phase 3)**: `ghydra target describe | locate |
+  breakpoint | run-to | decompile`, and the same five steps as MCP tools
+  (`ghydra-gateway`). The address model is `runtime = static − image_base +
+  module_base`, guarded by the **identity** of the two sides: a different file
+  is refused with `TARGET_NOT_SAME_BINARY` **before** the debugger is touched.
+- **The single core (I1)**: eleven modules of pure logic live in
+  `ghydra/core/` and are **generated** into the bridge
+  (`scripts/gen_core.py --check`). One definition, two surfaces.
+- **The composed calls**: `context_pack` (one answered question inside a token
+  budget), `capabilities` (ATT&CK/MBC triage), `taint` (source-to-sink
+  hypotheses), `fleet` (several instances at once, merged by file identity),
+  `diff` (what changed between two instances), `mission` (an auditable dossier
+  under a hard budget), `runbook` (a reproducible sequence, replayable as a CI
+  gate), `cache` (the decompiler's answer on disk), `assert` (CI assertions in
+  text, JUnit or SARIF), `tasks` (background work), `telemetry` and `stats`
+  (what the tool actually did, locally), plus the evidence ledger and the
+  sessions.
+- **The x64dbg integration**: the rename table is **generated from the
+  plugin's own registry** (80 tools) and validated against the committed table
+  when the other repository is absent — which is what CI does.
+- **The extension builds without Maven** (`scripts/build_extension.py`), for the
+  machines that have a JDK and no Maven.
+- **A Ghidra the live suites can run against, without a human**
+  (`scripts/prepare_ghidra_instance.py`): it stops Ghidra asking "New Plugins
+  Found!" on every launch and opens the program through Ghidra's own *GhidraGo*
+  interface. `docs/TESTING.md` has the recipe.
+
+### Fixed
+
+- **An address outside the image never reaches the debugger.** `EXTERNAL:…` is
+  an external symbol index; dropping the space prefix turned it into an
+  offset in the module. The space keeps its meaning, and a breakpoint or a run
+  to another space is refused with `TARGET_NOT_IN_IMAGE` **before** anything is
+  written or resumed.
+- **A name that reads as hexadecimal is a name.** `add`, `dec` and `f` are
+  hexadecimal to the wire parser, and `math::add` lost its last namespace: the
+  address route is tried first and a miss falls back to the name route.
+- **Three switches were misspelled**, so the documented ones did nothing:
+  `ghidra.dev.allowScripts`, `ghidra.dev.allowShutdown` and
+  `ghidra.bsim.database` were read with a `y`. A guard now pins the switches
+  the documentation names against the ones the code reads.
+- **The registry of the instances was always empty.** The plugin started its
+  HTTP server twice, and the second attempt — the port was taken — deregistered
+  the instance.
+- **`/scripts/run` runs a script that touches the script framework**: the
+  bundle host belongs to the Script Manager plugin, which is not enabled in
+  every instance.
+- **The producers' shapes are read, not guessed.** The target workflow, the
+  taint pass, the diff, the twin, the runbook, the program fingerprint, the
+  BSim query and the server's own error code were each reading a shape no
+  instance sends — the addresses as decimal, the fields as snake_case, the
+  pcode opcodes as the floating-point ones. Each is fixed at the producer's
+  format, and the fixtures use it too.
+- **A capped listing makes no removal claim**: the twin's imports were capped
+  without the truncation flag, so the comparison read a flag that was never
+  written.
+- **`--dry-run` reached only the Ghidra client.** The flag is attached to the
+  HTTP client, and the x64dbg and target commands build one of their own — so a
+  preview could **resume the debuggee**. The flag now reaches every mutating
+  path.
+- **`mcp-config --gateway --groups` is refused instead of ignored**, the
+  generated gateway host is now read, and the configuration file's
+  `"x64dbg": {…}` section is read by the commands that document it.
+- **A suite that hangs has no verdict — and the run had no bound.** The suites
+  are subprocesses, and the script-execution suite was measured **hanging about
+  one run in eight**, waiting on a reply that never came; the runner waited with
+  it, with no name and no end. Every suite is now bounded
+  (`GHYDRA_SUITE_TIMEOUT`, 300 s by default), and an overrun becomes a FAILED
+  line naming the suite and the command that timed out. The cause of that hang
+  was the fixture answering **HTTP/1.0**: it closed the socket after every reply
+  while the bridge keeps one keep-alive session per thread, so the next request
+  travelled on a closed socket and waited. The fixture answers HTTP/1.1 now, as
+  the Jetty it models does — measured 0 failures in 10 runs, against 2 in 6
+  before.
+
+### Changed
+
+- **The suites take the instance they are told to.** All of them honor
+  `GHYDRAMCP_TEST_PORT` now; the HTTP, data, comments and REA suites hardcoded
+  8192, and the instance that serves a program is not always the first one.
+- **The suites live in [`tests/`](tests/)** and the runner builds every suite
+  command from one helper; the documentation and the reference pages moved to
+  [`docs/`](docs/), with a guard that resolves **every local link** in every
+  tracked document.
+- **CI is honest**: the runner reports each suite separately, and `--no-ghidra`
+  expands to the suites that always execute — a green run is evidence, not a
+  summary of skips.
+- **The x64dbg fixture** listens with a 128-deep backlog and waits until the
+  port answers, and the client retries a dropped loopback connection — the
+  machine resets about one in fourteen, and that is not the code.
 
 ## [3.1.1] - 2026-11-07
 
@@ -323,7 +334,7 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 ### Breaking changes
 - **REST API 3000:** the plugin now uses Javalin/Jetty with service, DTO, and resource layers instead of the JDK HTTP server. Upgrade the plugin and Python bridge together; the bridge requires an exact API-version match.
 - **Fully-qualified names:** function, symbol, data-label, variable, and xref responses use namespace-qualified names such as `FOM::SharedMemory::ReadUInt`. Function and symbol responses no longer include a separate `namespace` field. Lookups and filters use the full name; bare names resolve only in the global namespace. URL-encode names in REST paths. Renaming to `A::B::name` moves the symbol into that namespace; `::name` or `Global::name` moves it to the global namespace. Local variable names remain bare and reject `::`.
-- **Script API replacement:** the former PyGhidra `/script/execute` and `/script/capabilities` routes and `script_execute` / `script_capabilities` MCP tools are replaced by `/scripts`, `/scripts/run`, and `scripts_list` / `scripts_run`. Use `ghydra scripts list` / `run` instead of the former `script` commands. Script endpoints are disabled by default; enable them with `-Dghydra.dev.allowScripts=true` or `GHYDRA_ALLOW_SCRIPTS=1`. This permits arbitrary code execution; enable it only in a trusted environment.
+- **Script API replacement:** the former PyGhidra `/script/execute` and `/script/capabilities` routes and `script_execute` / `script_capabilities` MCP tools are replaced by `/scripts`, `/scripts/run`, and `scripts_list` / `scripts_run`. Use `ghydra scripts list` / `run` instead of the former `script` commands. Script endpoints are disabled by default; enable them with `-Dghidra.dev.allowScripts=true` or `GHYDRA_ALLOW_SCRIPTS=1`. This permits arbitrary code execution; enable it only in a trusted environment.
 - **CLI variable editing:** the duplicate `ghydra functions update-variable` command is removed. Use `ghydra functions set-variable` with `--variable` and `--data-type`. The `functions_update_variable` MCP tool and variable PATCH endpoint remain available.
 
 ### Added
@@ -331,7 +342,7 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 - **Raw image rendering:** `POST /raw-image/define` (`raw_image_define` MCP tool, `ghydra raw-image define`) creates a `RawImage` data type at an address so captured framebuffers render inline in the Listing. Supports 9 pixel formats (RGB565, RGB888, ARGB8888, RGB332, ARGB4444, 1bpp, 2bpp, 4bpp, 8bpp) plus little/big endian. Backed by a new `RawImage` built-in DataType with width/height/format settings.
 - **Program saving:** `POST /program/save`, `programs_save`, and `ghydra project save-program` persist analysis changes. `all=true` / `--all` saves every open program with unsaved changes.
 - **Ghidra script execution:** list and run installed scripts, or run ad-hoc GhidraScript source with arguments and captured output, through the replacement script API.
-- **Development shutdown:** `POST /dev/shutdown` supports automated restart workflows. It requires `-Dghydra.dev.allowShutdown=true` or `GHYDRA_DEV_SHUTDOWN=1` and refuses unsaved changes with HTTP 409 unless `save=true` or `force=true` is supplied.
+- **Development shutdown:** `POST /dev/shutdown` supports automated restart workflows. It requires `-Dghidra.dev.allowShutdown=true` or `GHYDRA_DEV_SHUTDOWN=1` and refuses unsaved changes with HTTP 409 unless `save=true` or `force=true` is supplied.
 - **Database-backed variable listing:** `variables_list` defaults to `source=database` for committed locals and parameters with exact pagination; `source=decompiler` includes inferred locals with approximate pagination.
 - **Release tooling:** `scripts/prepare_release.py` updates all five version locations and dates the changelog section. Shared version and release-note checks reject inconsistent versions and missing or empty release notes.
 - **Release assets:** GitHub and Forgejo release workflows attach `SHA256SUMS` and verify that the release and its assets exist after publication.
@@ -366,10 +377,10 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 
 ### Added
 - **`analysis` link on `/program`:** the program resource now advertises an `analysis` link (to `/analysis/status`) for HATEOAS discoverability.
-- **Run Ghidra scripts via the API:** `GET /scripts` (list) and `POST /scripts/run` (run an existing script by `name`, or compile and run ad-hoc GhidraScript `source`, with `args`), plus `scripts_list`/`scripts_run` bridge tools and `ghydra scripts list`/`run`. Captures the script's output. Lets an agent do multi-stage/batch work (mass rename, signature transfer) in one call. Arbitrary code execution, so it is disabled unless the server is started with `-Dghydra.dev.allowScripts=true` (or `GHYDRA_ALLOW_SCRIPTS=1`). (#3)
+- **Run Ghidra scripts via the API:** `GET /scripts` (list) and `POST /scripts/run` (run an existing script by `name`, or compile and run ad-hoc GhidraScript `source`, with `args`), plus `scripts_list`/`scripts_run` bridge tools and `ghydra scripts list`/`run`. Captures the script's output. Lets an agent do multi-stage/batch work (mass rename, signature transfer) in one call. Arbitrary code execution, so it is disabled unless the server is started with `-Dghidra.dev.allowScripts=true` (or `GHYDRA_ALLOW_SCRIPTS=1`). (#3)
 - **Scalar search:** find constant values in instructions (`GET /scalars`, `scalars_search` bridge tool, `ghydra scalars search`), like Ghidra's "Search For Scalars". Filter by containing function (`in_function`) or by a nearby called function (`to_function`, e.g. the `0` passed to `memset`). The `in_function` filter scans only the matching functions; unfiltered scans on large programs are time-bounded and report `scanTruncated`. Reimplemented from PR #17 against the Javalin layer. (#17)
 - **Save endpoint:** `POST /program/save` persists the current program to the project (`?all=true` saves every open program with unsaved changes).
-- **Dev-only shutdown endpoint:** `POST /dev/shutdown` quits Ghidra so the build/deploy/restart loop can be automated. Off by default; enable with `-Dghydra.dev.allowShutdown=true` or `GHYDRA_DEV_SHUTDOWN=1`. With unsaved changes it refuses (409) unless `?save=true` (save, then exit) or `?force=true` (discard, then exit).
+- **Dev-only shutdown endpoint:** `POST /dev/shutdown` quits Ghidra so the build/deploy/restart loop can be automated. Off by default; enable with `-Dghidra.dev.allowShutdown=true` or `GHYDRA_DEV_SHUTDOWN=1`. With unsaved changes it refuses (409) unless `?save=true` (save, then exit) or `?force=true` (discard, then exit).
 
 ### Fixed
 - **HATEOAS links:** templated links with a single string argument (an address or name) emitted a literal `{}` href with the value misplaced into a `method` field; they now substitute correctly across all endpoints. Action links use a new `linkWithMethod`.
@@ -512,3 +523,123 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 [1.2]: https://github.com/teal-bauer/GhydraMCP/compare/v1.1...v1.2
 [1.1]: https://github.com/teal-bauer/GhydraMCP/compare/1.0...v1.1
 [1.0]: https://github.com/teal-bauer/GhydraMCP/releases/tag/1.0
+
+- **The doctor had no test at all.** `ghydra doctor` is the command a user runs
+  when something does not work, and nothing tested it. It also named a locked
+  project **twice** — Ghidra leaves a `<name>.lock` and a `<name>.lock~`, and the
+  two were counted as two projects. The project is named once now, the verb
+  follows the count, and a new suite pins the checks a user would notice being
+  wrong: a missing installation, a JDK that is too old, an extension built for
+  another Ghidra version, a port taken by something else, and the promise that
+  every finding carries the command that fixes it.
+- **The suite list in `docs/TESTING.md` drifted.** The runner's own usage line
+  had fallen behind — twelve suites worked and were not in it, and it is now
+  generated from the suites so it cannot. The document's list carries a
+  description per flag, so it cannot be generated; a **guard** catches the drift
+  instead: every suite the runner has must be named in the document.
+- **The module entry ran the command twice.** `ghydra/cli/__init__.py` imports
+  `main`, so `python -m ghydra.cli.main` executed it once as `ghydra.cli.main`
+  and once as `__main__`, and Python warned about it on stderr. The package
+  imports the command lazily now, and `python -m ghydra.cli` is a clean entry.
+- **The two x64dbg plugin branches had never been merged.** `fix/mcp-server-defects`
+  (ten commits: the namespaced commands, the free-port walk, the closed CORS, the
+  growable frames) and `fix/thread-safety-and-honest-frames` (the state lock, the
+  honest JSON frames, the tool that lied) had diverged and neither contained the
+  other. They are merged in `fix/all-defects`, with the namespaced commands and
+  the lock and the overflow guard all in force — 56 tests green under Zig 0.14.0
+  and 0.17.0. The rename table is generated from the merged branch.
+
+- **An explicitly requested JDK was silently replaced by a different one.** The
+  launcher tries its layers — what the caller asked for, the configuration file,
+  `JAVA_HOME`, Ghidra's own choice, the installed JDKs — and the code treated
+  them all alike: a JDK the caller **asked for** which was older than the
+  installation needs was added to the rejected list and the search carried on.
+  The answer was another JDK, with no word about it, although the launcher's own
+  docstring and `AGENTS.md` both say that an explicit one is an error while a
+  JDK the environment merely points at is "only a place the search did not
+  stop". The explicit layer is now answered on its own.
+- **The launcher had no test of its own.** It is what the headless runner and
+  the doctor both stand on: it finds the installation, reads the JDK version the
+  installation asks for, picks a JDK that is new enough, and builds the JVM
+  invocation. Nothing exercised it. A new suite pins the properties that matter:
+  the required JDK comes from `application.java.min`, the version comes from the
+  `release` file, a malformed properties file is not fatal, the requested JDK
+  wins, an environment JDK that is too old is a place the search moves on from,
+  and a Windows path still has a file name on POSIX.
+
+- **A step that failed said "done".** The progress reporter wrote "done in 1.2s"
+  from a `finally`, so a step that raised looked exactly like a step that
+  succeeded — and the person waiting, who cannot tell a step that hung from one
+  that failed, had a third thing to be misled by. It says it failed, and how
+  long it lasted, and it re-raises. The reporter had no test at all; it has one
+  now, and the package has no module left that no test reaches.
+
+- **`ghydra session open` answered with a traceback.** The session layer starts
+  a headless run, and the headless layer raises `HeadlessError` — a **sibling**
+  of `SessionError`, not a subclass, so the command's `except SessionError` did
+  not catch it and the user saw a stack trace instead of "no such binary". The
+  session layer now translates the provider's failure into its own taxonomy and
+  keeps the code, so the caller has one type to handle and the reason is still
+  machine-readable.
+- **No command was tested at the level the user runs it.** 26 of the 40 command
+  modules were reached by no test at all, and the `GhidraError` mistake in the
+  target command survived exactly because of that. A new suite walks the whole
+  Click tree — **155 leaf commands** — with nothing serving, and asserts that
+  **no command lets an exception out**: a command may answer 0 or 1, but it may
+  not crash. The walk found the `session open` traceback.
+  The network is cut at the HTTP adapter (the client talks through a session,
+  and the instance discovery builds a client of its own, so cutting `requests.get`
+  missed both) and the walk runs in a temporary directory: the evidence export
+  writes its bundle into the current directory, and the walk used to leave
+  `default-evidence.json` and `default-evidence.md` in the repository root. The
+  walk went from **611 s to 2.5 s**, and a bound in the test keeps it there.
+
+- **No bridge tool was ever called by a test.** The surface-parity suite checked
+  that every registered tool was *callable* — it never called one. A new suite
+  calls all **134** of them with nothing serving and asserts that none lets an
+  **unexpected** exception out: a tool may answer with an error envelope, and it
+  may refuse on purpose (the MCP layer turns that into an error answer for the
+  agent, with the message the tool wrote), but it may not raise a `NameError`
+  or an `AttributeError` on the way to reporting the failure.
+
+- **The session layer's fix did not cover the whole provider.** The translation
+  of the headless failure into the session's own taxonomy wrapped the *start* of
+  the run, but the installation is looked for while the runner is **built** — so
+  on a machine without Ghidra (the CI) the failure came from the constructor and
+  escaped anyway. The CI caught it; this machine could not, because it has an
+  installation. The walk now runs in both conditions.
+
+- **Three tools answered with a bare string, and their formatter was dead.**
+  134 tools, and `instances_register`, `instances_unregister` and
+  `instances_use` returned a plain sentence. `text_output` passes a string
+  through untouched, so their `FORMATTERS` entry was never reached — the
+  catalogue said these tools were formatted, and `format_generic_dict` would
+  have raised `AttributeError: 'str' object has no attribute 'get'` if it ever
+  had been. They answer in the envelope now, like every other tool, and the
+  formatter applies.
+- **No formatter was ever called with a payload.** The surface-parity suite
+  checked that each was *callable* and took `**kwargs`. A new suite pairs each
+  formatter with its own tool: the tool is called with the network cut, its
+  answer goes into its formatter, and the formatter has to answer — and it has
+  to answer for an **error** too, because any tool can fail.
+
+- **Nine output methods lived only on the two children of the base.** The rule
+  for adding an endpoint says the output method goes on `BaseFormatter` **and**
+  on both `JSONFormatter` and `TableFormatter`. Nine were on both children and
+  **not on the base** — and the base is the interface, so a third formatter
+  would not have been asked for them at all. The base declares them now, and a
+  test keeps the three sets in step.
+
+- **The contract named the gateway's tools and nothing tied it to the code.**
+  `contract/vocabulary.json` lists the five tools of the gateway server and maps
+  the plan's step names to them; the gateway could rename a tool, drop one or
+  add one and the document would still say what it always said. The gateway's
+  tools are closures inside `build_server()`, so the test builds the server and
+  asks it for its tools.
+
+- **The last two public functions of the core.** A sweep of the core's public
+  names found two that no test called by name: `name_set`, which runs inside
+  `diff_names` on every comparison, and `looks_like_address`, which decides
+  whether a reference's `function` field is an address or a name — and only its
+  "no" branch was ever taken. Both are covered now, and the bridge's generated
+  copy is checked against the core's.

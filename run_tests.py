@@ -9,15 +9,39 @@ import sys
 import unittest
 import time
 
+# The suites live in tests/, next to the runner's entry point.
+TESTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tests")
+
+
+#: How long one suite may take. A suite is a subprocess, and a subprocess that
+#: never answers would otherwise hang the whole run — with no verdict and no
+#: name. Overridable with GHYDRA_SUITE_TIMEOUT; 0 means no limit.
+SUITE_TIMEOUT = int(os.environ.get("GHYDRA_SUITE_TIMEOUT") or 300) or None
+
+
+def suite_script(name):
+    """The command that runs one suite, wherever the repository is."""
+    return [sys.executable, os.path.join(TESTS_DIR, name)]
+
+
 def print_header(text):
-    """Print a header with the given text"""
-    print("\n" + "=" * 80)
-    print(f" {text} ".center(80, "="))
-    print("=" * 80 + "\n")
+    """Print a header with the given text.
+
+    Flushed on purpose: a redirected log is where a stuck run is diagnosed, and
+    buffered output leaves it empty until the process ends — which is exactly when
+    the answer is no longer needed.
+    """
+    print("\n" + "=" * 80, flush=True)
+    print(f" {text} ".center(80, "="), flush=True)
+    print("=" * 80 + "\n", flush=True)
 
 def run_http_api_tests():
     """Run the HTTP API tests"""
     print_header("Running HTTP API Tests")
+    # The suite lives in tests/; it is imported rather than spawned because it
+    # builds a unittest suite in this process.
+    if TESTS_DIR not in sys.path:
+        sys.path.insert(0, TESTS_DIR)
     
     # Import and run the tests
     try:
@@ -48,9 +72,10 @@ def run_mcp_bridge_tests():
         
         print("Running MCP client test script...")
         result = subprocess.run(
-            [sys.executable, "test_mcp_client.py"],
+            suite_script("test_mcp_client.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
         
         # Print the output
@@ -74,9 +99,10 @@ def run_data_tests():
     
     try:
         result = subprocess.run(
-            [sys.executable, "test_data_operations.py"],
+            suite_script("test_data_operations.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
         
         if result.stdout:
@@ -97,9 +123,10 @@ def run_port_tests():
     print_header("Running Javalin Port Edge-Case Tests")
     try:
         result = subprocess.run(
-            [sys.executable, "test_javalin_port.py"],
+            suite_script("test_javalin_port.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
         if result.stdout:
             print("STDOUT:")
@@ -118,9 +145,10 @@ def run_comment_tests():
     
     try:
         result = subprocess.run(
-            [sys.executable, "test_comments.py"],
+            suite_script("test_comments.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
         
         if result.stdout:
@@ -142,9 +170,10 @@ def run_kuna_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_kuna.py"],
+            suite_script("test_kuna.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -166,9 +195,10 @@ def run_x64dbg_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_x64dbg.py"],
+            suite_script("test_x64dbg.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -191,9 +221,10 @@ def run_headless_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_headless.py"],
+            suite_script("test_headless.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -216,9 +247,10 @@ def run_evidence_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_evidence.py"],
+            suite_script("test_evidence.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -241,9 +273,10 @@ def run_triage_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_triage.py"],
+            suite_script("test_triage.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -266,9 +299,10 @@ def run_rea_parity_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_rea_parity.py"],
+            suite_script("test_rea_parity.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -291,9 +325,10 @@ def run_surface_parity_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_surface_parity.py"],
+            suite_script("test_surface_parity.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -316,9 +351,10 @@ def run_capabilities_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_capabilities.py"],
+            suite_script("test_capabilities.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -341,9 +377,10 @@ def run_compatibility_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_compatibility.py"],
+            suite_script("test_compatibility.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -366,9 +403,10 @@ def run_scripts_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_scripts.py"],
+            suite_script("test_scripts.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -391,9 +429,10 @@ def run_runner_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_runner.py"],
+            suite_script("test_runner.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -416,9 +455,10 @@ def run_docs_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_docs.py"],
+            suite_script("test_docs.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -441,9 +481,10 @@ def run_capability_summary_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_capabilities_summary.py"],
+            suite_script("test_capabilities_summary.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -466,9 +507,10 @@ def run_tasks_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_tasks.py"],
+            suite_script("test_tasks.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -491,9 +533,10 @@ def run_errors_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_errors.py"],
+            suite_script("test_errors.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -516,9 +559,10 @@ def run_context_pack_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_context_pack.py"],
+            suite_script("test_context_pack.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -541,9 +585,10 @@ def run_tool_groups_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_tool_groups.py"],
+            suite_script("test_tool_groups.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -566,9 +611,10 @@ def run_telemetry_tests():
 
     try:
         result = subprocess.run(
-            [sys.executable, "test_telemetry.py"],
+            suite_script("test_telemetry.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -663,10 +709,632 @@ def run_all_tests():
 # Suites that need neither a live Ghidra nor any external binary. CI runs
 # exactly these on every push: a green result here is real evidence, not a
 # summary made of suites that skipped themselves.
+def run_assertions_tests():
+    """Run the Assertions (I16) tests."""
+    print_header("Running Assertions (I16) Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_assertions.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running Assertions (I16) tests: {e}")
+        return False
+
+
+def run_read_only_tests():
+    """Run the Read-only and audit (I12) tests."""
+    print_header("Running Read-Only And Audit (I12) Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_read_only.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running Read-only and audit (I12) tests: {e}")
+        return False
+
+
+def run_runbook_tests():
+    """Run the runbook and analysis_diff (R6) tests."""
+    print_header("Running Runbook and Diff Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_runbook.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running runbook tests: {e}")
+        return False
+
+
+def run_taint_tests():
+    """Run the source-to-sink hypothesis (R5) tests."""
+    print_header("Running Taint Hypothesis Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_taint.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running taint tests: {e}")
+        return False
+
+
+def run_mission_tests():
+    """Run the mission mode (R8) tests."""
+    print_header("Running Mission Mode Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_mission.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running mission tests: {e}")
+        return False
+
+
+def run_cache_tests():
+    """Run the decompile cache (I11) tests."""
+    print_header("Running Decompile Cache Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_cache.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running cache tests: {e}")
+        return False
+
+
+def run_fleet_tests():
+    """Run the fleet query (R7) tests."""
+    print_header("Running Fleet Query Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_fleet.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running fleet tests: {e}")
+        return False
+
+
+def run_core_tests():
+    """Run the single-core / generated-code (I1) tests."""
+    print_header("Running Single Core Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_core.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running core tests: {e}")
+        return False
+
+
+def run_twin_tests():
+    """Run the digital-twin tests (R2) — no Ghidra, no network."""
+    print_header("Running Digital Twin Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_twin.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running twin tests: {e}")
+        return False
+
+
+def run_examples_tests():
+    """Run the examples suite — no Ghidra, no network, no binary."""
+    print_header("Running Examples Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_examples.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running examples tests: {e}")
+        return False
+
+
+def run_contract_tests():
+    """Run the unification-contract suite — no Ghidra, no debugger, no network."""
+    print_header("Running Contract Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_contract.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running contract tests: {e}")
+        return False
+
+
+def run_mcp_config_tests():
+    """Run the combined MCP configuration suite — Phase 2, no services needed."""
+    print_header("Running MCP Configuration Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_mcp_config.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running MCP configuration tests: {e}")
+        return False
+
+
+def run_target_tests():
+    """Run the cross-tool target workflow suite — fakes, no services.
+
+    Two files, because they answer two questions: `test_target.py` asks whether
+    the workflow computes the right thing, and `test_target_cli.py` asks whether
+    the commands reach the user. The second one exists because a mistake in the
+    command's own failure handling was invisible while only the helper was
+    tested.
+    """
+    print_header("Running Target Workflow Tests")
+
+    passed = True
+    for script in ("test_target.py", "test_target_cli.py"):
+        try:
+            result = subprocess.run(
+                suite_script(script),
+                capture_output=True,
+                text=True,
+                timeout=SUITE_TIMEOUT
+            )
+
+            if result.stdout:
+                print("STDOUT:")
+                print(result.stdout)
+
+            if result.stderr:
+                print("STDERR:")
+                print(result.stderr)
+
+            passed = passed and result.returncode == 0
+        except Exception as e:
+            print(f"Error running target workflow tests: {e}")
+            passed = False
+    return passed
+
+
+def run_formatter_interface_tests():
+    """Run the formatter interface suite - the base and its two children."""
+    print_header("Running Formatter Interface Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_formatter_interface.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running formatter interface tests: {e}")
+        return False
+
+
+def run_flag_name_tests():
+    """Run the flag-name suite - the switches the docs name, the code reads."""
+    print_header("Running Flag Name Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_flag_names.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running flag name tests: {e}")
+        return False
+
+
+def run_formatter_tests():
+    """Run the formatter suite - every formatter, with its own tool's answer."""
+    print_header("Running Formatter Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_formatters.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running formatter tests: {e}")
+        return False
+
+
+def run_bridge_tool_tests():
+    """Run the bridge tool suite - every tool, called with nothing serving."""
+    print_header("Running Bridge Tool Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_bridge_tools.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running bridge tool tests: {e}")
+        return False
+
+
+def run_cli_failure_tests():
+    """Run the command-failure suite — no command may let an exception out."""
+    print_header("Running CLI Failure Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_cli_failures.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running CLI failure tests: {e}")
+        return False
+
+
+def run_progress_tests():
+    """Run the progress reporter suite — what a long step is doing."""
+    print_header("Running Progress Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_progress.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running progress tests: {e}")
+        return False
+
+
+def run_launcher_tests():
+    """Run the launcher suite — the JDK, the installation and the command."""
+    print_header("Running Launcher Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_launcher.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running launcher tests: {e}")
+        return False
+
+
+def run_doctor_tests():
+    """Run the doctor suite — the command that says what is wrong here."""
+    print_header("Running Doctor Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_doctor.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running doctor tests: {e}")
+        return False
+
+
+def run_gateway_contract_tests():
+    """Run the gateway contract suite - the vocabulary against the gateway."""
+    print_header("Running Gateway Contract Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_gateway_contract.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running gateway contract tests: {e}")
+        return False
+
+
+def run_gateway_tests():
+    """Run the MCP gateway suite — fakes, no services, no protocol frames."""
+    print_header("Running Gateway Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_gateway.py"),
+            capture_output=True,
+            text=True,
+            timeout=SUITE_TIMEOUT
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running gateway tests: {e}")
+        return False
+
+
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
     "--capability-summary", "--tasks", "--errors", "--context-pack", "--tool-groups", "--telemetry",
+    "--assertions", "--read-only", "--runbook", "--taint", "--mission", "--cache", "--fleet", "--core", "--twin", "--examples",
+    "--contract",
+    "--mcp-config",
+    "--target",
+    "--gateway",
+    "--gateway-contract",
+    "--doctor",
+    "--launcher",
+    "--progress",
+    "--cli-failures",
+    "--bridge-tools",
+    "--formatters",
+    "--formatter-interface",
+    "--flag-names",
 )
 
 SUITES = {
@@ -693,16 +1361,49 @@ SUITES = {
     "--context-pack": run_context_pack_tests,
     "--tool-groups": run_tool_groups_tests,
     "--telemetry": run_telemetry_tests,
+    "--assertions": run_assertions_tests,
+    "--read-only": run_read_only_tests,
+    "--runbook": run_runbook_tests,
+    "--taint": run_taint_tests,
+    "--mission": run_mission_tests,
+    "--cache": run_cache_tests,
+    "--fleet": run_fleet_tests,
+    "--core": run_core_tests,
+    "--twin": run_twin_tests,
+    "--examples": run_examples_tests,
+    "--contract": run_contract_tests,
+    "--mcp-config": run_mcp_config_tests,
+    "--target": run_target_tests,
+    "--doctor": run_doctor_tests,
+    "--launcher": run_launcher_tests,
+    "--progress": run_progress_tests,
+    "--cli-failures": run_cli_failure_tests,
+    "--bridge-tools": run_bridge_tool_tests,
+    "--formatters": run_formatter_tests,
+    "--formatter-interface": run_formatter_interface_tests,
+    "--flag-names": run_flag_name_tests,
+    "--gateway": run_gateway_tests,
+    "--gateway-contract": run_gateway_contract_tests,
 }
 
-USAGE = (
-    "Usage: python run_tests.py [--no-ghidra | --http | --mcp | --data | "
-    "--comments | --port | --kuna | --x64dbg | --headless | --evidence | "
-    "--triage | --rea | --surface | --capabilities | --scripts | "
-    "--compatibility | --runner | --docs | --capability-summary | --tasks | --errors |"
-    " --context-pack | --require-live]"
-    "  (suite flags may be combined)"
-)
+def build_usage() -> str:
+    """The usage, built from the suites that exist.
+
+    The line used to be written out by hand, and it fell behind: twelve suites
+    worked and were not in it. A user who typed one of them, saw the line that
+    does not mention it, and had no way to learn the right name. Building the
+    line from the dict makes that impossible.
+    """
+    flags = sorted(SUITES)
+    return (
+        "Usage: python run_tests.py [--no-ghidra | "
+        + " | ".join(flags)
+        + " | --require-live]"
+        "  (suite flags may be combined)"
+    )
+
+
+USAGE = build_usage()
 
 if __name__ == "__main__":
     # Check if we have the required dependencies

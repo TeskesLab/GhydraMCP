@@ -326,6 +326,114 @@ class BaseFormatter(ABC):
         pass
 
     @abstractmethod
+    def format_callgraph(self, data: Dict[str, Any]) -> str:
+        """Format the call graph of a function.
+
+        Args:
+            data: API response data
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_classes_list(self, data: Dict[str, Any]) -> str:
+        """Format the class listing.
+
+        Args:
+            data: API response data
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_dataflow(self, data: Dict[str, Any]) -> str:
+        """Format the data flow of a function.
+
+        Args:
+            data: API response data
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_datatypes_list(self, data: Dict[str, Any]) -> str:
+        """Format the data type listing.
+
+        Args:
+            data: API response data
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_namespaces_list(self, data: Dict[str, Any]) -> str:
+        """Format the namespace listing.
+
+        Args:
+            data: API response data
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_scalars(self, data: Dict[str, Any]) -> str:
+        """Format the scalar search.
+
+        Args:
+            data: API response data
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_segments_list(self, data: Dict[str, Any]) -> str:
+        """Format the segment listing.
+
+        Args:
+            data: API response data
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_symbols_list(self, data: Dict[str, Any]) -> str:
+        """Format the symbol listing.
+
+        Args:
+            data: API response data
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
+    def format_variables_list(self, data: Dict[str, Any]) -> str:
+        """Format the variable listing of a function.
+
+        Args:
+            data: API response data
+
+        Returns:
+            Formatted string output
+        """
+        pass
+
+    @abstractmethod
     def format_error(self, error: Exception) -> str:
         """Format error message.
 

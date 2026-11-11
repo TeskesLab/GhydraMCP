@@ -114,6 +114,15 @@ public class ProgramResource implements Resource {
             d.put("maxAddress", program.getMaxAddress().toString());
             d.put("imageBase", program.getImageBase().toString());
             d.put("creationDate", program.getCreationDate().toString());
+            // The md5 of the file the program was imported from. It is the one
+            // fact that says "this is the same binary" across instances, rebuild
+            // directories and a twin's provenance; it costs nothing to expose
+            // and cannot be recomputed from the analysis.
+            String md5 = program.getExecutableMD5();
+            if (md5 != null && !md5.isBlank()) {
+                d.put("executableMd5", md5);
+                d.put("md5", md5);
+            }
 
             Map<String, Object> stats = new LinkedHashMap<>();
             stats.put("functionCount", program.getFunctionManager().getFunctionCount());

@@ -37,7 +37,7 @@ public class RootResource implements Resource {
     private void root(GhidraContext ctx) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("message", "GhydraMCP API " + ApiConstants.API_VERSION);
-        data.put("documentation", "See GHIDRA_HTTP_API.md for full API documentation");
+        data.put("documentation", "See docs/GHIDRA_HTTP_API.md for full API documentation");
         data.put("isBaseInstance", isBaseInstance);
 
         Response response = Response.ok(ctx.ctx(), ctx.port(), data)
