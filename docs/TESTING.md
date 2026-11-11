@@ -95,6 +95,7 @@ python run_tests.py --doctor        # the doctor: what is missing on this machin
 python run_tests.py --launcher      # the JDK, the installation and the headless command
 python run_tests.py --progress      # the progress reporter: what a long step is doing
 python run_tests.py --cli-failures  # every command, with nothing serving: none may crash
+python run_tests.py --bridge-tools  # every bridge tool, called with nothing serving
 python run_tests.py --no-ghidra     # ALL suites that need no Ghidra (CI's set)
 python run_tests.py --surface --scripts   # several flags can be combined
 ```

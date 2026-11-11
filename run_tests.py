@@ -1016,6 +1016,31 @@ def run_target_tests():
     return passed
 
 
+def run_bridge_tool_tests():
+    """Run the bridge tool suite - every tool, called with nothing serving."""
+    print_header("Running Bridge Tool Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_bridge_tools.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running bridge tool tests: {e}")
+        return False
+
+
 def run_cli_failure_tests():
     """Run the command-failure suite — no command may let an exception out."""
     print_header("Running CLI Failure Tests")
@@ -1154,6 +1179,7 @@ NO_GHIDRA_SUITES = (
     "--launcher",
     "--progress",
     "--cli-failures",
+    "--bridge-tools",
 )
 
 SUITES = {
@@ -1197,6 +1223,7 @@ SUITES = {
     "--launcher": run_launcher_tests,
     "--progress": run_progress_tests,
     "--cli-failures": run_cli_failure_tests,
+    "--bridge-tools": run_bridge_tool_tests,
     "--gateway": run_gateway_tests,
 }
 

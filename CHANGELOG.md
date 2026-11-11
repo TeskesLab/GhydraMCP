@@ -1322,3 +1322,11 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
   writes its bundle into the current directory, and the walk used to leave
   `default-evidence.json` and `default-evidence.md` in the repository root. The
   walk went from **611 s to 2.5 s**, and a bound in the test keeps it there.
+
+- **No bridge tool was ever called by a test.** The surface-parity suite checked
+  that every registered tool was *callable* — it never called one. A new suite
+  calls all **134** of them with nothing serving and asserts that none lets an
+  **unexpected** exception out: a tool may answer with an error envelope, and it
+  may refuse on purpose (the MCP layer turns that into an error answer for the
+  agent, with the message the tool wrote), but it may not raise a `NameError`
+  or an `AttributeError` on the way to reporting the failure.
