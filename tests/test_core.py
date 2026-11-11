@@ -1226,5 +1226,44 @@ class FingerprintTests(unittest.TestCase):
         self.assertNotEqual(left, right)
 
 
+class CoreCoverageTests(unittest.TestCase):
+    """The core's last two public functions.
+
+    A sweep of the core's public names found two that no test called by name.
+    One of them (`name_set`) runs inside `diff_names` on every comparison; the
+    other (`looks_like_address`) decides whether a reference's `function` field
+    is an address or a name — and only its "no" branch was ever taken.
+    """
+
+    def test_the_name_set_drops_the_empty_and_the_repeats(self):
+        from ghydra.core.diff import name_set
+
+        self.assertEqual({"a", "b"}, name_set(["a", "b", "a", ""]))
+
+    def test_an_address_is_recognised_by_its_digits(self):
+        from ghydra.core.taint import looks_like_address
+
+        self.assertTrue(looks_like_address("0x401000"))
+        self.assertTrue(looks_like_address("401000"))
+        self.assertTrue(looks_like_address("00401000"))
+
+    def test_a_name_is_not_an_address(self):
+        from ghydra.core.taint import looks_like_address
+
+        self.assertFalse(looks_like_address("caller"))
+        self.assertFalse(looks_like_address(""))
+        self.assertFalse(looks_like_address(None))
+        self.assertFalse(looks_like_address("recv"))
+
+    def test_the_bridge_has_the_same_answer(self):
+        """The core is generated into the bridge: the two must agree."""
+        from ghydra.core.taint import looks_like_address
+
+        self.assertEqual(looks_like_address("401000"),
+                         bridge._core_taint_looks_like_address("401000"))
+        self.assertEqual(looks_like_address("caller"),
+                         bridge._core_taint_looks_like_address("caller"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

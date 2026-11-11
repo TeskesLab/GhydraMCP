@@ -1365,3 +1365,10 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
   add one and the document would still say what it always said. The gateway's
   tools are closures inside `build_server()`, so the test builds the server and
   asks it for its tools.
+
+- **The last two public functions of the core.** A sweep of the core's public
+  names found two that no test called by name: `name_set`, which runs inside
+  `diff_names` on every comparison, and `looks_like_address`, which decides
+  whether a reference's `function` field is an address or a name — and only its
+  "no" branch was ever taken. Both are covered now, and the bridge's generated
+  copy is checked against the core's.

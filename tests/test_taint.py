@@ -321,5 +321,35 @@ class CliTests(unittest.TestCase):
         self.assertEqual(0, result.exit_code, result.output)
 
 
+class CallerAddressTests(unittest.TestCase):
+    """The caller's address, read out of the reference itself.
+
+    The DTO carries `fromFunctionAddress`, so the containing-function lookup is
+    only needed when the answer does not. This is the branch where the
+    reference's `function` field *is* an address, which is what the older
+    fixtures looked like.
+    """
+
+    def test_the_caller_address_is_read_from_the_reference(self):
+        functions = {
+            "recv": {"address": "0x5000",
+                     "refs": [{"fromAddress": "0x401010", "toAddress": "0x5000",
+                               "refType": "UNCONDITIONAL_CALL",
+                               "fromFunction": "0x401000"}]},
+            "system": {"address": "0x6000",
+                       "refs": [{"fromAddress": "0x401020", "toAddress": "0x6000",
+                                 "refType": "UNCONDITIONAL_CALL",
+                                 "fromFunction": "0x401000"}]},
+        }
+        client = FakeClient(names=functions,
+                            pcode={"0x401000": [other("0x401008"),
+                                                call("0x401010", "recv"),
+                                                call("0x401020", "system")]})
+        source = taint.resolve_name(client, "recv")
+        sink = taint.resolve_name(client, "system")
+        # The reference names the caller's address, so no lookup is needed.
+        self.assertEqual("0x401000", source["references"][0]["function"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
