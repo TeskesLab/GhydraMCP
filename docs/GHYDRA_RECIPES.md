@@ -16,6 +16,7 @@
 - [11. Attach a live debugger to a static address](#11-attach-a-live-debugger-to-a-static-address)
 - [12. Run it where you do not trust the binary](#12-run-it-where-you-do-not-trust-the-binary)
 - [The shape every recipe follows](#the-shape-every-recipe-follows)
+- [13. An illustrative assistant session](#13-an-illustrative-assistant-session)
 
 <!-- /toc -->
 
@@ -229,3 +230,84 @@ the audit trail (the record).
 3. **check the confidence** and the completeness in the answer;
 4. **record it** (`runbook`, `mission`, `assert`) so the next person — or the next
    build — can tell what changed.
+
+## 13. An illustrative assistant session
+
+This workflow was formerly the README's example conversation. The packet
+program, names, counts, and addresses below are **illustrative**, not recorded
+output or a claim about an unknown binary. Inspect the actual program before
+choosing names or defining types.
+
+### Understand and annotate a packet routine
+
+An analyst asks: “Analyze `main` and identify the data structures it uses.”
+The assistant first selects the program rather than assuming the current port:
+
+```bash
+ghydra instances list
+ghydra instances use --port 8192
+ghydra functions decompile --name main
+ghydra structs get --name NetworkPacket
+```
+
+Suppose the decompilation shows allocation followed by writes to a header and
+a data pointer, then a call to `process_packet`. If the type is missing, create
+it **only after** confirming field widths, offsets, pointer size, and allocation
+size from the program:
+
+```bash
+ghydra structs create --name NetworkPacket --category /network
+ghydra structs add-field --struct-name NetworkPacket --field-name header --field-type dword
+```
+
+Add the remaining fields using their observed types and layout; do not infer a
+pointer layout from the illustrative name alone. Search the program's strings
+and correlate error messages with their references before concluding what the
+routine does:
+
+```bash
+ghydra data list-strings
+ghydra analysis get-callgraph --name process_packet --max-depth 3
+```
+
+For direct callers, use `analysis callers` with the routine's actual address,
+or look up its name with `xrefs find-by-name`. A graph showing validation,
+parsing, and sending is evidence about call relationships, not proof that every
+path executes.
+
+### Open another project file
+
+An analyst asks: “What other binaries are in this project? Open one and compare.”
+
+```bash
+ghydra project info
+ghydra project list-files --folder /
+ghydra project open-file --path /malware_samples/sample2.exe
+ghydra instances discover
+ghydra instances use --port 8193
+ghydra functions list --limit 50
+```
+
+Use the path actually returned by the listing and the new instance's discovered
+port. Decompile the corresponding function in each program; use `analysis diff`
+for address/name comparisons, or [BSim](GHYDRA_BSIM.md) for signature comparisons
+when addresses have moved.
+
+### Break on the same instruction in the debugger
+
+An analyst asks: “Set a breakpoint on the entry point and tell me where the
+loader put it.” With the matching binary loaded in x64dbg:
+
+```bash
+ghydra x64dbg status
+ghydra x64dbg target
+ghydra x64dbg breakpoint 0x140027B90
+ghydra x64dbg call ListBreakpoints
+```
+
+For an image base of `0x140000000` and module base of `0x7FF78C2A0000`,
+the static address `0x140027B90` translates to `0x7FF78C2C7B90`. The static
+address itself need not be mapped in the live process. Confirm the debugger's
+listed breakpoint rather than assuming the translation succeeded. See
+[the x64dbg address model](GHYDRA_X64DBG.md#the-address-model) for matching and
+failure rules.

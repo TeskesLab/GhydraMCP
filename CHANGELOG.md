@@ -6,7 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Everything here is newer than **3.1.1** and not released yet.
+## [3.2.0] - 2026-11-11
+
+Changes since **3.1.1**.
 
 ### Added
 
@@ -99,6 +101,15 @@ Everything here is newer than **3.1.1** and not released yet.
 
 ### Changed
 
+- **Shorter onboarding:** the README now contains the overview, essential setup,
+  basic commands and documentation links. Detailed installation, build and MCP
+  client instructions live under `docs/`; repository badges target TeskesLab.
+- **Shared implementations:** cache persistence uses the canonical serializer in
+  `ghydra/core`; analysis state paths, Markdown tables, debugger CLI errors and raw
+  image dimension settings no longer maintain separate identical implementations.
+  The standalone bridge's required generated and runtime-specific copies remain.
+- **Cross-platform paths:** sessions and reports reuse the existing binary-name and
+  path normalization helpers, so Windows paths remain valid on a POSIX host.
 - **The suites take the instance they are told to.** All of them honor
   `GHYDRAMCP_TEST_PORT` now; the HTTP, data, comments and REA suites hardcoded
   8192, and the instance that serves a program is not always the first one.
@@ -112,6 +123,8 @@ Everything here is newer than **3.1.1** and not released yet.
 - **The x64dbg fixture** listens with a 128-deep backlog and waits until the
   port answers, and the client retries a dropped loopback connection — the
   machine resets about one in fourteen, and that is not the code.
+
+Automated by MisterMal
 
 ## [3.1.1] - 2026-11-07
 
@@ -512,7 +525,8 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
 - Initial project setup
 - Basic MCP bridge functionality
 
-[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v3.1.1...HEAD
+[unreleased]: https://github.com/TeskesLab/GhydraMCP/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/TeskesLab/GhydraMCP/compare/v3.1.1...v3.2.0
 [3.1.1]: https://github.com/TeskesLab/GhydraMCP/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/TeskesLab/GhydraMCP/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/TeskesLab/GhydraMCP/compare/v2.4.1...v3.0.0

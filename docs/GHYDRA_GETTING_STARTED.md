@@ -17,8 +17,9 @@
 From an installed extension to a first answer. Every command and output below was
 run; the values are from a real `where.exe` analysis on Ghidra 12.2.
 
-If you have not installed anything yet, do that first — [README.md](../README.md) has
-the three ways (extension, CLI, MCP bridge).
+If you have not installed anything yet, follow
+[Installation and building](GHYDRA_INSTALLATION.md) first; MCP users also need
+[Client setup](GHYDRA_MCP_CLIENTS.md).
 
 ---
 

@@ -21,13 +21,13 @@ Three rules keep it from lying:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import time
 from typing import Any, Dict, Optional, Tuple
 
 from .core import cache as core_identity
+from .core import digest as core_digest
 
 CACHE_VERSION = 1
 DEFAULT_MAX_BYTES = 50_000_000
@@ -47,15 +47,6 @@ def cache_root() -> str:
 
 def entries_dir() -> str:
     return os.path.join(cache_root(), f"v{CACHE_VERSION}")
-
-
-def canonical(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True,
-                      separators=(",", ":"), default=str)
-
-
-def digest(value: Any) -> str:
-    return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
 
 def program_identity(client) -> Dict[str, Any]:
@@ -119,7 +110,7 @@ def put(key: str, identity: Dict[str, Any], kind: str,
         os.makedirs(os.path.dirname(path), exist_ok=True)
         temporary = path + ".tmp"
         with open(temporary, "w", encoding="utf-8") as handle:
-            handle.write(canonical(entry))
+            handle.write(core_digest.canonical(entry))
         os.replace(temporary, path)
     except OSError:
         return False
@@ -168,7 +159,7 @@ def stats() -> Dict[str, Any]:
         "max_bytes": DEFAULT_MAX_BYTES,
         "oldest": min(created) if created else None,
         "newest": max(created) if created else None,
-        "programs": len({canonical(entry.get("program"))
+        "programs": len({core_digest.canonical(entry.get("program"))
                          for _path, entry, _size in entries}),
         "kinds": sorted({str(entry.get("kind")) for _path, entry, _size in entries
                          if entry.get("kind")}),

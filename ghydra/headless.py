@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional
 
 from . import launcher as ghidra_launcher
 from .launcher import LauncherError, binary_name
+from . import state as state_paths
 
 # The port the first instance binds. The bridge scans 8192-8201 on its own.
 DEFAULT_PORT = 8192
@@ -107,23 +108,14 @@ class HeadlessInstance:
         return f"http://{self.host}:{self.port}"
 
 
-def state_dir() -> str:
-    """Where the state lives: ``~/.ghydra``."""
-    base = os.environ.get("GHYDRA_STATE_DIR")
-    if not base:
-        base = os.path.join(os.path.expanduser("~"), ".ghidra")
-    os.makedirs(base, exist_ok=True)
-    return base
-
-
 def state_path(port: int) -> str:
     """The file that remembers the run on a port."""
-    return os.path.join(state_dir(), f"headless-{int(port)}.json")
+    return os.path.join(state_paths.state_dir(), f"headless-{int(port)}.json")
 
 
 def log_path(port: int) -> str:
     """The file that holds the output of the run."""
-    return os.path.join(state_dir(), f"headless-{int(port)}.log")
+    return os.path.join(state_paths.state_dir(), f"headless-{int(port)}.log")
 
 
 def stop_file_path(port: int) -> str:

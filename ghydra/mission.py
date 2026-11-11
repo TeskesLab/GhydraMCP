@@ -57,7 +57,7 @@ HINT_PATTERNS = CORE_HINT_PATTERNS
 
 def mission_dir() -> str:
     """Where the checkpoints and dossiers live."""
-    from .evidence import state_dir
+    from .state import state_dir
     path = os.path.join(state_dir(), "missions")
     os.makedirs(path, exist_ok=True)
     return path

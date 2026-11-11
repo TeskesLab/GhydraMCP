@@ -13,6 +13,7 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+from typing import cast
 
 # The tests live in tests/; the code and the repository are one level up.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -368,12 +369,15 @@ class HeadlessSaveTests(unittest.TestCase):
             runner = self._runner(tmp)
             runner.save = lambda: False
             runner.instance.pid = 4242
+            requested = 1_000_000.0
 
             def wait_and_save(pid, timeout):
-                self._content(tmp)
+                path = self._content(tmp)
+                os.utime(path, (requested + 1, requested + 1))
                 return True
 
             with mock.patch.dict(os.environ, {"GHYDRA_STATE_DIR": tmp}), \
+                    mock.patch.object(headless.time, "time", return_value=requested), \
                     mock.patch.object(headless, "process_is_ours", return_value=True), \
                     mock.patch.object(runner, "_wait_for_exit",
                                       side_effect=wait_and_save):
@@ -458,7 +462,8 @@ class HeadlessOwnershipTests(unittest.TestCase):
                 with mock.patch.object(headless, "process_is_ours", return_value=False):
                     runner.stop()
                 remembered = headless.load_state(runner.port)
-            self.assertIsNotNone(remembered, "the state of the other run was erased")
+            if remembered is None:
+                self.fail("the state of the other run was erased")
             self.assertEqual(remembered.pid, 4242)
 
     def test_the_port_is_claimed_before_the_child_is_launched(self):
@@ -633,9 +638,9 @@ class HeadlessReportTargetTests(unittest.TestCase):
                 return {"result": {"path": self.path}}
 
         self.assertTrue(report_module._serves_binary(
-            _Client("/C:/bin/foo.exe"), "C:\\bin\\foo.exe"))
+            cast(report_module.GhidraHTTPClient, _Client("/C:/bin/foo.exe")), "C:\\bin\\foo.exe"))
         self.assertFalse(report_module._serves_binary(
-            _Client("/C:/a/foo.exe"), "C:\\b\\foo.exe"))
+            cast(report_module.GhidraHTTPClient, _Client("/C:/a/foo.exe")), "C:\\b\\foo.exe"))
 
 
 class HeadlessDiscoveryTests(unittest.TestCase):
@@ -1018,21 +1023,22 @@ class AnnotationTests(unittest.TestCase):
     def test_the_addresses_are_translated(self):
         """The static address becomes the address of the live process."""
         client = _RecordingClient()
-        result = x64dbg_helper.apply_annotations(client, self._annotations())
+        result = x64dbg_helper.apply_annotations(cast(x64dbg_helper.Client, client), self._annotations())
         self.assertEqual(result["module_base"], "0x7ff7a1230000")
         self.assertEqual(result["applied"][0]["runtime_address"], "0x7ff7a1231000")
 
     def test_the_comment_is_written(self):
         """Every annotation becomes a comment."""
         client = _RecordingClient()
-        x64dbg_helper.apply_annotations(client, self._annotations())
+        x64dbg_helper.apply_annotations(cast(x64dbg_helper.Client, client), self._annotations())
         names = [call[0] for call in client.calls]
         self.assertIn("CommentOrLabelAtAddress", names)
 
     def test_the_bookmark_uses_the_command_x64dbg_knows(self):
         """The plugin's own SetBookmark runs a command that does not exist."""
         client = _RecordingClient()
-        x64dbg_helper.apply_annotations(client, self._annotations(), bookmarks=True)
+        x64dbg_helper.apply_annotations(
+            cast(x64dbg_helper.Client, client), self._annotations(), bookmarks=True)
         commands = [call[1].get("command", "") for call in client.calls
                     if call[0] == "ExecuteDebuggerCommand"]
         self.assertEqual(len(commands), 2)
@@ -1042,14 +1048,14 @@ class AnnotationTests(unittest.TestCase):
     def test_a_failure_is_tried_again(self):
         """A connection that dies is a retry, not a lost annotation."""
         client = _RecordingClient(failures=1)
-        result = x64dbg_helper.apply_annotations(client, self._annotations())
+        result = x64dbg_helper.apply_annotations(cast(x64dbg_helper.Client, client), self._annotations())
         self.assertEqual(len(result["failed"]), 0)
         self.assertEqual(len(result["applied"]), 2)
 
     def test_a_failure_that_persists_is_reported(self):
         """What keeps failing is said, with the reason."""
         client = _RecordingClient(failures=99)
-        result = x64dbg_helper.apply_annotations(client, self._annotations())
+        result = x64dbg_helper.apply_annotations(cast(x64dbg_helper.Client, client), self._annotations())
         self.assertTrue(result["failed"])
         self.assertIn("error", result["failed"][0])
 

@@ -74,11 +74,11 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `EVIDENCE_BAD_ID` | Python | — | — | `ghydra/evidence.py:357` |
+| `EVIDENCE_BAD_ID` | Python | — | — | `ghydra/evidence.py:351` |
 | `EVIDENCE_BAD_KIND` | Python | — | — | `bridge_mcp_hydra.py:11514` |
 | `EVIDENCE_IO` | Python | — | — | `bridge_mcp_hydra.py:11619` |
-| `EVIDENCE_NO_FILE` | Python | — | — | `ghydra/evidence.py:253` |
-| `EVIDENCE_NO_LEDGER` | Python | — | — | `ghydra/evidence.py:234` |
+| `EVIDENCE_NO_FILE` | Python | — | — | `ghydra/evidence.py:247` |
+| `EVIDENCE_NO_LEDGER` | Python | — | — | `ghydra/evidence.py:228` |
 
 ## FLEET
 
@@ -104,8 +104,8 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `HEADLESS_ALREADY_RUNNING` | Python | — | — | `ghydra/headless.py:816` |
-| `HEADLESS_BAD_PORT` | Python | — | — | `ghydra/headless.py:636` |
+| `HEADLESS_ALREADY_RUNNING` | Python | — | — | `ghydra/headless.py:808` |
+| `HEADLESS_BAD_PORT` | Python | — | — | `ghydra/headless.py:628` |
 | `HEADLESS_BAD_PROJECT_DIR` | Python | — | — | `bridge_mcp_hydra.py:11161` |
 | `HEADLESS_DIED` | Python | — | — | `bridge_mcp_hydra.py:11206` |
 | `HEADLESS_LAUNCH` | Python | — | — | `bridge_mcp_hydra.py:11169` |
@@ -113,8 +113,8 @@ user meets.
 | `HEADLESS_NO_FILE` | Python | — | — | `bridge_mcp_hydra.py:11134` |
 | `HEADLESS_NO_GHIDRA` | Python | — | — | `bridge_mcp_hydra.py:11141` |
 | `HEADLESS_NO_JDK` | Python | — | — | `bridge_mcp_hydra.py:11147` |
-| `HEADLESS_NO_LAUNCHER` | Python | — | — | `ghydra/headless.py:194` |
-| `HEADLESS_NO_PORT` | Python | — | — | `ghydra/headless.py:422` |
+| `HEADLESS_NO_LAUNCHER` | Python | — | — | `ghydra/headless.py:186` |
+| `HEADLESS_NO_PORT` | Python | — | — | `ghydra/headless.py:414` |
 | `HEADLESS_NO_RUN` | Python | — | — | `bridge_mcp_hydra.py:11248` |
 | `HEADLESS_PORT_IN_USE` | Python | — | — | `bridge_mcp_hydra.py:11151` |
 | `HEADLESS_TIMEOUT` | Python | — | — | `bridge_mcp_hydra.py:11219` |
@@ -153,9 +153,9 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `REPORT_NO_FILE` | Python | — | — | `ghydra/report.py:534` |
-| `REPORT_NO_INSTANCE` | Python | — | — | `ghydra/report.py:581` |
-| `REPORT_WRONG_BINARY` | Python | — | — | `ghydra/report.py:548` |
+| `REPORT_NO_FILE` | Python | — | — | `ghydra/report.py:536` |
+| `REPORT_NO_INSTANCE` | Python | — | — | `ghydra/report.py:583` |
+| `REPORT_WRONG_BINARY` | Python | — | — | `ghydra/report.py:550` |
 
 ## RUNBOOK
 
@@ -183,7 +183,7 @@ user meets.
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
 | `SESSION_ALREADY` | Python | — | — | `bridge_mcp_hydra.py:11738` |
-| `SESSION_BAD_NAME` | Python | — | — | `ghydra/sessions.py:155` |
+| `SESSION_BAD_NAME` | Python | — | — | `ghydra/sessions.py:149` |
 | `SESSION_NOT_RUNNING` | Python | — | — | `bridge_mcp_hydra.py:11799` |
 | `SESSION_NO_SUCH` | Python | — | — | `bridge_mcp_hydra.py:11811` |
 

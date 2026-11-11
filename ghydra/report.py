@@ -38,6 +38,8 @@ from . import kuna
 from .client import GhidraHTTPClient
 from .client.exceptions import GhidraError
 from .headless import HeadlessError, HeadlessRunner, api_answers, binary_name, free_port
+from .markdown import markdown_table
+from .target import normalize_path
 
 
 def is_local_host(host: str) -> bool:
@@ -59,7 +61,7 @@ def is_local_host(host: str) -> bool:
     if name in ("", "localhost", "127.0.0.1", "::1", "0.0.0.0"):
         return True
     try:
-        addresses = {info[4][0] for info in socket.getaddrinfo(name, None)}
+        addresses = {str(info[4][0]) for info in socket.getaddrinfo(name, None)}
     except OSError:
         return False
     return any(address_is_local(address) for address in addresses)
@@ -93,7 +95,7 @@ def local_addresses() -> set:
     hostname = socket.gethostname()
     try:
         for info in socket.getaddrinfo(hostname, None):
-            out.add(info[4][0])
+            out.add(str(info[4][0]))
     except OSError:
         pass
     try:
@@ -483,7 +485,7 @@ def _normalized_path(path: str) -> str:
         return ""
     if len(text) > 2 and text[0] == "/" and text[2] == ":":
         text = text[1:]
-    return os.path.normcase(text)
+    return normalize_path(text)
 
 
 def _serves_binary(client: GhidraHTTPClient, binary: str) -> bool:
@@ -648,20 +650,6 @@ def build_report(request: ReportRequest, progress: Any = None) -> Dict[str, Any]
 # ------------------------------------------------------------- rendering
 
 
-def _table(headers: List[str], rows: List[List[Any]]) -> str:
-    if not rows:
-        return "_nothing_\n"
-    widths = [len(header) for header in headers]
-    for row in rows:
-        for index, cell in enumerate(row):
-            widths[index] = max(widths[index], len(str(cell)))
-    out = ["| " + " | ".join(str(h).ljust(widths[i]) for i, h in enumerate(headers)) + " |"]
-    out.append("|" + "|".join("-" * (widths[i] + 2) for i in range(len(headers))) + "|")
-    for row in rows:
-        out.append("| " + " | ".join(str(c).ljust(widths[i]) for i, c in enumerate(row)) + " |")
-    return "\n".join(out) + "\n"
-
-
 def _permissions(segment: Dict[str, Any]) -> str:
     """The access of a segment, the way it is written."""
     flags = ""
@@ -695,7 +683,7 @@ def render_markdown(report: Dict[str, Any]) -> str:
 
     statistics = program.get("statistics", {}) or {}
     out.append("## What Ghidra found\n")
-    out.append(_table(
+    out.append(markdown_table(
         ["What", "How many"],
         [
             ["Functions", statistics.get("functionCount", ghidra.get("function_total", 0))],
@@ -724,7 +712,7 @@ def render_markdown(report: Dict[str, Any]) -> str:
                 segment.get("size", ""),
                 _permissions(segment),
             ])
-        out.append(_table(["Name", "Start", "Size", "Access"], rows))
+        out.append(markdown_table(["Name", "Start", "Size", "Access"], rows))
 
     imports = ghidra.get("imports") or []
     if imports:
@@ -736,13 +724,13 @@ def render_markdown(report: Dict[str, Any]) -> str:
                              entry.get("library", entry.get("namespace", ""))])
             else:
                 rows.append([str(entry), "", ""])
-        out.append(_table(["Name", "Address", "Library"], rows))
+        out.append(markdown_table(["Name", "Address", "Library"], rows))
         if len(imports) > 60:
             out.append(f"\n_and {len(imports) - 60} more_\n")
 
     out.append("## What Kuna found\n")
     if kuna_data.get("enabled"):
-        out.append(_table(
+        out.append(markdown_table(
             ["What", "How many"],
             [
                 ["Functions recovered", kuna_data.get("functions", 0)],
@@ -760,7 +748,7 @@ def render_markdown(report: Dict[str, Any]) -> str:
     comparison = report.get("comparison") or {}
     if comparison:
         out.append("## What one tool saw and the other did not\n")
-        out.append(_table(
+        out.append(markdown_table(
             ["", "Ghidra", "Kuna"],
             [
                 ["Functions reported", comparison.get("ghidra_reported", 0),
@@ -777,13 +765,13 @@ def render_markdown(report: Dict[str, Any]) -> str:
         only_kuna = comparison.get("only_kuna") or []
         if only_kuna:
             out.append("### Only Kuna found them\n")
-            out.append(_table(["Address", "Name"],
+            out.append(markdown_table(["Address", "Name"],
                               [[item.get("address", ""), item.get("name", "")]
                                for item in only_kuna]))
         only_ghidra = comparison.get("only_ghidra") or []
         if only_ghidra:
             out.append("### Only Ghidra found them\n")
-            out.append(_table(["Address", "Name"],
+            out.append(markdown_table(["Address", "Name"],
                               [[item.get("address", ""), item.get("name", "")]
                                for item in only_ghidra]))
         out.append("")
@@ -797,7 +785,7 @@ def render_markdown(report: Dict[str, Any]) -> str:
             item.get("kuna_size", ""),
             (item.get("signature") or "")[:70],
         ])
-    out.append(_table(["Address", "Name", "Bytes", "Signature"], rows))
+    out.append(markdown_table(["Address", "Name", "Bytes", "Signature"], rows))
 
     strings = ghidra.get("strings") or []
     if strings:
@@ -808,7 +796,7 @@ def render_markdown(report: Dict[str, Any]) -> str:
                 rows.append([entry.get("address", ""), (entry.get("value", "") or "")[:80]])
             else:
                 rows.append(["", str(entry)[:80]])
-        out.append(_table(["Address", "Value"], rows))
+        out.append(markdown_table(["Address", "Value"], rows))
         if len(strings) > 40:
             out.append(f"\n_and {len(strings) - 40} more in the JSON report_\n")
 

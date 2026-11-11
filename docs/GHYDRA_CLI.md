@@ -80,14 +80,9 @@ Ghydra CLI is a standalone command-line tool that exposes all the functionality 
 
 ## Installation
 
-```bash
-# Install in development mode
-cd /path/to/GhydraMCP
-pip install -e .
-
-# After installation, reshim if using asdf
-asdf reshim
-```
+Follow [Installation and building](GHYDRA_INSTALLATION.md#cli-tool-and-python-dependencies)
+for uv, pip, editable environments, and Linux/NixOS setup. If you use asdf, run
+`asdf reshim` after installation.
 
 ## Quick Start
 

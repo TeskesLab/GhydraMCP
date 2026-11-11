@@ -196,7 +196,7 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/evidence.py:357`"
+      "origin": "`ghydra/evidence.py:351`"
     },
     {
       "code": "EVIDENCE_BAD_KIND",
@@ -217,14 +217,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/evidence.py:253`"
+      "origin": "`ghydra/evidence.py:247`"
     },
     {
       "code": "EVIDENCE_NO_LEDGER",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/evidence.py:234`"
+      "origin": "`ghydra/evidence.py:228`"
     },
     {
       "code": "FLEET_BAD_PORTS",
@@ -259,14 +259,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/headless.py:816`"
+      "origin": "`ghydra/headless.py:808`"
     },
     {
       "code": "HEADLESS_BAD_PORT",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/headless.py:636`"
+      "origin": "`ghydra/headless.py:628`"
     },
     {
       "code": "HEADLESS_BAD_PROJECT_DIR",
@@ -322,14 +322,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/headless.py:194`"
+      "origin": "`ghydra/headless.py:186`"
     },
     {
       "code": "HEADLESS_NO_PORT",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/headless.py:422`"
+      "origin": "`ghydra/headless.py:414`"
     },
     {
       "code": "HEADLESS_NO_RUN",
@@ -581,21 +581,21 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/report.py:534`"
+      "origin": "`ghydra/report.py:536`"
     },
     {
       "code": "REPORT_NO_INSTANCE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/report.py:581`"
+      "origin": "`ghydra/report.py:583`"
     },
     {
       "code": "REPORT_WRONG_BINARY",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/report.py:548`"
+      "origin": "`ghydra/report.py:550`"
     },
     {
       "code": "REQUEST_TIMEOUT",
@@ -658,7 +658,7 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/sessions.py:155`"
+      "origin": "`ghydra/sessions.py:149`"
     },
     {
       "code": "SESSION_NOT_RUNNING",

@@ -27,6 +27,9 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
+from . import state as state_paths
+from .launcher import binary_name
+
 # The port the first instance binds.
 DEFAULT_PORT = 8192
 
@@ -97,18 +100,9 @@ class Session:
 # ------------------------------------------------------------------ store
 
 
-def state_dir() -> str:
-    """Where the state lives: ``~/.ghydra``, or what the environment says."""
-    base = os.environ.get("GHYDRA_STATE_DIR")
-    if not base:
-        base = os.path.join(os.path.expanduser("~"), ".ghidra")
-    os.makedirs(base, exist_ok=True)
-    return base
-
-
 def sessions_path() -> str:
     """Where the sessions are kept."""
-    return os.path.join(state_dir(), "sessions.json")
+    return os.path.join(state_paths.state_dir(), "sessions.json")
 
 
 def _load_store() -> List[Session]:
@@ -249,7 +243,7 @@ def open_session(binary: str,
         raise SessionError("no binary to open", code="SESSION_BAD_NAME")
     binary = os.path.abspath(os.path.expanduser(binary))
     if not name:
-        name = os.path.splitext(os.path.basename(binary))[0] or "binary"
+        name = os.path.splitext(binary_name(binary))[0] or "binary"
     name = _check_name(name)
 
     sessions = _load_store()

@@ -4,9 +4,9 @@ Where to read what. This project has three surfaces (REST, MCP, CLI) and two
 local integrations (Kuna, x64dbg), so the documentation is split by **what you
 are trying to do**, not by where the code lives.
 
-> **New here?** [GHYDRA_GETTING_STARTED.md](GHYDRA_GETTING_STARTED.md) takes you
-> from an installed extension to a first dossier. Everything below assumes you
-> have read it, or that you know which document you want.
+> **New here?** [Installation and building](GHYDRA_INSTALLATION.md) gets the
+> extension and Python clients ready; [Getting started](GHYDRA_GETTING_STARTED.md)
+> takes you from an installed extension to a first dossier.
 
 ---
 
@@ -14,9 +14,10 @@ are trying to do**, not by where the code lives.
 
 | If you want to… | Read | It is |
 | --- | --- | --- |
-| install and get a first answer | [README.md](../README.md) → [GHYDRA_GETTING_STARTED.md](GHYDRA_GETTING_STARTED.md) | onboarding |
+| install and get a first answer | [GHYDRA_INSTALLATION.md](GHYDRA_INSTALLATION.md) → [GHYDRA_GETTING_STARTED.md](GHYDRA_GETTING_STARTED.md) | installation, builds, onboarding |
+| connect an MCP client | [GHYDRA_MCP_CLIENTS.md](GHYDRA_MCP_CLIENTS.md) | Claude Desktop/Code, Cline, 5ire, resources, output |
 | understand how the pieces fit | [GHYDRA_CONCEPTS.md](GHYDRA_CONCEPTS.md) | the mental model |
-| do a specific job | [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) | task recipes with real commands |
+| do a specific job | [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) | task recipes and an illustrative assistant session |
 | translate an answer that looks wrong | [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md) | error codes → cause → fix |
 | parse an answer, or wire it into CI | [GHYDRA_OUTPUT.md](GHYDRA_OUTPUT.md) | formats, the envelope, exit codes |
 | look up a tool | [GHYDRA_TOOLS.md](GHYDRA_TOOLS.md) | the generated catalogue (134 tools) |
@@ -38,9 +39,11 @@ are trying to do**, not by where the code lives.
 
 ## Reading paths
 
-**An analyst who wants answers.** [README](../README.md) → [GETTING
-STARTED](GHYDRA_GETTING_STARTED.md) → [RECIPES](GHYDRA_RECIPES.md). The catalogue
-and the references are lookup tables, not reading.
+**An analyst who wants answers.** [README](../README.md) →
+[INSTALLATION](GHYDRA_INSTALLATION.md) → [GETTING STARTED](GHYDRA_GETTING_STARTED.md)
+→ [RECIPES](GHYDRA_RECIPES.md). MCP users can branch to
+[CLIENT SETUP](GHYDRA_MCP_CLIENTS.md). The catalogue and references are lookup
+tables, not reading.
 
 **Someone wiring this into a pipeline.** [CONCEPTS](GHYDRA_CONCEPTS.md) (the
 envelope, pagination, read-only mode, exit codes) → [RECIPES](GHYDRA_RECIPES.md)

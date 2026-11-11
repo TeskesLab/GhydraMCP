@@ -28,6 +28,9 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
+from . import state as state_paths
+from .markdown import markdown_table
+
 # The kinds a finding can have. A finding that does not fit any of them is
 # a "custom" one - the list is a vocabulary, not a cage.
 KINDS = ("function", "string", "xref", "data", "note", "vulnerability", "custom")
@@ -51,18 +54,9 @@ class EvidenceError(Exception):
 # ------------------------------------------------------------------ helpers
 
 
-def state_dir() -> str:
-    """Where the state lives: ``~/.ghidra``, or what the environment says."""
-    base = os.environ.get("GHYDRA_STATE_DIR")
-    if not base:
-        base = os.path.join(os.path.expanduser("~"), ".ghidra")
-    os.makedirs(base, exist_ok=True)
-    return base
-
-
 def ledger_dir() -> str:
     """Where the ledgers live: ``<state>/evidence``."""
-    directory = os.path.join(state_dir(), "evidence")
+    directory = os.path.join(state_paths.state_dir(), "evidence")
     os.makedirs(directory, exist_ok=True)
     return directory
 
@@ -434,21 +428,6 @@ def list_ledgers() -> List[Dict[str, Any]]:
 # ------------------------------------------------------------------ bundle
 
 
-def _table(headers: List[str], rows: List[List[Any]]) -> str:
-    """A markdown table."""
-    if not rows:
-        return "_nothing_\n"
-    widths = [len(header) for header in headers]
-    for row in rows:
-        for index, cell in enumerate(row):
-            widths[index] = max(widths[index], len(str(cell)))
-    out = ["| " + " | ".join(str(h).ljust(widths[i]) for i, h in enumerate(headers)) + " |"]
-    out.append("|" + "|".join("-" * (widths[i] + 2) for i in range(len(headers))) + "|")
-    for row in rows:
-        out.append("| " + " | ".join(str(c).ljust(widths[i]) for i, c in enumerate(row)) + " |")
-    return "\n".join(out) + "\n"
-
-
 def _fence_language(kind: str) -> str:
     """The language of the fenced block of a finding."""
     return "c" if kind in ("function", "vulnerability") else "text"
@@ -485,7 +464,7 @@ def render_bundle_markdown(ledger: Ledger, meta: Optional[Dict[str, Any]] = None
     counts = [(kind, sum(1 for f in findings if f.kind == kind))
               for kind in KINDS]
     counts = [(kind, count) for kind, count in counts if count]
-    out.append(_table(["Kind", "How many"], [[kind, count] for kind, count in counts]))
+    out.append(markdown_table(["Kind", "How many"], [[kind, count] for kind, count in counts]))
     out.append("")
 
     out.append("## The findings\n")

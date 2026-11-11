@@ -19,7 +19,7 @@ import click
 from .. import target as target_helper
 from ..client.exceptions import GhidraError
 from ..utils import rich_echo
-from .x64dbg import _client as debugger_client
+from .x64dbg import _client as debugger_client, _dry_run, _fail
 
 
 @click.group('target')
@@ -30,18 +30,6 @@ def target_group():
 def _debugger(ctx):
     """The client for the debugger's MCP server (it knows how to find the token)."""
     return debugger_client(ctx)
-
-
-def _fail(ctx, exc):
-    code = getattr(exc, "code", "") or ""
-    prefix = f"Error [{code}]" if code else "Error"
-    rich_echo(f"{prefix}: {exc}", err=True)
-    ctx.exit(1)
-
-
-def _dry_run(ctx):
-    """Whether the root command asked for a preview rather than a change."""
-    return bool((ctx.obj or {}).get("dry_run"))
 
 
 def _emit(context, document):
