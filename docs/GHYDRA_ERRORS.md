@@ -4,7 +4,7 @@ Every error code the plugin and the clients answer with, where it is raised
 and what it means. **Generated** from the source by
 `scripts/gen_errors_doc.py`; a test fails when it drifts.
 
-**119 codes** in 18 families. A code is a contract: a
+**120 codes** in 18 families. A code is a contract: a
 client branches on it, a test asserts it, and
 [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md) explains the ones a
 user meets.
@@ -75,8 +75,8 @@ user meets.
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
 | `EVIDENCE_BAD_ID` | Python | — | — | `ghydra/evidence.py:357` |
-| `EVIDENCE_BAD_KIND` | Python | — | — | `bridge_mcp_hydra.py:11485` |
-| `EVIDENCE_IO` | Python | — | — | `bridge_mcp_hydra.py:11590` |
+| `EVIDENCE_BAD_KIND` | Python | — | — | `bridge_mcp_hydra.py:11514` |
+| `EVIDENCE_IO` | Python | — | — | `bridge_mcp_hydra.py:11619` |
 | `EVIDENCE_NO_FILE` | Python | — | — | `ghydra/evidence.py:253` |
 | `EVIDENCE_NO_LEDGER` | Python | — | — | `ghydra/evidence.py:234` |
 
@@ -86,9 +86,9 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `FLEET_BAD_PORTS` | Python | — | — | `bridge_mcp_hydra.py:13105` |
-| `FLEET_MISSING_TARGET` | Python | — | — | `bridge_mcp_hydra.py:13112` |
-| `FLEET_UNKNOWN_KIND` | Python | — | — | `bridge_mcp_hydra.py:13053` |
+| `FLEET_BAD_PORTS` | Python | — | — | `bridge_mcp_hydra.py:13134` |
+| `FLEET_MISSING_TARGET` | Python | — | — | `bridge_mcp_hydra.py:13141` |
+| `FLEET_UNKNOWN_KIND` | Python | — | — | `bridge_mcp_hydra.py:13082` |
 
 ## FUNCTION
 
@@ -106,18 +106,18 @@ user meets.
 | --- | --- | --- | --- | --- |
 | `HEADLESS_ALREADY_RUNNING` | Python | — | — | `ghydra/headless.py:816` |
 | `HEADLESS_BAD_PORT` | Python | — | — | `ghydra/headless.py:636` |
-| `HEADLESS_BAD_PROJECT_DIR` | Python | — | — | `bridge_mcp_hydra.py:11132` |
-| `HEADLESS_DIED` | Python | — | — | `bridge_mcp_hydra.py:11177` |
-| `HEADLESS_LAUNCH` | Python | — | — | `bridge_mcp_hydra.py:11140` |
+| `HEADLESS_BAD_PROJECT_DIR` | Python | — | — | `bridge_mcp_hydra.py:11161` |
+| `HEADLESS_DIED` | Python | — | — | `bridge_mcp_hydra.py:11206` |
+| `HEADLESS_LAUNCH` | Python | — | — | `bridge_mcp_hydra.py:11169` |
 | `HEADLESS_LIMITATION` | Java | — | (computed) | `src/main/java/eu/starsong/ghidra/server/GhydraServer.java:183` |
-| `HEADLESS_NO_FILE` | Python | — | — | `bridge_mcp_hydra.py:11105` |
-| `HEADLESS_NO_GHIDRA` | Python | — | — | `bridge_mcp_hydra.py:11112` |
-| `HEADLESS_NO_JDK` | Python | — | — | `bridge_mcp_hydra.py:11118` |
+| `HEADLESS_NO_FILE` | Python | — | — | `bridge_mcp_hydra.py:11134` |
+| `HEADLESS_NO_GHIDRA` | Python | — | — | `bridge_mcp_hydra.py:11141` |
+| `HEADLESS_NO_JDK` | Python | — | — | `bridge_mcp_hydra.py:11147` |
 | `HEADLESS_NO_LAUNCHER` | Python | — | — | `ghydra/headless.py:194` |
 | `HEADLESS_NO_PORT` | Python | — | — | `ghydra/headless.py:422` |
-| `HEADLESS_NO_RUN` | Python | — | — | `bridge_mcp_hydra.py:11219` |
-| `HEADLESS_PORT_IN_USE` | Python | — | — | `bridge_mcp_hydra.py:11122` |
-| `HEADLESS_TIMEOUT` | Python | — | — | `bridge_mcp_hydra.py:11190` |
+| `HEADLESS_NO_RUN` | Python | — | — | `bridge_mcp_hydra.py:11248` |
+| `HEADLESS_PORT_IN_USE` | Python | — | — | `bridge_mcp_hydra.py:11151` |
+| `HEADLESS_TIMEOUT` | Python | — | — | `bridge_mcp_hydra.py:11219` |
 
 ## KUNA
 
@@ -125,16 +125,16 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `KUNA_BAD_ARTIFACT` | Python | — | — | `bridge_mcp_hydra.py:8021` |
+| `KUNA_BAD_ARTIFACT` | Python | — | — | `bridge_mcp_hydra.py:8050` |
 | `KUNA_DISABLED` | Python | — | — | `bridge_mcp_hydra.py:360` |
 | `KUNA_FAILED` | Python | — | — | `bridge_mcp_hydra.py:452` |
-| `KUNA_IO` | Python | — | — | `bridge_mcp_hydra.py:7792` |
-| `KUNA_LAUNCH` | Python | — | — | `bridge_mcp_hydra.py:7850` |
+| `KUNA_IO` | Python | — | — | `bridge_mcp_hydra.py:7821` |
+| `KUNA_LAUNCH` | Python | — | — | `bridge_mcp_hydra.py:7879` |
 | `KUNA_MISSING` | Python | — | — | `ghydra/kuna.py:131` |
-| `KUNA_NO_DIR` | Python | — | — | `bridge_mcp_hydra.py:7954` |
+| `KUNA_NO_DIR` | Python | — | — | `bridge_mcp_hydra.py:7983` |
 | `KUNA_NO_FILE` | Python | — | — | `bridge_mcp_hydra.py:371` |
-| `KUNA_NO_FUNCTION` | Python | — | — | `bridge_mcp_hydra.py:8046` |
-| `KUNA_NO_INDEX` | Python | — | — | `bridge_mcp_hydra.py:7997` |
+| `KUNA_NO_FUNCTION` | Python | — | — | `bridge_mcp_hydra.py:8075` |
+| `KUNA_NO_INDEX` | Python | — | — | `bridge_mcp_hydra.py:8026` |
 | `KUNA_NO_JSON` | Python | — | — | `bridge_mcp_hydra.py:442` |
 | `KUNA_TIMEOUT` | Python | — | — | `ghydra/kuna.py:166` |
 | `KUNA_TOO_LARGE` | Python | — | — | `bridge_mcp_hydra.py:448` |
@@ -145,7 +145,7 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `MISSION_IO` | Python | — | — | `bridge_mcp_hydra.py:12692` |
+| `MISSION_IO` | Python | — | — | `bridge_mcp_hydra.py:12721` |
 
 ## REPORT
 
@@ -164,9 +164,9 @@ user meets.
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
 | `RUNBOOK_BAD_ENTRY` | Python | — | — | `ghydra/runbook.py:34` |
-| `RUNBOOK_BAD_FILE` | Python | — | — | `bridge_mcp_hydra.py:12158` |
-| `RUNBOOK_BAD_STEPS` | Python | — | — | `bridge_mcp_hydra.py:12124` |
-| `RUNBOOK_IO` | Python | — | — | `bridge_mcp_hydra.py:12131` |
+| `RUNBOOK_BAD_FILE` | Python | — | — | `bridge_mcp_hydra.py:12187` |
+| `RUNBOOK_BAD_STEPS` | Python | — | — | `bridge_mcp_hydra.py:12153` |
+| `RUNBOOK_IO` | Python | — | — | `bridge_mcp_hydra.py:12160` |
 
 ## SCRIPTS
 
@@ -182,10 +182,10 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `SESSION_ALREADY` | Python | — | — | `bridge_mcp_hydra.py:11709` |
+| `SESSION_ALREADY` | Python | — | — | `bridge_mcp_hydra.py:11738` |
 | `SESSION_BAD_NAME` | Python | — | — | `ghydra/sessions.py:155` |
-| `SESSION_NOT_RUNNING` | Python | — | — | `bridge_mcp_hydra.py:11770` |
-| `SESSION_NO_SUCH` | Python | — | — | `bridge_mcp_hydra.py:11782` |
+| `SESSION_NOT_RUNNING` | Python | — | — | `bridge_mcp_hydra.py:11799` |
+| `SESSION_NO_SUCH` | Python | — | — | `bridge_mcp_hydra.py:11811` |
 
 ## TASK
 
@@ -193,7 +193,7 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `TASK_NOT_FOUND` | Python | — | — | `bridge_mcp_hydra.py:11821` |
+| `TASK_NOT_FOUND` | Python | — | — | `bridge_mcp_hydra.py:11850` |
 
 ## TOOL
 
@@ -201,9 +201,9 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `TOOL_GROUP_CORE` | Python | — | — | `bridge_mcp_hydra.py:13533` |
-| `TOOL_GROUP_UNAVAILABLE` | Python | — | — | `bridge_mcp_hydra.py:13393` |
-| `TOOL_GROUP_UNKNOWN` | Python | — | — | `bridge_mcp_hydra.py:13385` |
+| `TOOL_GROUP_CORE` | Python | — | — | `bridge_mcp_hydra.py:13562` |
+| `TOOL_GROUP_UNAVAILABLE` | Python | — | — | `bridge_mcp_hydra.py:13422` |
+| `TOOL_GROUP_UNKNOWN` | Python | — | — | `bridge_mcp_hydra.py:13414` |
 
 ## X64DBG
 
@@ -211,9 +211,9 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `X64DBG_BAD_ARGS` | Python | — | — | `bridge_mcp_hydra.py:9173` |
+| `X64DBG_BAD_ARGS` | Python | — | — | `bridge_mcp_hydra.py:9202` |
 | `X64DBG_DISABLED` | Python | — | — | `ghydra/gateway.py:98` |
-| `X64DBG_ERROR` | Python | — | — | `bridge_mcp_hydra.py:9213` |
+| `X64DBG_ERROR` | Python | — | — | `bridge_mcp_hydra.py:9242` |
 | `X64DBG_MISSING` | Python | — | — | `ghydra/x64dbg.py:369` |
 | `X64DBG_NO_FILE` | Python | — | — | `ghydra/x64dbg.py:852` |
 | `X64DBG_NO_MATCH` | Python | — | — | `ghydra/x64dbg.py:899` |
@@ -223,20 +223,21 @@ user meets.
 
 ## Generic — the shape every client branches on
 
-`34` code(s): `BAD_REQUEST`, `CONNECTION_ERROR`, `INCOMPATIBLE_GHIDRA_BUILD`, `INTERNAL_ERROR`, `INVALID_BASE64`, `INVALID_DIMENSIONS`, `INVALID_HEX`, `INVALID_JSON`, `INVALID_RESPONSE`, `INVALID_TARGETS`, `LAUNCHER_NO_GHIDRA`, `LAUNCHER_NO_JDK`, `LAUNCHER_NO_UTILITY`, `MISSING_PARAMETER`, `NON_JSON_RESPONSE`, `NO_PROGRAM_LOADED`, `NO_PROJECT_OPEN`, `ORIGIN_NOT_ALLOWED`, `READ_ONLY_MODE`, `REQUEST_TIMEOUT`, `SAVE_FAILED`, `SHUTDOWN_DISABLED`, `TAINT_READ_FAILED`, `TARGET_BAD_ADDRESS`, `TARGET_NOT_FOUND`, `TARGET_NOT_LOADED`, `TARGET_NOT_SAME_BINARY`, `TARGET_NO_CODE`, `TARGET_NO_PROGRAM`, `TRANSACTION_FAILED`, `TRIAGE_ERROR`, `TRIAGE_NO_FILE`, `UNEXPECTED_ERROR`, `UNSAVED_CHANGES`
+`35` code(s): `BAD_REQUEST`, `CONNECTION_ERROR`, `INCOMPATIBLE_GHIDRA_BUILD`, `INSTANCE_NOT_FOUND`, `INTERNAL_ERROR`, `INVALID_BASE64`, `INVALID_DIMENSIONS`, `INVALID_HEX`, `INVALID_JSON`, `INVALID_RESPONSE`, `INVALID_TARGETS`, `LAUNCHER_NO_GHIDRA`, `LAUNCHER_NO_JDK`, `LAUNCHER_NO_UTILITY`, `MISSING_PARAMETER`, `NON_JSON_RESPONSE`, `NO_PROGRAM_LOADED`, `NO_PROJECT_OPEN`, `ORIGIN_NOT_ALLOWED`, `READ_ONLY_MODE`, `REQUEST_TIMEOUT`, `SAVE_FAILED`, `SHUTDOWN_DISABLED`, `TAINT_READ_FAILED`, `TARGET_BAD_ADDRESS`, `TARGET_NOT_FOUND`, `TARGET_NOT_LOADED`, `TARGET_NOT_SAME_BINARY`, `TARGET_NO_CODE`, `TARGET_NO_PROGRAM`, `TRANSACTION_FAILED`, `TRIAGE_ERROR`, `TRIAGE_NO_FILE`, `UNEXPECTED_ERROR`, `UNSAVED_CHANGES`
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
 | `BAD_REQUEST` | Java | — | (computed) | `src/main/java/eu/starsong/ghidra/server/GhydraServer.java:203` |
 | `CONNECTION_ERROR` | Python | — | — | `bridge_mcp_hydra.py:1069` |
 | `INCOMPATIBLE_GHIDRA_BUILD` | Java | — | (computed) | `src/main/java/eu/starsong/ghidra/server/GhydraServer.java:220` |
+| `INSTANCE_NOT_FOUND` | Python | — | — | `bridge_mcp_hydra.py:5561` |
 | `INTERNAL_ERROR` | Java | — | Internal server error: | `src/main/java/eu/starsong/ghidra/middleware/ErrorHandler.java:27` |
-| `INVALID_BASE64` | Python | — | — | `bridge_mcp_hydra.py:6400` |
-| `INVALID_DIMENSIONS` | Python | — | — | `bridge_mcp_hydra.py:10397` |
-| `INVALID_HEX` | Python | — | — | `bridge_mcp_hydra.py:6410` |
+| `INVALID_BASE64` | Python | — | — | `bridge_mcp_hydra.py:6429` |
+| `INVALID_DIMENSIONS` | Python | — | — | `bridge_mcp_hydra.py:10426` |
+| `INVALID_HEX` | Python | — | — | `bridge_mcp_hydra.py:6439` |
 | `INVALID_JSON` | Java | — | Malformed JSON body: | `src/main/java/eu/starsong/ghidra/server/GhydraServer.java:209` |
 | `INVALID_RESPONSE` | Python | — | — | `bridge_mcp_hydra.py:4888` |
-| `INVALID_TARGETS` | Python | — | — | `bridge_mcp_hydra.py:5895` |
+| `INVALID_TARGETS` | Python | — | — | `bridge_mcp_hydra.py:5924` |
 | `LAUNCHER_NO_GHIDRA` | Python | — | — | `ghydra/launcher.py:125` |
 | `LAUNCHER_NO_JDK` | Python | — | — | `ghydra/launcher.py:339` |
 | `LAUNCHER_NO_UTILITY` | Python | — | — | `ghydra/launcher.py:462` |
@@ -257,8 +258,8 @@ user meets.
 | `TARGET_NO_CODE` | Python | — | — | `ghydra/target.py:218` |
 | `TARGET_NO_PROGRAM` | Python | — | — | `ghydra/target.py:213` |
 | `TRANSACTION_FAILED` | Java | — | (computed) | `src/main/java/eu/starsong/ghidra/server/GhydraServer.java:196` |
-| `TRIAGE_ERROR` | Python | — | — | `bridge_mcp_hydra.py:10698` |
-| `TRIAGE_NO_FILE` | Python | — | — | `bridge_mcp_hydra.py:10692` |
+| `TRIAGE_ERROR` | Python | — | — | `bridge_mcp_hydra.py:10727` |
+| `TRIAGE_NO_FILE` | Python | — | — | `bridge_mcp_hydra.py:10721` |
 | `UNEXPECTED_ERROR` | Python | — | — | `bridge_mcp_hydra.py:1079` |
 | `UNSAVED_CHANGES` | Java | 409 | Refusing to shut down: | `src/main/java/eu/starsong/ghidra/resource/DevResource.java:86` |
 

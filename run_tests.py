@@ -1016,6 +1016,31 @@ def run_target_tests():
     return passed
 
 
+def run_formatter_tests():
+    """Run the formatter suite - every formatter, with its own tool's answer."""
+    print_header("Running Formatter Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_formatters.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running formatter tests: {e}")
+        return False
+
+
 def run_bridge_tool_tests():
     """Run the bridge tool suite - every tool, called with nothing serving."""
     print_header("Running Bridge Tool Tests")
@@ -1180,6 +1205,7 @@ NO_GHIDRA_SUITES = (
     "--progress",
     "--cli-failures",
     "--bridge-tools",
+    "--formatters",
 )
 
 SUITES = {
@@ -1224,6 +1250,7 @@ SUITES = {
     "--progress": run_progress_tests,
     "--cli-failures": run_cli_failure_tests,
     "--bridge-tools": run_bridge_tool_tests,
+    "--formatters": run_formatter_tests,
     "--gateway": run_gateway_tests,
 }
 

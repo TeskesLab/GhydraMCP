@@ -66,7 +66,7 @@ DISCOVERY_PROBE_TIMEOUT = 0.2
 # one scan instead of paying the probe timeout each time.
 QUICK_SCAN_TTL = 1.0
 
-BRIDGE_VERSION = "v3.37.1"
+BRIDGE_VERSION = "v3.37.2"
 REQUIRED_API_VERSION = 3000
 
 DEFAULT_TIMEOUT = int(os.environ.get("GHIDRA_TIMEOUT", "900"))
@@ -5492,64 +5492,93 @@ def instances_discover(host: str | None = None) -> dict:
 
 @mcp.tool()
 @text_output
-def instances_register(port: int, url: str | None = None) -> str:
+def instances_register(port: int, url: str | None = None) -> dict:
     """Register a new Ghidra instance
-    
+
     Args:
         port: Port number of the Ghidra instance
         url: Optional URL if different from default http://host:port
-    
+
     Returns:
-        str: Confirmation message or error
+        dict: The envelope every tool answers in, with the confirmation in
+              ``result.message``
     """
-    return register_instance(port, url)
+    # The envelope, not a bare sentence: `text_output` passes a string through
+    # untouched, so a string answer never reaches the formatter the catalogue
+    # says formats this tool.
+    return {
+        "success": True,
+        "result": {"message": register_instance(port, url)},
+        "timestamp": int(time.time() * 1000),
+    }
 
 @mcp.tool()
 @text_output
-def instances_unregister(port: int) -> str:
+def instances_unregister(port: int) -> dict:
     """Unregister a Ghidra instance
-    
+
     Args:
         port: Port number of the instance to unregister
-    
+
     Returns:
-        str: Confirmation message or error
+        dict: The envelope every tool answers in, with the confirmation in
+              ``result.message``
     """
     with instances_lock:
         if port in active_instances:
             del active_instances[port]
-            return f"Unregistered instance on port {port}"
-        return f"No instance found on port {port}"
+            message = f"Unregistered instance on port {port}"
+        else:
+            message = f"No instance found on port {port}"
+    return {
+        "success": True,
+        "result": {"message": message},
+        "timestamp": int(time.time() * 1000),
+    }
 
 @mcp.tool()
 @text_output
-def instances_use(port: int) -> str:
+def instances_use(port: int) -> dict:
     """Set the current working Ghidra instance
-    
+
     Args:
         port: Port number of the instance to use
-        
+
     Returns:
-        str: Confirmation message or error
+        dict: The envelope every tool answers in, with the confirmation in
+              ``result.message``
     """
     global current_instance_port
-    
+
     # First validate that the instance exists and is active
     if port not in active_instances:
         # Try to register it if not found
         register_instance(port)
         if port not in active_instances:
-            return f"Error: No active Ghidra instance found on port {port}"
-    
+            return {
+                "success": False,
+                "error": {
+                    "code": "INSTANCE_NOT_FOUND",
+                    "message": f"no active Ghidra instance found on port {port}",
+                },
+                "timestamp": int(time.time() * 1000),
+            }
+
     # Set as current instance
     current_instance_port = port
-    
+
     # Return information about the selected instance
     with instances_lock:
         info = active_instances[port]
         program = info.get("file", "unknown program")
         project = info.get("project", "unknown project")
-        return f"Now using Ghidra instance on port {port} with {program} in project {project}"
+        message = (f"Now using Ghidra instance on port {port} with {program} "
+                   f"in project {project}")
+    return {
+        "success": True,
+        "result": {"message": message},
+        "timestamp": int(time.time() * 1000),
+    }
 
 @mcp.tool()
 @text_output

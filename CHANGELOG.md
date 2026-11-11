@@ -1337,3 +1337,17 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
   on a machine without Ghidra (the CI) the failure came from the constructor and
   escaped anyway. The CI caught it; this machine could not, because it has an
   installation. The walk now runs in both conditions.
+
+- **Three tools answered with a bare string, and their formatter was dead.**
+  134 tools, and `instances_register`, `instances_unregister` and
+  `instances_use` returned a plain sentence. `text_output` passes a string
+  through untouched, so their `FORMATTERS` entry was never reached — the
+  catalogue said these tools were formatted, and `format_generic_dict` would
+  have raised `AttributeError: 'str' object has no attribute 'get'` if it ever
+  had been. They answer in the envelope now, like every other tool, and the
+  formatter applies.
+- **No formatter was ever called with a payload.** The surface-parity suite
+  checked that each was *callable* and took `**kwargs`. A new suite pairs each
+  formatter with its own tool: the tool is called with the network cut, its
+  answer goes into its formatter, and the formatter has to answer — and it has
+  to answer for an **error** too, because any tool can fail.
