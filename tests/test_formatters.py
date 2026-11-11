@@ -44,10 +44,12 @@ class FormatterTests(unittest.TestCase):
 
     def test_every_formatter_answers_for_the_answer_of_its_tool(self):
         """The pair as it runs: the tool's answer goes into its formatter."""
-        workspace = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            ".formatter-walk")
-        os.makedirs(workspace, exist_ok=True)
+        import shutil
+        import tempfile
+
+        # A temporary directory: the state directory holds the sessions and the
+        # ledgers, and the walk must not leave them in the repository.
+        workspace = tempfile.mkdtemp(prefix="ghydra-formatter-walk-")
         failures = []
         checked = 0
         patches = _no_network()
@@ -56,30 +58,40 @@ class FormatterTests(unittest.TestCase):
         try:
             with mock.patch.dict(os.environ,
                                  {"GHYDRA_STATE_DIR": workspace}):
-                for name, tool in sorted(self.helper._tools().items()):
-                    formatter = bridge.FORMATTERS.get(name)
-                    if formatter is None:
-                        failures.append(f"{name}: no formatter")
-                        continue
-                    unwrapped = getattr(tool.fn, "__wrapped__", tool.fn)
-                    try:
-                        response = unwrapped(**self._tool_arguments(tool))
-                    except Exception:  # noqa: BLE001 - the tool refused
-                        # A tool that refuses has no answer to format; the
-                        # refusal is checked by the tool suite.
-                        continue
-                    try:
-                        answer = formatter(response, **self._tool_arguments(tool))
-                    except Exception as exc:  # noqa: BLE001 - that is measured
-                        failures.append(f"{name}: {type(exc).__name__}: {exc}")
-                        continue
-                    if answer is None or (isinstance(answer, str)
-                                          and not answer.strip()):
-                        failures.append(f"{name}: answered with nothing")
-                    checked += 1
+                # A real change of directory, not a patched `os.getcwd`: a
+                # command that writes a relative path would write it into the
+                # repository with the patch alone.
+                previous = os.getcwd()
+                os.chdir(workspace)
+                try:
+                    for name, tool in sorted(self.helper._tools().items()):
+                        formatter = bridge.FORMATTERS.get(name)
+                        if formatter is None:
+                            failures.append(f"{name}: no formatter")
+                            continue
+                        unwrapped = getattr(tool.fn, "__wrapped__", tool.fn)
+                        try:
+                            response = unwrapped(**self._tool_arguments(tool))
+                        except Exception:  # noqa: BLE001 - the tool refused
+                            # A tool that refuses has no answer to format; the
+                            # refusal is checked by the tool suite.
+                            continue
+                        try:
+                            answer = formatter(response,
+                                               **self._tool_arguments(tool))
+                        except Exception as exc:  # noqa: BLE001 - that is measured
+                            failures.append(f"{name}: {type(exc).__name__}: {exc}")
+                            continue
+                        if answer is None or (isinstance(answer, str)
+                                              and not answer.strip()):
+                            failures.append(f"{name}: answered with nothing")
+                        checked += 1
+                finally:
+                    os.chdir(previous)
         finally:
             for patcher in patches:
                 patcher.stop()
+            shutil.rmtree(workspace, ignore_errors=True)
         self.assertGreater(checked, 50, "the walk paired almost nothing")
         self.assertEqual([], failures,
                          f"{len(failures)} formatter(s) failed")

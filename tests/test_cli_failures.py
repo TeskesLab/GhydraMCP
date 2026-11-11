@@ -212,9 +212,15 @@ class CommandFailureTests(unittest.TestCase):
                 for patcher in patches:
                     patcher.start()
                 try:
-                    with mock.patch("os.getcwd",
-                                    return_value=workspace):
+                    # A real change of directory, not a patched `os.getcwd`:
+                    # a command that writes a relative path would write it
+                    # into the repository with the patch alone.
+                    previous = os.getcwd()
+                    os.chdir(workspace)
+                    try:
                         checked, failures = self._walk()
+                    finally:
+                        os.chdir(previous)
                 finally:
                     for patcher in patches:
                         patcher.stop()
@@ -291,8 +297,12 @@ class CommandFailureTests(unittest.TestCase):
                 for patcher in patches:
                     patcher.start()
                 try:
-                    with mock.patch("os.getcwd", return_value=workspace):
+                    previous = os.getcwd()
+                    os.chdir(workspace)
+                    try:
                         self._walk()
+                    finally:
+                        os.chdir(previous)
                 finally:
                     for patcher in patches:
                         patcher.stop()

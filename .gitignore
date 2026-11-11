@@ -140,3 +140,9 @@ secrets.json
 !/.mvn/wrapper/maven-wrapper.jar
 mvnw
 mvnw.cmd
+
+# The walks of the test suite write into a temporary directory; these are the
+# names they would leave behind if one of them ever ran in the repository.
+default-evidence.json
+default-evidence.md
+.formatter-walk/
