@@ -1358,3 +1358,10 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
   **not on the base** — and the base is the interface, so a third formatter
   would not have been asked for them at all. The base declares them now, and a
   test keeps the three sets in step.
+
+- **The contract named the gateway's tools and nothing tied it to the code.**
+  `contract/vocabulary.json` lists the five tools of the gateway server and maps
+  the plan's step names to them; the gateway could rename a tool, drop one or
+  add one and the document would still say what it always said. The gateway's
+  tools are closures inside `build_server()`, so the test builds the server and
+  asks it for its tools.

@@ -1191,6 +1191,31 @@ def run_doctor_tests():
         return False
 
 
+def run_gateway_contract_tests():
+    """Run the gateway contract suite - the vocabulary against the gateway."""
+    print_header("Running Gateway Contract Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_gateway_contract.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running gateway contract tests: {e}")
+        return False
+
+
 def run_gateway_tests():
     """Run the MCP gateway suite — fakes, no services, no protocol frames."""
     print_header("Running Gateway Tests")
@@ -1225,6 +1250,7 @@ NO_GHIDRA_SUITES = (
     "--mcp-config",
     "--target",
     "--gateway",
+    "--gateway-contract",
     "--doctor",
     "--launcher",
     "--progress",
@@ -1279,6 +1305,7 @@ SUITES = {
     "--formatters": run_formatter_tests,
     "--formatter-interface": run_formatter_interface_tests,
     "--gateway": run_gateway_tests,
+    "--gateway-contract": run_gateway_contract_tests,
 }
 
 def build_usage() -> str:

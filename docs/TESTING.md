@@ -91,6 +91,7 @@ python run_tests.py --contract      # the unification contract: vocabulary, addr
 python run_tests.py --mcp-config   # the combined client configuration (Phase 2)
 python run_tests.py --target       # the cross-tool workflow of Phase 3
 python run_tests.py --gateway      # the workflow as MCP tools (Phase 3)
+python run_tests.py --gateway-contract  # the vocabulary against the gateway it names
 python run_tests.py --doctor        # the doctor: what is missing on this machine
 python run_tests.py --launcher      # the JDK, the installation and the headless command
 python run_tests.py --progress      # the progress reporter: what a long step is doing
