@@ -28,6 +28,14 @@ from click.testing import CliRunner
 # The tests live in tests/; the code and the repository are one level up.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# The fixture answers in milliseconds, but it runs a real Python subprocess for
+# each script, and a loaded machine stretches that: measured, one run in ten
+# took over 20 s to answer. The bridge's default transport timeout is the one a
+# real Ghidra needs (900 s), and a fixture that misses a reply would hold the
+# suite for that long - the suite was measured hanging about one run in eight.
+# The timeout is read when the bridge is imported, so it is set here.
+os.environ.setdefault("GHIDRA_TIMEOUT", "60")
+
 import bridge_mcp_hydra as bridge
 from ghydra.cli.main import cli
 
@@ -57,6 +65,15 @@ class _ScriptHTTPServer(ThreadingHTTPServer):
 
 
 class _ScriptHandler(BaseHTTPRequestHandler):
+    # HTTP/1.0 closes the connection after every answer, and the bridge keeps
+    # one keep-alive session per thread: the next request then travels on a
+    # socket the server has already closed, which on this machine does not read
+    # as a reset - it waits for an answer that will never come. Measured: the
+    # suite failed two runs in six, each on a request that timed out against a
+    # fixture that had answered the one before. With HTTP/1.1 the connection
+    # stays open, and `Content-Length` on every reply (set in `_reply`) is what
+    # makes the reuse correct.
+    protocol_version = "HTTP/1.1"
     def setup(self):
         super().setup()
         self.connection.settimeout(3)

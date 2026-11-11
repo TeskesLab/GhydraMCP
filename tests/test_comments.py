@@ -7,6 +7,7 @@ different types of comments in Ghidra, including plate, pre, post, EOL,
 repeatable, and decompiler comments.
 """
 import json
+import os
 import logging
 import sys
 import time
@@ -21,10 +22,15 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from ghydra.testing import instance_is_headless
 
+#: The instance under test. The port suite and the MCP client already honour
+#: `GHYDRAMCP_TEST_PORT`; an instance that serves a program does not always
+#: serve it on the first port.
+PORT = int(os.getenv("GHYDRAMCP_TEST_PORT") or "8192")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("comment_test")
 
-def test_http_api_comments(port=8192, address="08000200"):
+def test_http_api_comments(port=None, address="08000200"):
     """
     Test setting and retrieving comments using direct HTTP API.
 
@@ -33,6 +39,7 @@ def test_http_api_comments(port=8192, address="08000200"):
         address: Memory address for comments
     """
     logger.info("===== Testing HTTP API Comments =====")
+    port = port or PORT
     base_url = f"http://localhost:{port}"
 
     comment_types = ["plate", "pre", "post", "eol", "repeatable"]
@@ -65,9 +72,12 @@ async def test_bridge_comments():
     """
     logger.info("===== Testing MCP Bridge Comments =====")
 
+    # The bridge answers in text by default; the raw envelope is what this
+    # parses, so the JSON output is asked for.
     server_parameters = StdioServerParameters(
         command=sys.executable,
         args=["bridge_mcp_hydra.py"],
+        env={**os.environ, "GHYDRA_MCP_OUTPUT": "json"},
     )
 
     logger.info("Connecting to bridge...")
@@ -81,11 +91,11 @@ async def test_bridge_comments():
             logger.info("Setting current Ghidra instance...")
             await session.call_tool(
                 "instances_use",
-                arguments={"port": 8192}
+                arguments={"port": PORT}
             )
 
             logger.info("Getting current address...")
-            if instance_is_headless(f"http://localhost:8192"):
+            if instance_is_headless(f"http://localhost:{PORT}"):
                 logger.info("Headless instance: the cursor-based comment tests are skipped")
                 return
             addr_result = await session.call_tool("ui_get_current_address")

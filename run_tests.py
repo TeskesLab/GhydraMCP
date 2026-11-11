@@ -13,6 +13,12 @@ import time
 TESTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tests")
 
 
+#: How long one suite may take. A suite is a subprocess, and a subprocess that
+#: never answers would otherwise hang the whole run — with no verdict and no
+#: name. Overridable with GHYDRA_SUITE_TIMEOUT; 0 means no limit.
+SUITE_TIMEOUT = int(os.environ.get("GHYDRA_SUITE_TIMEOUT") or 300) or None
+
+
 def suite_script(name):
     """The command that runs one suite, wherever the repository is."""
     return [sys.executable, os.path.join(TESTS_DIR, name)]
@@ -68,7 +74,8 @@ def run_mcp_bridge_tests():
         result = subprocess.run(
             suite_script("test_mcp_client.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
         
         # Print the output
@@ -94,7 +101,8 @@ def run_data_tests():
         result = subprocess.run(
             suite_script("test_data_operations.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
         
         if result.stdout:
@@ -117,7 +125,8 @@ def run_port_tests():
         result = subprocess.run(
             suite_script("test_javalin_port.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
         if result.stdout:
             print("STDOUT:")
@@ -138,7 +147,8 @@ def run_comment_tests():
         result = subprocess.run(
             suite_script("test_comments.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
         
         if result.stdout:
@@ -162,7 +172,8 @@ def run_kuna_tests():
         result = subprocess.run(
             suite_script("test_kuna.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -186,7 +197,8 @@ def run_x64dbg_tests():
         result = subprocess.run(
             suite_script("test_x64dbg.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -211,7 +223,8 @@ def run_headless_tests():
         result = subprocess.run(
             suite_script("test_headless.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -236,7 +249,8 @@ def run_evidence_tests():
         result = subprocess.run(
             suite_script("test_evidence.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -261,7 +275,8 @@ def run_triage_tests():
         result = subprocess.run(
             suite_script("test_triage.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -286,7 +301,8 @@ def run_rea_parity_tests():
         result = subprocess.run(
             suite_script("test_rea_parity.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -311,7 +327,8 @@ def run_surface_parity_tests():
         result = subprocess.run(
             suite_script("test_surface_parity.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -336,7 +353,8 @@ def run_capabilities_tests():
         result = subprocess.run(
             suite_script("test_capabilities.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -361,7 +379,8 @@ def run_compatibility_tests():
         result = subprocess.run(
             suite_script("test_compatibility.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -386,7 +405,8 @@ def run_scripts_tests():
         result = subprocess.run(
             suite_script("test_scripts.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -411,7 +431,8 @@ def run_runner_tests():
         result = subprocess.run(
             suite_script("test_runner.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -436,7 +457,8 @@ def run_docs_tests():
         result = subprocess.run(
             suite_script("test_docs.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -461,7 +483,8 @@ def run_capability_summary_tests():
         result = subprocess.run(
             suite_script("test_capabilities_summary.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -486,7 +509,8 @@ def run_tasks_tests():
         result = subprocess.run(
             suite_script("test_tasks.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -511,7 +535,8 @@ def run_errors_tests():
         result = subprocess.run(
             suite_script("test_errors.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -536,7 +561,8 @@ def run_context_pack_tests():
         result = subprocess.run(
             suite_script("test_context_pack.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -561,7 +587,8 @@ def run_tool_groups_tests():
         result = subprocess.run(
             suite_script("test_tool_groups.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -586,7 +613,8 @@ def run_telemetry_tests():
         result = subprocess.run(
             suite_script("test_telemetry.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -689,7 +717,8 @@ def run_assertions_tests():
         result = subprocess.run(
             suite_script("test_assertions.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -714,7 +743,8 @@ def run_read_only_tests():
         result = subprocess.run(
             suite_script("test_read_only.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -739,7 +769,8 @@ def run_runbook_tests():
         result = subprocess.run(
             suite_script("test_runbook.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -764,7 +795,8 @@ def run_taint_tests():
         result = subprocess.run(
             suite_script("test_taint.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -789,7 +821,8 @@ def run_mission_tests():
         result = subprocess.run(
             suite_script("test_mission.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -814,7 +847,8 @@ def run_cache_tests():
         result = subprocess.run(
             suite_script("test_cache.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -839,7 +873,8 @@ def run_fleet_tests():
         result = subprocess.run(
             suite_script("test_fleet.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -864,7 +899,8 @@ def run_core_tests():
         result = subprocess.run(
             suite_script("test_core.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -889,7 +925,8 @@ def run_twin_tests():
         result = subprocess.run(
             suite_script("test_twin.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -914,7 +951,8 @@ def run_examples_tests():
         result = subprocess.run(
             suite_script("test_examples.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -939,7 +977,8 @@ def run_contract_tests():
         result = subprocess.run(
             suite_script("test_contract.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -964,7 +1003,8 @@ def run_mcp_config_tests():
         result = subprocess.run(
             suite_script("test_mcp_config.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -998,7 +1038,8 @@ def run_target_tests():
             result = subprocess.run(
                 suite_script(script),
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=SUITE_TIMEOUT
             )
 
             if result.stdout:
@@ -1024,7 +1065,8 @@ def run_formatter_interface_tests():
         result = subprocess.run(
             suite_script("test_formatter_interface.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -1049,7 +1091,8 @@ def run_flag_name_tests():
         result = subprocess.run(
             suite_script("test_flag_names.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -1074,7 +1117,8 @@ def run_formatter_tests():
         result = subprocess.run(
             suite_script("test_formatters.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -1099,7 +1143,8 @@ def run_bridge_tool_tests():
         result = subprocess.run(
             suite_script("test_bridge_tools.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -1124,7 +1169,8 @@ def run_cli_failure_tests():
         result = subprocess.run(
             suite_script("test_cli_failures.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -1149,7 +1195,8 @@ def run_progress_tests():
         result = subprocess.run(
             suite_script("test_progress.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -1174,7 +1221,8 @@ def run_launcher_tests():
         result = subprocess.run(
             suite_script("test_launcher.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -1199,7 +1247,8 @@ def run_doctor_tests():
         result = subprocess.run(
             suite_script("test_doctor.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -1224,7 +1273,8 @@ def run_gateway_contract_tests():
         result = subprocess.run(
             suite_script("test_gateway_contract.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:
@@ -1249,7 +1299,8 @@ def run_gateway_tests():
         result = subprocess.run(
             suite_script("test_gateway.py"),
             capture_output=True,
-            text=True
+            text=True,
+            timeout=SUITE_TIMEOUT
         )
 
         if result.stdout:

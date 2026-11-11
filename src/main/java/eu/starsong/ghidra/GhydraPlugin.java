@@ -83,7 +83,6 @@ public class GhydraPlugin extends Plugin implements ApplicationLevelPlugin {
             + System.getenv(eu.starsong.ghidra.resource.DevResource.ENV) + ")");
 
         startServer();
-        startServer();
     }
 
     private void startServer() {

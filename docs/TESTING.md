@@ -9,6 +9,8 @@
 - [HTTP API Tests](#http-api-tests)
 - [MCP Bridge Tests](#mcp-bridge-tests)
 - [Kuna Integration Tests](#kuna-integration-tests)
+- [A live instance the suites can use](#a-live-instance-the-suites-can-use)
+- [When a suite hangs](#when-a-suite-hangs)
 - [Troubleshooting](#troubleshooting)
 - [Adding New Tests](#adding-new-tests)
 - [Java Unit Tests](#java-unit-tests)
@@ -206,6 +208,71 @@ python run_tests.py --kuna
 - The CLI commands run, and the formatters handle every payload shape
 - The export readers slice the C and the disassembly out of an export directory, and defer an
   unfinished trailing index record
+
+## A live instance the suites can use
+
+The live suites need a Ghidra with **a program open** — the cursor endpoints
+(`/address` and `/function`) answer for the program the CodeBrowser has, so a
+CodeBrowser with no program answers 503 and the tests that cover them skip.
+
+Two dialogues stand in the way, and both are answered by
+`scripts/prepare_ghidra_instance.py`:
+
+**"New Plugins Found!"** — Ghidra asks, once per tool, whether the plugins of
+a newly installed extension should be configured. The answer is **not kept**:
+the tools' state carries no `<EXTENSIONS>` element, so the dialogue comes back
+every time the CodeBrowser is opened. The state is one small XML element, and
+the script writes it into the two places Ghidra reads it from: the front end's
+`FrontEndTool.xml` in the user directory, and the `RUNNING_TOOL` block of the
+project's `projectState`.
+
+**The program itself** — Ghidra's own *GhidraGo* interface opens a program in
+a running Ghidra. The request is a URL (`ghidra:/<dir>/<project>?/<program>`),
+and the sender writes it to a file the running instance watches. The launcher
+script cannot be used for it — Ghidra's applications refuse a redirected input
+("Input redirection is not supported, exiting the process immediately") — so the
+script makes the launcher's own invocation, with the Ghidra class loader and the
+installation's jars, and opens the console for it.
+
+```bash
+python scripts/prepare_ghidra_instance.py \
+    --ghidra-home /path/to/ghidra_12.1.4_PUBLIC \
+    --project /path/to/project.gpr \
+    --binary /path/to/binary.exe
+```
+
+It prints the port of the instance that serves the program:
+
+```
+  the program is served on port 8193
+  run the suites with GHYDRAMCP_TEST_PORT=8193
+```
+
+**The instance with a program is not always on 8192.** Ghidra gives the first
+port to whoever asks first, and the CodeBrowser opened for a program lands on
+the next free one. Every live suite honours `GHYDRAMCP_TEST_PORT`, so the port
+is the suite's to choose:
+
+```bash
+GHYDRAMCP_TEST_PORT=8193 python run_tests.py --http --mcp --data --comments --port
+```
+
+`GHYDRAMCP_TEST_HOST` moves the instance to another machine. The bridge is
+told which instance to answer for the same way — `instances_use` — so a suite
+that drives the bridge over the protocol says it before the first call.
+
+## When a suite hangs
+
+Every suite runs as a subprocess with a bound: `GHYDRA_SUITE_TIMEOUT` seconds
+(300 by default, `0` disables it). A suite that overruns becomes a FAILED line
+naming it, with the command that timed out — a test run always ends, and a hung
+suite never hides behind a silent wait.
+
+A suite that fails *once in a while* with `REQUEST_TIMEOUT` is worth reading
+before it is dismissed: the script-execution fixture used to answer HTTP/1.0,
+so the server closed the socket after every reply while the bridge reused its
+keep-alive connection — the request went out on a closed socket and waited. It
+answers HTTP/1.1 now, because the Jetty it models does.
 
 ## Troubleshooting
 

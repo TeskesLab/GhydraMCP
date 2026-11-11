@@ -14,8 +14,11 @@ import sys
 
 from ghydra.testing import instance_is_headless, skip_reason_headless
 
-# Default Ghidra server port
-DEFAULT_PORT = 8192
+# The port of the instance under test. The port suite already honours this
+# variable; the two suites picking different instances is the inconsistency the
+# project file records, and an instance that serves a program does not always
+# serve it on the first port.
+DEFAULT_PORT = int(os.getenv("GHYDRAMCP_TEST_PORT") or "8192")
 
 # Get host from environment variable or default to localhost
 GHYDRAMCP_TEST_HOST = os.getenv('GHYDRAMCP_TEST_HOST')

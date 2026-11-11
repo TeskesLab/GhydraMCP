@@ -27,7 +27,7 @@ import bridge_mcp_hydra as bridge
 from ghydra.cli.main import cli
 from ghydra.utils import parse_targets
 
-DEFAULT_PORT = 8192
+DEFAULT_PORT = int(os.getenv("GHYDRAMCP_TEST_PORT") or "8192")
 
 GHYDRAMCP_TEST_HOST = os.getenv('GHYDRAMCP_TEST_HOST')
 if GHYDRAMCP_TEST_HOST and GHYDRAMCP_TEST_HOST.strip():
@@ -335,6 +335,9 @@ class ReaParityApiTests(unittest.TestCase):
                 raise RuntimeError("no info")
         except Exception:
             self.skipTest("Ghidra not running")
+        # The bridge answers for 8192 by default; the instance under test is
+        # not always the first one.
+        bridge.instances_use.__wrapped__(port=DEFAULT_PORT)
 
     # -- helpers ----------------------------------------------------------
 
@@ -641,6 +644,10 @@ class ReaParityApiTests(unittest.TestCase):
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
+                    # The bridge answers for 8192 by default; the instance
+                    # under test is not always the first one.
+                    await session.call_tool("instances_use",
+                                            arguments={"port": DEFAULT_PORT})
                     result = await session.call_tool(tool, arguments=arguments)
                     return result.content[0].text
 

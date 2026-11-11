@@ -297,6 +297,22 @@ there is usually a stale premise rather than an absence: the suite looks for a c
 the `CALL` family of reference types, and Ghidra calls them `UNCONDITIONAL_CALL`,
 `CALL_OVERRIDE` and `CALL_INDIRECT`.
 
+**A test that can hang has no verdict.** `run_tests.py` bounds every suite
+(`GHYDRA_SUITE_TIMEOUT`, 300 s by default, `0` for none): a suite that overruns
+raises `TimeoutExpired`, which the runner already reports as a FAILED line
+naming the suite. Without it a hung subprocess held the whole run with no name
+and no end — measured on this machine, where the script-execution suite hung
+about one run in eight.
+
+The cause of that hang was a fixture answering **HTTP/1.0**: the server closed
+the socket after every reply, and the bridge keeps one keep-alive session per
+thread, so the next request travelled on a socket the server had already closed
+and waited for an answer that never came. A real Jetty answers HTTP/1.1, so the
+fixture does too (`protocol_version`), and every reply carries its
+`Content-Length`. The x64dbg fixture is the opposite and stays HTTP/1.0 on
+purpose: the released plugin closes the connection after every response, and
+the client does not pool.
+
 **The x64dbg suite is not immune to the network stack.** A local TCP connection is reset every
 now and then on this machine (measured: 7%), so a suite that opens dozens of connections will
 see a failure every now and then unless the client retries — which it does, but only where
@@ -305,10 +321,13 @@ repeating is safe. When a test fails there, look at the transport before the log
 `X64DBG_UNCERTAIN` when the tool changes the debuggee (the request was delivered and its
 answer was lost, so it was not repeated) and as `X64DBG_MISSING` when it did not leave.
 
-Target selection is inconsistent and worth knowing:
-- `tests/test_javalin_port.py` honors `GHYDRAMCP_TEST_HOST` **and** `GHYDRAMCP_TEST_PORT`.
-- `tests/test_http_api.py` honors only `GHYDRAMCP_TEST_HOST`; its port is hardcoded to 8192.
-- `docs/TESTING.md` documents the flags and the headless Java integration tests.
+Target selection: every live suite honors `GHYDRAMCP_TEST_HOST` **and**
+`GHYDRAMCP_TEST_PORT`. The port matters: the instance that serves a program is
+not always on 8192 — Ghidra gives the first port to whoever asks first, and the
+CodeBrowser opened for a program lands on the next free one.
+`scripts/prepare_ghidra_instance.py` prepares one: it writes the extension's
+state so Ghidra stops asking "New Plugins Found!", and it opens the program
+through Ghidra's own *GhidraGo* interface. `docs/TESTING.md` has the recipe.
 
 `mvn test` (26 JUnit tests) covers only pure logic — anything needing a live `Program` can't
 run there, because the plugin's Ghidra deps are system-scoped jars in `lib/` and Ghidra ships

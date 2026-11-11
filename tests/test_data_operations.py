@@ -12,6 +12,7 @@ This script tests all data-related operations including:
 Tests are performed using both direct HTTP API and MCP bridge interfaces.
 """
 import json
+import os
 import logging
 import sys
 import time
@@ -30,7 +31,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("data_test")
 
 # Configure default test values
-GHIDRA_PORT = 8192
+GHIDRA_PORT = int(os.getenv("GHYDRAMCP_TEST_PORT") or "8192")
 DEFAULT_MEMORY_ADDRESS = "08000200"  # Fallback test address
 
 def wait_for_program_loaded(port=GHIDRA_PORT, timeout=20):
@@ -269,7 +270,7 @@ async def test_mcp_data_operations():
             logger.info("Setting current Ghidra instance...")
             await session.call_tool(
                 "instances_use",
-                arguments={"port": 8192}
+                arguments={"port": GHIDRA_PORT}
             )
 
             # Get a valid address to work with

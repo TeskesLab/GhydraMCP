@@ -6,891 +6,112 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+Everything here is newer than **3.1.1** and not released yet.
+
+### Added
+
+- **BSim, end to end**: ingest (with the caps and the agents split), query,
+  apply-names and diff — each slice validated against a live Ghidra 12.2. The
+  ingest counts the functions of **the one executable**, so the imported
+  libraries Ghidra adds to the description manager no longer make a stored
+  program look incomplete.
+- **The digital twin (R2)**: a snapshot of a program that answers queries
+  **with no Ghidra running**. A snapshot states its own completeness, and a
+  truncated listing is reported as incomplete rather than as a removal.
+- **The unification contract (Phase 1)**: [`contract/`](contract/README.md) —
+  the tools, the error codes, the target descriptor — with the half that can be
+  derived from this repository **generated** and guarded
+  (`scripts/gen_contract.py --check`).
+- **The cross-tool workflow (Phase 3)**: `ghydra target describe | locate |
+  breakpoint | run-to | decompile`, and the same five steps as MCP tools
+  (`ghydra-gateway`). The address model is `runtime = static − image_base +
+  module_base`, guarded by the **identity** of the two sides: a different file
+  is refused with `TARGET_NOT_SAME_BINARY` **before** the debugger is touched.
+- **The single core (I1)**: eleven modules of pure logic live in
+  `ghydra/core/` and are **generated** into the bridge
+  (`scripts/gen_core.py --check`). One definition, two surfaces.
+- **The composed calls**: `context_pack` (one answered question inside a token
+  budget), `capabilities` (ATT&CK/MBC triage), `taint` (source-to-sink
+  hypotheses), `fleet` (several instances at once, merged by file identity),
+  `diff` (what changed between two instances), `mission` (an auditable dossier
+  under a hard budget), `runbook` (a reproducible sequence, replayable as a CI
+  gate), `cache` (the decompiler's answer on disk), `assert` (CI assertions in
+  text, JUnit or SARIF), `tasks` (background work), `telemetry` and `stats`
+  (what the tool actually did, locally), plus the evidence ledger and the
+  sessions.
+- **The x64dbg integration**: the rename table is **generated from the
+  plugin's own registry** (80 tools) and validated against the committed table
+  when the other repository is absent — which is what CI does.
+- **The extension builds without Maven** (`scripts/build_extension.py`), for the
+  machines that have a JDK and no Maven.
+- **A Ghidra the live suites can run against, without a human**
+  (`scripts/prepare_ghidra_instance.py`): it stops Ghidra asking "New Plugins
+  Found!" on every launch and opens the program through Ghidra's own *GhidraGo*
+  interface. `docs/TESTING.md` has the recipe.
+
 ### Fixed
 
-- **An address outside the image never reaches the debugger.** `EXTERNAL:00000010`
-  is an external symbol index, and dropping the space prefix turned it into
-  `0x10`: the identity guard passed and the debugger was told to set a
-  breakpoint at `image_base + 0x10` — an address in the module that has nothing
-  to do with the symbol. The space is kept now, reported by `target_locate`, and
-  a breakpoint or a run to an address in another space is refused with
-  `TARGET_NOT_IN_IMAGE` **before** anything is written or resumed.
-- **A name that reads as hexadecimal is a name.** The decision whether the
-  caller's text was an address used the wire parser, and `add`, `dec` and `f`
-  are hexadecimal to it — and `math::add` became `add` after the last colon. So
-  `target locate add` went to `GET /functions/add` and came back not found,
-  while `GET /functions/by-name/add` had the function all along. The address
-  path is tried first — a bare `401000` is an address — and a miss falls back
-  to the name endpoint.
-- **A capped import listing makes no removal claim.** The twin's `build()`
-  capped the imports by the same limit as the functions and wrote no truncation
-  flag for them, so the comparison read a flag that was never written and
-  reported the removal of an import it had simply not read.
-- **The re-ingest count is of the one executable.** `DescriptionManager.numFunctions()`
-  counts every description in the manager, and with `track_call_graph` Ghidra
-  12.2's `GenSignatures.writeToManager()` adds the imported-library callees to
-  that same manager — so a fully stored program with one function calling an
-  imported `Sleep` compared stored=1 against expected=2 and was reported as an
-  incomplete ingest. The count is now the one of this executable, which is
-  what the store holds.
-- **Three switches were misspelled, so the documented ones did nothing.**
+- **An address outside the image never reaches the debugger.** `EXTERNAL:…` is
+  an external symbol index; dropping the space prefix turned it into an
+  offset in the module. The space keeps its meaning, and a breakpoint or a run
+  to another space is refused with `TARGET_NOT_IN_IMAGE` **before** anything is
+  written or resumed.
+- **A name that reads as hexadecimal is a name.** `add`, `dec` and `f` are
+  hexadecimal to the wire parser, and `math::add` lost its last namespace: the
+  address route is tried first and a miss falls back to the name route.
+- **Three switches were misspelled**, so the documented ones did nothing:
   `ghidra.dev.allowScripts`, `ghidra.dev.allowShutdown` and
-  `ghidra.bsim.database` were read with a `y` where the documentation has an
-  `i`: the plugin refused the endpoint and the message it printed named a
-  switch that worked. The names are one spelling now, and a guard pins the
-  switches the documentation names against the ones the code reads.
-- **`/scripts/run` runs a script that touches the script framework.** The
+  `ghidra.bsim.database` were read with a `y`. A guard now pins the switches
+  the documentation names against the ones the code reads.
+- **The registry of the instances was always empty.** The plugin started its
+  HTTP server twice, and the second attempt — the port was taken — deregistered
+  the instance.
+- **`/scripts/run` runs a script that touches the script framework**: the
   bundle host belongs to the Script Manager plugin, which is not enabled in
-  every instance, so resolving a script's class died with a
-  `NullPointerException` before the script ran. The service holds a reference
-  of its own while the script runs.
+  every instance.
+- **The producers' shapes are read, not guessed.** The target workflow, the
+  taint pass, the diff, the twin, the runbook, the program fingerprint, the
+  BSim query and the server's own error code were each reading a shape no
+  instance sends — the addresses as decimal, the fields as snake_case, the
+  pcode opcodes as the floating-point ones. Each is fixed at the producer's
+  format, and the fixtures use it too.
+- **A capped listing makes no removal claim**: the twin's imports were capped
+  without the truncation flag, so the comparison read a flag that was never
+  written.
+- **`--dry-run` reached only the Ghidra client.** The flag is attached to the
+  HTTP client, and the x64dbg and target commands build one of their own — so a
+  preview could **resume the debuggee**. The flag now reaches every mutating
+  path.
+- **`mcp-config --gateway --groups` is refused instead of ignored**, the
+  generated gateway host is now read, and the configuration file's
+  `"x64dbg": {…}` section is read by the commands that document it.
+- **A suite that hangs has no verdict — and the run had no bound.** The suites
+  are subprocesses, and the script-execution suite was measured **hanging about
+  one run in eight**, waiting on a reply that never came; the runner waited with
+  it, with no name and no end. Every suite is now bounded
+  (`GHYDRA_SUITE_TIMEOUT`, 300 s by default), and an overrun becomes a FAILED
+  line naming the suite and the command that timed out. The cause of that hang
+  was the fixture answering **HTTP/1.0**: it closed the socket after every reply
+  while the bridge keeps one keep-alive session per thread, so the next request
+  travelled on a closed socket and waited. The fixture answers HTTP/1.1 now, as
+  the Jetty it models does — measured 0 failures in 10 runs, against 2 in 6
+  before.
 
-### Added
+### Changed
 
-- **The extension builds without Maven.** `scripts/build_extension.py` compiles
-  the sources, merges the runtime dependencies through
-  `scripts/make_uberjar.py` and lays out the extension directory exactly as
-  `src/assembly/ghidra-extension.xml` describes it — for the machines that have
-  a JDK and no Maven.
-- **The plugin says which flags it saw.** A user who sets a switch and finds
-  the endpoint still refusing can read the property name, the environment
-  variable and the verdict in the log.
-
-### Added
-- **The BSim query was written twice.** The executable filter has to travel
-  inside the query — BSim applies it in its SQL layer, so the match limit is
-  spent on the matches of the wanted executable and not on the whole corpus —
-  and the query service was out of reach when the filter was built, so
-  `BSimDiffService` grew its own copy of it: about 250 lines that would have to
-  be fixed twice. The filter moved to `BSimQueryService`, which now builds it
-  (`executableFilter`) and attaches it (`query(..., filter)`), and the diff
-  asks for one. The duplicate import of `GhidraSwing` went with it.
-- **The program fingerprint asked for names no endpoint sends.**
-  `ProgramResource.getCurrentProgram()` answers `path` and `imageBase`; the
-  diff, the runbook and the mission asked for `executable_path` and
-  `image_base`, so a fingerprint carried only the name — and **two different
-  binaries of the same name compared as "the same program fingerprint"**. The
-  runbook's own docstring says the path is what tells "the same program" from
-  "another one with the same name", and the mission's dossier printed
-  "(no path)" because it read `path` but stored it under `path` while its own
-  renderer read `executable_path`. One accessor in the core
-  (`fingerprint_from_program`) now builds it, and the bridge and the CLI call
-  the same one — they did not even agree with each other before (the CLI read
-  four fields, the bridge two).
-- **The server's own error code was read and thrown away.** The cross-tool
-  workflow turned every failure into a `TARGET_*` code and dropped the code the
-  server sent, so "the instance is down" and "the server refused this one"
-  looked the same. The target taxonomy is still the contract; the original code
-  travels in the message.
-- **`ghydra target` had no test at the level the user runs it.** The helpers
-  were tested and the commands were not, which is how a mistake in the
-  command's own failure handling survived: the handler named a class it did not
-  import, and nothing ever reached it. A new suite drives the five commands
-  through the real root command and checks that a failure is **reported** with
-  its code and a non-zero exit, rather than raised out of the command.
-- **The cross-tool workflow read a program shape no instance sends.** The Ghidra
-  API emits `imageBase` and serialises every address with `Address.toString()` —
-  **unprefixed hexadecimal** (`00401000`, `140000000`). The target workflow read
-  only `image_base` and parsed addresses with `int(text, 0)`, so the image base
-  stayed `0` (and `correlatable()` refused it: every breakpoint and run-to
-  failed with `TARGET_NOT_SAME_BINARY` even when both paths matched), while
-  `140001234` was read as **decimal** 140001234 — the wrong address, silently.
-  Both sides now read the wire format, an address space prefix keeps its
-  meaning, and the fixtures use the producer's shape rather than a friendly one.
-- **`--dry-run` reached only the Ghidra client.** The flag is attached to
-  `GhidraHTTPClient`, and the x64dbg and target commands build a client of their
-  own — so `ghydra --dry-run x64dbg call Run` **called the debugger's `Run`
-  tool**: a user asking for a preview could resume or modify the debuggee. The
-  flag now reaches every mutating path; a read-only tool (the plugin says so
-  itself) may still run under a preview, and the preview names the tool and the
-  address it would have used.
-- **The taint pass read an envelope that was never sent.**
-  `XrefResource.getRefsToName()` answers `{name, symbols, references, total}`,
-  and the DTO's fields are `fromAddress`/`toAddress`/`refType`/`fromFunction` —
-  the code tested `isinstance(xrefs, list)` and looked for snake_case names, so
-  every real reference was skipped and the pass lost its source and sink call
-  sites before it could read their pcode. Both surfaces now read the producer's
-  shape.
-- **The taint pass looked for the wrong pcode opcodes.** `PcodeOp.CALL` is
-  **7** and `CALLIND` is **8** (read with `javap -p -constants` against the
-  committed `SoftwareModeling.jar`); 57 and 58 are `FLOAT_CEIL` and
-  `FLOAT_FLOOR`. The constant named the floating-point opcodes, so every real
-  call was discarded and no source-to-sink pair could ever be found. The test
-  fixture manufactured opcode 57 — reproducing the mistake instead of the wire
-  contract — and now uses the real ones.
-- **A diff claimed removals against a listing that was never read.** The
-  collectors record `imports_complete` and `strings_complete`, and the
-  comparison threw those flags away: a failed or capped listing on one side
-  produced a definite "these imports were removed" — an absence claim against a
-  list that was never read. Each section now carries its own verdict, what was
-  only *not seen* is kept apart from what is known to be gone, and the overall
-  answer says which sections were incomplete.
-- **A twin could not be queried with the address its own listing holds.** Ghidra
-  writes an address zero-padded and unprefixed (`00401000`) and a caller writes
-  `0x401000`; the comparison removed only the prefix, so `00401000 != 401000` and
-  the function was "not found". The value is compared as the number it is, and an
-  address space keeps its meaning. The twin's overall completeness also covers
-  the strings and the imports, which the functions alone used to decide.
-- **A runbook replayed a step differently from the way it was recorded.**
-  `GhidraHTTPClient.post(data=...)` form-encodes a dictionary, so a recorded
-  `POST /functions` went out as `application/x-www-form-urlencoded` while
-  `FunctionResource.create()` parses a JSON `CreateRequest` — the CLI's
-  record/replay of a mutation failed on a step the bridge sends correctly as
-  JSON. The body goes as JSON now, and the step's query parameters travel with
-  it on every method that can carry them (a POST BSim step was losing its
-  address and its dry-run arguments).
-- **`mcp-config --gateway --groups` is refused instead of ignored.** The gateway
-  serves a fixed set of five tools and reads no group list, so the combination wrote
-  a `GHYDRA_TOOL_GROUPS` that the server never looked at — a setting that does
-  nothing is worse than an error that says which flag belongs where. The gateway
-  entry also stops emitting that variable.
-- **A generated setting the gateway ignored.** `ghydra mcp-config --gateway`
-  writes `GHIDRA_HYDRA_HOST` into the client configuration, and
-  `gateway.ghidra_client()` read only its argument and the config file — so the host
-  in the generated file did nothing. It now follows the CLI precedence
-  (`argument > environment > configuration > default`) with the bridge's variable
-  names, and a test asserts the variable the generated file writes is one the
-  gateway actually reads — the same guard that caught an invented port variable
-  earlier. An unused import and a dead helper went with it.
-- **A configuration file the newer commands ignored.** `GhidraConfig` keeps the
-  x64dbg settings as flat `x64dbg_*` attributes and the file nests them under
-  `"x64dbg"`; only the CLI's `_section` read them. So `ghydra-gateway` looked for an
-  attribute named `x64dbg`, got `None`, and **ignored the documented
-  `"x64dbg": {"path": ...}`** — working only from environment variables — and
-  `ghydra mcp-config` passed no settings at all, so a config file pointing at an
-  installation still answered "the x64dbg token is unknown". One accessor on the
-  dataclass (`GhidraConfig.x64dbg_section()`) now feeds all three call sites, and
-  the CLI test drives the real root command with a patched configuration.
-- **The x64dbg plugin: four Phase-1 defects fixed and verified** on its own branch
-  (`fix/thread-safety-and-honest-frames`, `81d4936`, pushed to the fork), with
-  `zig build` and `zig build test` (50 unit tests) green on Zig 0.14.0:
-  the **data race** (`.single_threaded = true` while threads came from Win32
-  `CreateThread`; five structures written by callbacks and read by HTTP threads —
-  now a mutex around the rings and the SSE table, an atomic `server_running`, and no
-  slice into a ring escaping the lock), the **silent JSON truncation** (`JsonWriter`
-  dropped bytes on overflow, so an oversized answer was malformed JSON that a client
-  could not tell from a complete one — the writer now records it and the response
-  paths answer a JSON-RPC error), the **CORS hole** (`Access-Control-Allow-Origin: *`
-  plus a preflight answered before the token check), and a **tool that lied**
-  (`ListCommandsByCategory` declared a category, ignored it, and listed the MCP
-  tools). Docs corrected against the code: 80 tools, loopback bind, Zig 0.14.0, the
-  two defaults.
-- **The rename table no longer reports stale on an unrelated commit.** It compared
-  the whole generated document, whose `source.commit` moves with every commit in the
-  plugin repository — the four fixes above flagged 80 unchanged names as stale. The
-  check now compares the **mapping** and reports a moved provenance as a note, while
-  a real change (a tool added, renamed, or a flag flipped) still fails; the four
-  states are pinned by tests.
-- **The x64dbg rename table, generated from its own registry**
-  ([`contract/x64dbg-vocabulary.json`](contract/x64dbg-vocabulary.json)):
-  `contract/vocabulary.json` says the rule and that the x64dbg side does not follow
-  it; this is what following it costs — **80 tools, all 80 renamed**, with the
-  **36** read-only flags carried across and **zero collisions** with the tools this
-  repository already has. Read from `danalec/x64dbg-mcp-server`'s
-  `src/mcp/tools.zig` at `9d7a93e` (protocol `2024-11-05`), not from its README.
-  The split is the only place the rule can go wrong, so the test fixes the cases:
-  `GetSEHChain` → `x64dbg_get_seh_chain` (SEH + Chain, not S + EHChain), `GetPEB`,
-  `DetectOEP`. The other repository is not a dependency of this one: the generator
-  runs where it is checked out, the table is committed, and the guard **validates
-  the committed table** when the repository is absent, which is what CI does — so
-  the check is honest in both states instead of failing on a fresh clone.
-- **The gateway: the cross-tool workflow as MCP tools** (`ghydra-gateway`): a
-  separate MCP server on stdio — its own console script, not a subcommand, because a
-  server on stdio must own stdout and the CLI's root command prints — exposing the
-  five steps of the unification plan as tools: `target_open`, `target_locate`,
-  `target_breakpoint`, `target_run_to`, `target_decompile`. The names follow the
-  contract's vocabulary; the plan's workflow names are the steps, mapped in
-  `ghydra/gateway.GATEWAY_STEPS`.
-  Every tool answers **structurally** (`success`, plus `code` and `reason` on a
-  failure): an MCP tool that raises turns a contract code into unstructured noise.
-  The refusals are the same ones the CLI pins — `target_breakpoint` and
-  `target_run_to` answer `TARGET_NOT_SAME_BINARY` and touch nothing over two
-  different files — and `target_open` **reports** the mismatch instead of refusing,
-  because `analyze_open` answering "these are a copy and a rebuild" is a successful
-  analysis of a bad situation. Two of the fourteen tests exist because of that
-  distinction, which the first version got wrong.
-  `ghydra mcp-config --gateway` emits the one-entry client configuration for it.
-  The plan put the gateway in a third repository; it turned out small enough to live
-  next to the code it calls, and the contract's rules stay data that can move.
-- **The cross-tool chain is complete** (`ghydra target run-to` and `… decompile`):
-  with `describe`, `locate` and `breakpoint`, the five steps of the unification
-  plan's Phase 3 exist as commands — `analyze_open`, `function_locate`,
-  `breakpoint_set`, `run_to`, `decompile`.
-  `run-to` carries the same identity refusal as `breakpoint` with a worse
-  consequence if it were wrong — resuming a different build is not a breakpoint in
-  the wrong place, it is a process running — and then reads the registers with a
-  **read-only** tool, so the answer cannot change the debuggee. Its timeout defaults
-  to **10 s**, below the client's 30 s read timeout on purpose: the debugger's own
-  default is 30 s, and a run that takes the full time would lose its answer to the
-  client giving up first.
-  `decompile` addresses the static side through `locate`, so a name works as well as
-  an address, and a decompiler that returns nothing is `TARGET_NO_CODE`, not an
-  empty answer. `tests/test_target.py` is **19 tests** and pins both, including the
-  two refusals that assert the fake debugger was never resumed or written.
-- **The cross-tool target workflow (Phase 3 of the unification plan)**: three
-  commands that make the static and the dynamic side work on one target —
-  `ghydra target describe` (`analyze_open`: both sides, one `TargetDescriptor`, and
-  the identity verdict), `ghydra target locate <name>` (`function_locate`: the
-  static address) and `ghydra target breakpoint <name>` (`breakpoint_set`: locate,
-  translate `runtime = static − image_base + module_base`, set it).
-  The refusal is the point: `breakpoint` exits with `TARGET_NOT_SAME_BINARY`
-  **before touching the debugger** when the descriptor says the two sides are not
-  the same file, and `tests/test_target.py` (`--target`, 12 tests, in CI) asserts
-  the fake debugger recorded no `SetBreakpoint` at all — a refusal that still writes
-  is not a refusal. The same suite caught a dishonesty in the codes while it was
-  being written: a connection failure reached the caller as `TARGET_NOT_FOUND`
-  ("try another name") when the truth was `TARGET_NO_PROGRAM` ("start the
-  instance"); the two are now split by the code the client carries.
-  `run_to` and `decompile` — the last two steps of the chain — need no new address
-  logic, and the gateway process itself stays where the plan puts it.
-- **Phase 2 of the unification plan: one client configuration for both servers**
-  (`ghydra mcp-config`): one file in the shape MCP clients already read, with the
-  Ghidra bridge over **stdio** and the x64dbg MCP server over **HTTP + bearer token**
-  as separate entries, so a client can enable one without the other — the plan's
-  mitigation for "165 tools in one context degrades tool selection". The tool groups
-  are opt-in (`--groups core,functions`), the debugger entry is **left out with the
-  reason** when the token is unknown, and the token is treated as a secret: masked
-  in everything printed (`--show-secrets` to see it), real only inside a written
-  file, with the warning printed.
-  Two defects were caught by the suite while writing it, and both are now guards:
-  the configuration had set an **invented** `GHIDRA_HYDRA_PORT` (the bridge has no
-  port variable — it discovers instances), and the printed JSON was wrapped by the
-  terminal renderer, which broke `ghydra mcp-config | jq` on a long Windows path;
-  the command now writes its JSON unwrapped. `tests/test_mcp_config.py` (19 tests,
-  `--mcp-config`, in CI) checks the transports, the missing-token reason, the
-  masking on both paths, and that **every environment variable written is one
-  `bridge_mcp_hydra.py` actually reads**.
-- **The unification contract, and the address model that can refuse** (Phase 1 of
-  `docs/UNIFICATION-PLAN.md`): the plan's verdict is that these two projects cannot
-  share code — a Java plugin in Ghidra and a Zig DLL in x64dbg — only a
-  specification. That specification now exists in [`contract/`](contract/README.md),
-  with the half that can be derived from this repository **generated**:
-  [`tools.json`](contract/tools.json) (134 tools, 36 namespaces, every one matching
-  `namespace_verb`, none declaring the reserved `arguments`, all with a formatter)
-  and [`error-codes.json`](contract/error-codes.json) (112 codes with side, HTTP
-  status and `file:line`), both checked by `scripts/gen_contract.py --check`.
-  New [`ghydra/target.py`](ghydra/target.py) is the address model the plan asks for:
-  `runtime = static − image_base + module_base`, plus the identity that makes the
-  arithmetic safe — a descriptor built from two **different** files reports
-  `correlatable: false` and says why, and the same file name in another directory is
-  `name-only` (a copy, a symlink or a rebuild), not the same target. The shape is
-  [`contract/target-descriptor.schema.json`](contract/target-descriptor.schema.json).
-  The conformance suite `tests/test_contract.py` (`--contract`, and in CI) proves
-  all of it: 24 tests, including a small validator that reads the schema and refuses
-  a descriptor the schema refuses.
-  Honest status, also recorded in the plan: the **x64dbg side is untouched**. Its
-  nine Phase-1 defects — the data race, the GUI call from an HTTP worker thread, the
-  silent JSON overflow, the static port — are the reason the plan puts them first,
-  and they live in the other repository. The contract marks that side as
-  `"conforms": false` rather than pretending.
-- **The reference documents moved to `docs/`, and the guards follow them**: the
-  root had 5 documents and 20 reference pages; the 20 are now in
-  [`docs/`](docs/), next to the three design notes that were already there.
-  What stayed is what a forge and a runtime expect to find at the top: `README.md`,
-  `AGENTS.md` (and the `CLAUDE.md` symlink to it), `CHANGELOG.md`,
-  `CONTRIBUTING.md` and `LICENSE`.
-  Links were rewritten in both directions — a moved document that points at a root
-  file goes up one level, a root file that points at a moved one names `docs/`, and
-  neighbours keep bare names — and the tooling moved with them: the four generators
-  write and index `docs/`, the command guard scans `docs/` as well, and the
-  documentation index now has a **History and proposals** section that labels the
-  three pre-existing notes by the status each declares (implemented, proposal, a
-  design note) instead of listing them as reference.
-  New guard: `check_docs.py` now resolves **every local link in every tracked
-  document** from the file that holds it, so a future move fails the build instead
-  of shipping a dead end. It found one real gap while being written (the index
-  still resolved links from the repository root) and one honest boundary: the
-  gitignored notes in `docs/` are not the repository's to check, so it reads
-  `git ls-files`.
-- **The test suites moved to `tests/`, with a guard against the clutter coming
-  back**: the repository root held 67 files, **33 of them suites** — half of what a
-  newcomer sees was test machinery. All 33 moved to [`tests/`](tests/), and the
-  three things that depended on where a test file lives moved with them:
-  `sys.path` now goes one level up (27 files), `ROOT` points at the repository (11
-  files), and the runner builds every command through one `suite_script()` helper
-  instead of 32 literal paths — plus the one suite it imports rather than spawns
-  gets `tests/` on the path. Three files built a repository path **inline** rather
-  than through `ROOT` (`tests/test_kuna.py` reading `GHYDRA_KUNA.md`,
-  `tests/test_headless.py`, `tests/test_rea_parity.py`); the move broke each one,
-  which is how they were found.
-  `tests/test_runner.py` now fails if a suite appears at the root again, if the
-  runner names a suite that does not exist, or if `tests/` stops holding them. Its
-  flag-combination test runs two **cheap** suites rather than two heavy ones: it
-  runs inside the runner, so the weight there measured the machine (one 120 s
-  timeout observed under load), not the contract. The root is 34 files: 25
-  documents, the bridge, the runner and the build files.
-- **The four review findings that were left open, fixed — with the tests that pin
-  them**: the independent review's remaining items are closed.
-  **The property read is method-first** (`util/ReflectiveRead`): the BSim ingest read
-  `DescriptionManager.numFunctions` as a field, and it is a method — that is what broke
-  every ingest. The reader now tries the method, falls back to the field, and treats an
-  absent property as absent; `ReflectiveReadTest` (7 cases) fails if it ever goes back,
-  including a method that throws.
-  **The ingest is capped at 5 000 functions by default** (was: all of them, up to
-  200 000, with a decompilation per function — hours inside one request on a large
-  binary, and the Jetty thread stays busy after the client gives up). `0` means
-  everything when the caller asks, and the answer reports `functions_cap` and `capped`,
-  because a partial ingest must not be read later as "not in the corpus";
-  `BSimIngestServiceTest` pins the four cases.
-  **An unsaved program explains itself**: `repository`/`path` used to be two nulls with
-  no reason, and the answer now carries `location_reason`.
-  **A twin name is one file, and a writable one**: `twin_path` adds a short digest of
-  the original name (so `a/b` and `a_b` no longer share a snapshot), prefixes Windows
-  device names (`CON`, `COM1`, …), and `resolve_path` still finds a snapshot made
-  before the change. Six tests in `test_twin.py`.
-  **`AGENTS.md` fits its budget**: 68 646 bytes was truncated to 65 143 when loaded as
-  instructions, so the last sections were simply not read. "Known drift", "The four
-  gaps closed against the REA" and "The composed calls" moved to
-  [GHYDRA_INTERNALS.md](docs/GHYDRA_INTERNALS.md) — 60 120 bytes now, with headroom — and
-  `AGENTS.md` points at it. `CLAUDE.md` is still the symlink.
-- **Four examples, one of them runnable with nothing installed — and the suite that
-  proves it**: `examples/` was one CI workflow and a JSON file; it is now an index
-  of four jobs, each with what it needs and what to look for in the output.
-  `examples/twin/` is the offline one: a snapshot and the queries it answers with
-  **no Ghidra running**, and the snapshot says in its own README that it is
-  synthetic — an example that pretends to be a real analysis teaches the wrong
-  thing. `examples/mission/mission.sh` and `examples/fleet/fleet.sh` are complete
-  scripts that start what they need, run the job, and stop it even when the job
-  fails, with the traps called out where they happen.
-  The suite (`test_examples.py`, wired as `--examples` and into CI) does the part
-  that makes examples trustworthy: it **runs** the offline queries and compares
-  the output, validates `asserts.json` against `ASSERTION_KINDS` (which caught
-  three kinds the README had invented: `has_export`,
-  `function_count_at_least`, `has_segment`), checks that every path the index
-  names exists, and loads the snapshot through `ghydra/twin.py` — version, md5 and
-  completeness. The command guard now reads the example **scripts** too, not just
-  the Markdown fences, so a flag that stops existing in
-  `examples/mission/mission.sh` fails the build.
-- **A generated cheat sheet, and the guard that proves every documented command
-  exists**: [GHYDRA_CHEATSHEET.md](docs/GHYDRA_CHEATSHEET.md) is one line per command —
-  the 21 that get used most, then all of them, with the first line of each
-  command's `--help` as the summary. It is generated by
-  `scripts/gen_cheatsheet.py`, which fails if one of its hand-picked "most used"
-  commands stops existing.
-  The interesting part is the guard that came with it:
-  `scripts/check_doc_commands.py` reads every `ghydra …` line inside a Markdown
-  code fence — **326 commands across the documentation** — and resolves each group,
-  subcommand and flag against the Click tree, stopping at a pipe so `jq -r` is not
-  read as an option of ours and honouring `--dry-run/--apply` pairs. It found three
-  real documentation bugs: `ghydra triage` (the command is `ghydra inspect`),
-  `ghydra tools groups` (the `tools_*` group is MCP-only; the CLI has no such
-  command) and `ghydra functions rename --name` (the options are `--old-name` and
-  `--new-name`). All three would have been a usage error for a reader. Both checks
-  run inside `scripts/check_docs.py`, so CI fails when a document names a command
-  the CLI does not have.
-- **A generated reference of every error code — and the damage a bad tamper test
-  did**: [GHYDRA_ERRORS.md](docs/GHYDRA_ERRORS.md) lists **112 codes in 18 families**
-  with the side that produces each, the HTTP status it answers with, the message it
-  sends and the file:line that raises it. It is generated by
-  `scripts/gen_errors_doc.py` from the Java `Response.error(...)` calls (literal
-  codes and messages, a guard enforces both) and from the Python raises, and
-  `check_docs.py` fails when it is stale. The grouping is by **domain** — a prefix
-  with siblings is a subsystem (`BSIM`, `KUNA`, `X64DBG`); a lone prefix is a word
-  (`BAD`, `NO`, `READ`) and goes to the generic section, where a reader looks for
-  it. The eight medium guides also gained generated indexes (level 2), so every
-  document over a few pages now opens with its shape.
-  **The honest part:** proving the duplicate-heading guard worked, I appended a copy
-  of section 1 of [GHYDRA_CONCEPTS.md](docs/GHYDRA_CONCEPTS.md) to the end of the file
-  and "restored" it by removing the *first* match — which was the real section. The
-  index caught it immediately (it listed 2…10 and then 1), and the guide was
-  rebuilt from the commit that wrote it, with the section order asserted. A tamper
-  test has to restore from a known-good source, not from a replacement that cannot
-  tell the copy from the original; the restore script now does exactly that.
-- **The two big references are navigable, and their indexes are generated**:
-  `GHYDRA_CLI.md` (55 KB) and `GHIDRA_HTTP_API.md` (48 KB) now open with a table
-  of contents, produced by `scripts/gen_toc.py` from the headings and checked by
-  the docs guard — a renamed section cannot leave a dead index behind. Generating
-  it exposed two real defects that no test had caught: the CLI reference carried
-  the same 17-line section **eighteen times** (a copy/paste artifact, 12.5 KB of
-  duplication) and three sections duplicated at the same depth. Both removed, and
-  `check_docs.py` now fails a document that repeats a heading under the same
-  parent. New guide: [GHYDRA_OUTPUT.md](docs/GHYDRA_OUTPUT.md) — the four shapes
-  (text/JSON/table/report), the envelope, the `Next:` line, `GHYDRA_MCP_OUTPUT`,
-  JUnit/SARIF, and the exit codes of `assert` (0/1/2) and of the CLI.
-- **The documentation set, and the guards that keep it true**: the tool became
-  wide enough that a reader could not find the answer, so the documentation is now
-  a set with a map rather than a pile of files:
-  [DOCUMENTATION.md](docs/DOCUMENTATION.md) is the index (what to read for which job,
-  plus reading paths by audience), and five guides fill the gaps —
-  [GHYDRA_GETTING_STARTED.md](docs/GHYDRA_GETTING_STARTED.md) (install to a first
-  dossier, with real output), [GHYDRA_CONCEPTS.md](docs/GHYDRA_CONCEPTS.md) (the mental
-  model: three surfaces, the envelope, absence vs incompleteness, evidence
-  identity, budgets, tool profiles, what it is not),
-  [GHYDRA_RECIPES.md](docs/GHYDRA_RECIPES.md) (twelve jobs with commands and the trap
-  each one hides), [GHYDRA_TROUBLESHOOTING.md](docs/GHYDRA_TROUBLESHOOTING.md)
-  (symptom → cause → fix, including the known drift) and
-  [ARCHITECTURE.md](docs/ARCHITECTURE.md) (the tiers, the generated core, the rules).
-  The **tool catalogue is generated**: `scripts/gen_tools_doc.py` reads the tool
-  decorators, the docstring's first paragraph, the signature, the endpoint a body
-  names (following the helpers it calls), the workflow group and the real CLI path,
-  and writes [GHYDRA_TOOLS.md](docs/GHYDRA_TOOLS.md) — 134 tools, 61 named routes, 16
-  composed, 15 routed by argument, 42 local. `scripts/check_docs.py` now also
-  fails when that catalogue is stale and when a local link in the index points at
-  nothing; both directions were verified by tampering.
-- **The BSim surface after an independent review: five real bugs, one of them
-  mine to own**: a fresh-context review of the BSim and twin code found twelve
-  issues. Five mattered enough to fix before anything else.
-  **The ingest was broken** — the refactor that introduced `BSimDatabase` replaced
-  a `getMethod("numFunctions")` read with a `getField` read, and
-  `DescriptionManager.numFunctions` is a *method*: every ingest answered
-  `BSIM_SCAN_FAILED`, and my "94 functions in 3.1 s" claim had stopped being true
-  because the last live run predated the refactor. It works again (94/94,
-  re-measured live).
-  **A failure was reported as a success** — the action routes wrapped every
-  payload in `Response.ok`, so `success: true` sat on top of a failed ingest and
-  the bridge and the CLI printed a table of zeros; a failure now carries
-  `success: false`, its code, its reason and an honest status (400/409/503/500).
-  **`?dry_run=yes` applied the rename** — `Boolean.parseBoolean` answers false for
-  anything but "true", so the one parameter that protects the program was lenient
-  in the dangerous direction; only `true`/`false` are accepted, and anything else
-  is a 400 that changes nothing.
-  **`ghydra bsim ingest` and `ghydra bsim apply-names` never ran** — the CLI called
-  `client.post(..., params=...)`, which the client did not accept; `post` takes a
-  query string now, and all four BSim commands were re-validated end to end.
-  **The call-graph "trap" was our bug, not H2's** — the duplicate key came from
-  unsorted call-graph records; with Ghidra's own sort in place,
-  `track_call_graph=true` ingests 189 functions of `where.exe`, and both guides are
-  corrected.
-  Also fixed from the same review: the H2 handle leaked when the create or the
-  initialize failed; the program database was traversed outside the EDT (the
-  repo's rule); `apply-names` followed the first match instead of the most
-  similar; `diff` reported `BSIM_NO_DATABASE` when the engine itself was missing;
-  a pair whose address is unknown was called `moved`; `total_considered` counted
-  the notes walked instead of what BSim considered; and the twin could crash on
-  `--output twin.json`, recorded zero parameters for every function, called an
-  unverifiable snapshot "complete", could not find a snapshot by name, and its
-  `diff` presented phantom removals as fact. The mission dossier stopped claiming
-  "nothing was left undetermined" for a mission that stopped, and no longer says
-  "every conclusion holds" when nothing was re-read.
-- **The x64dbg fixture listens with a 128-deep backlog, not 5**: the remaining
-  local flake had a measurable cause. `ThreadingHTTPServer` listens with
-  `request_queue_size = 5`; a burst of connections fills that queue, the OS drops
-  the SYN, and the client sees a server that never answered — the same symptom as
-  a dead debugger. It is **not** port exhaustion: this machine's dynamic range is
-  16 384 ports and a full run leaves about 5 connections in TIME_WAIT, so the
-  queue was the limit. The fixture now uses a 128-deep backlog with address reuse,
-  waits until the port actually answers before a test uses it, and keeps its own
-  side of a reset under `GHYDRA_X64DBG_TEST_LOG`. Measured after the change: 8
-  clean runs in a row (13 in total) against 2 consecutive failures before it. The
-  retry in the harness from the previous round stays: the two answer different
-  halves of the problem.
-- **The BSim surface is documented where people look for it**: a new
-  `GHYDRA_BSIM.md` guide (setup, building a corpus, querying, applying a match,
-  comparing two versions, the five measured traps, and the commands that
-  reproduce every number), the five `/bsim/*` routes added to the HTTP reference
-  (§13) — they had no documentation at all — and `--twin` added to `TESTING.md`'s
-  suite list and its "runs without Ghidra" note. The features existed and were
-  validated; this makes them findable.
-- **The digital twin (R2), and the measurement that keeps it honest**:
-  `ghydra twin build|query|diff` take a **snapshot** of a binary — program,
-  functions, imports, exports, strings, counts, with the executable md5 and the
-  source instance as provenance — and answer questions **with no Ghidra
-  running**. Measured with `scripts/bench_twin.py` on two real binaries, which is
-  the criterion R2 was accepted under: `where.exe` **715x** faster for a name
-  search and **7993x** for one function by address (0.23 ms against 3.80 ms even
-  when the file is read each time); `whoami.exe` **359x** and **8337x**. A
-  snapshot is 47 KB for 104 functions and builds in 66 ms. The offline demo is
-  the point: with the Ghidra process gone, `twin query` still answers the
-  overview, a function by address, and imports by substring, and `twin diff`
-  compares two builds using **the same comparison** as the live `analysis_diff`
-  (`ghydra/core/diff.py`), so "what changed" has one definition on line and
-  offline. Two facts the live runs forced: `/program` had no md5 (the one thing
-  that says "same binary" across instances), now exposed additively; and a
-  snapshot can be *shorter than the API's own count* (104 functions listed
-  against 198 counted), so a twin records `functions_complete: false` in that
-  case — otherwise a diff would report phantom removals. What a twin cannot do
-  is stated next to the answer: it cannot decompile, read memory, or see a change
-  made after it was taken.
-- **BSim diff (R1, slice 4b), validated against a live Ghidra 12.2**:
-  `GET /bsim/diff`, `bsim_diff_versions` and `ghydra bsim diff` compare the open
-  program with another version **paired by signature** instead of by address —
-  the complement of `analysis_diff`, and the thing a signature database is
-  uniquely able to do: a function that moved address (or whose name was lost in
-  the rebuild) is reported as the same function relocated, not as one removal
-  plus one addition. Measured on `where.exe` against itself: 6 of 8 compared
-  functions paired as `same` in 2.4 s; the two imported thunks came back
-  `not_found`, which is honest — ingest stores only functions with a body.
-  Against a name that is not in the database, every function answered
-  `not_found` rather than an invented pair. The cost is one BSim query per
-  function (0.2-0.8 s each), so the walk is bounded (`max_functions`, default 25,
-  cap 500) and the answer reports how many functions were **not** compared. Two
-  classes were added from what the live run showed: `no_signature` (a function
-  with no body — a thunk, an external — cannot be in the database at all) is
-  separate from `query_failures` (the query itself failed), because "not in the
-  other version" would be a lie about the first.
-- **The x64dbg suite stops failing on a dropped loopback connection**: measured
-  in full local runs, a bridge-level x64dbg test failed every now and then —
-  twice in a row, on two different tests — with a transport reset underneath.
-  The fake plugin is stateless, so the *test* may repeat a call even where the
-  product must not: one helper (`tool_result`) sends the nine bridge-tool call
-  sites in `X64dbgBridgeTests` through the retry the suite already had, and the
-  tests that prove the product *does not* repeat a mutating tool are untouched
-  (`X64dbgRetryTests`). Three consecutive runs of the suite pass, one of them
-  taking 126 s because the retries were doing the work.
-- **BSim apply-names (R1, slice 4a), validated against a live Ghidra 12.2**:
-  `POST /bsim/apply-names`, `bsim_apply_names` and `ghydra bsim apply-names` name
-  a function after the stored function it most resembles. **The default is a dry
-  run** — the answer says `would_rename` and the program is untouched — and the
-  rename only happens with an explicit `dry_run=false`, through a
-  `TransactionHelper` transaction so it is undoable in Ghidra. Nothing is applied
-  below the similarity floor (default 0.8), a function already carrying the
-  matched name is reported instead of rewritten, and the match's similarity and
-  significance travel with the answer because the match is a heuristic.
-  Validated end to end: a function renamed locally to `my_local_name` produced
-  `would_rename` on the dry run (verified unchanged through `/functions/{addr}`)
-  and `applied: true` on the real call, after which the API reported the matched
-  name. Checks also found: `TransactionHelper` wraps refusals into a
-  `RuntimeException` (so the catch is one clause, with the reason read from the
-  cause), and its home is `eu.starsong.ghidra.util`, not the framework package.
-- **BSim query (R1, slice 3), validated against a live Ghidra 12.2**:
-  `GET /bsim/query`, `bsim_query` and `ghydra bsim query` ask the signature
-  database which stored functions look like one function of the open program,
-  and answer with BSim's own similarity and significance. Measured on the
-  database ingest created a round earlier: `where.exe`'s `FUN_140001010`
-  matched itself with **similarity 1.0 / significance 26.024 in 0.8 s** (0.2 s by
-  name), and an unknown name answered `BSIM_NO_FUNCTION` with the reason.
-  Reflective like the rest of BSim, and the shared half — opening a database,
-  creating it, finding the program's project location, cleaning up — moved into
-  `BSimDatabase` so ingest and query cannot drift. Three things only the live
-  run could tell: the executable name comes from `getNameExec()` (`getName()`
-  exists and answers null, which left every match without its binary), there is
-  no `getFunction(String)` in this series (the name lookup is a walk), and
-  `AddressFormatException` is checked — a malformed address is "not found", not
-  a failed request.
-- **BSim ingest (R1, slice 2), validated against a live Ghidra 12.2**:
-  `POST /bsim/ingest`, `bsim_ingest` and `ghydra bsim ingest` generate signatures
-  for the open program and insert them into the configured H2 database, creating
-  the database when it is absent. Measured on `where.exe`: **94 functions
-  inserted in 3.1 s**, a 120 KB `.mv.db`, and a second ingest answered as
-  `already_present` with 0 inserted — because BSim deduplicates by executable
-  fingerprint and a satisfied goal is not a failure.
-  The implementation is **entirely reflective** (`H2FileFunctionDatabase`,
-  `CreateDatabase`, `GenSignatures`, `InsertRequest` are internal API that has
-  moved between series, and the extension builds against 11.x *and* 12.x), and it
-  follows Ghidra's own script exactly — which the live run corrected twice: the
-  `GenSignatures` boolean is `trackcallgraph`, not a cache flag, and a generator
-  without `setVectorFactory(...)` dies on a database created in the same call.
-  Three things the live run also found: `initialize()` on a missing H2 file
-  answers "Database does not exist" (so ingest creates it with Ghidra's
-  `CreateDatabase` command and the `medium_nosize` template); `database_exists`
-  was checking the bare path while H2 writes `<path>.mv.db`, so a 120 KB
-  database was reported as missing; and a database created with
-  `trackcallgraph=true` rejects the insert with a duplicate
-  `callgraphtable(src,dest)` key on ordinary recursion — so the call graph is
-  **off by default** and turning it on is an explicit request.
-- **I1 complete: eleven modules of pure logic in one core, generated into the
-  bridge**: `digest`, `runbook`, `hints`, `cache`, `diff`, `fleet`,
-  `capabilities`, `contextpack`, `telemetry`, `taint` and `mission` now have
-  **one definition** under `ghydra/core/`, and the bridge carries a copy
-  produced by `scripts/gen_core.py` (guarded by `--check` in both CI pipelines).
-  What this buys is a single place to fix a rule: the digest, the cache key, the
-  capability ranking, the token budget, the fleet merge, the taint confidence
-  count and the mission dossier are no longer written twice.
-  **It does not shrink the bridge**, and the tests say so honestly: the
-  generated copy *is* the module's body plus one delegating wrapper, so each
-  slice adds a few lines. The claims the suites enforce are the ones that
-  matter — the region is byte-identical to a fresh generation, a core name has
-  no definition outside its region, a wrapper with a public name must delegate,
-  and every suite of the migrated module passes **unedited**.
-  Found and fixed on the way: the generator stripped imports, so a core module
-  calling an imported function left a bare name in the region (now refused, with
-  the fix in the error); a splice anchored at "the next def" swallowed the
-  runbook tools (caught immediately by `test_runbook.py`); and a
-  `Measure-Object`-style line count hid 2 000 blank lines, which made an earlier
-  "the bridge is smaller" claim wrong — the real numbers are in this entry.
-- **The pure half of source-to-sink reasoning into the single core (I1,
-  slice 9)**: `ghydra/core/taint.py` now owns what a *call site* is (the call
-  whose target is the address, or whose target name contains the function), how
-  an address sorts (numerically, with unparseable values last instead of an
-  exception that loses the report), how hypotheses are counted by confidence,
-  and the disclaimer that says a heuristic is not a verdict. The I/O — reading
-  the source, the sink, the calls and the call graph — stays in the callers, so
-  the extraction is deliberately partial; `test_taint.py` passes **unedited**,
-  which is what proves the moved part behaves the same.
-- **The telemetry report into the single core (I1, slice 8)**: the window
-  filter, the per-tool aggregate and the advice moved into
-  `ghydra/core/telemetry.py`, which is told the current time instead of reading
-  the clock — so "the last 7 days" means the same thing on both surfaces and a
-  test can pin it. The bridge's tool now reads the file and hands the rows
-  over; the CLI does the same. The advice is unchanged in substance (a
-  suggestion appears only when the log shows the pattern a composed tool
-  replaces), but it is decided in one place.
-- **The context pack into the single core (I1, slice 7)**: the question
-  classifier, the token estimate and the budget composer moved whole —
-  `ghydra/core/contextpack.py` is the definition, `ghydra/contextpack.py` is a
-  re-export shim and the bridge delegates. The two decisions that matter are
-  now made once: the section the question is about is **truncated, never
-  dropped**, and every other section is dropped whole with its reason, so the
-  "omitted and why" list is the same on both surfaces.
-- **Telemetry now states what it records, in the text the user reads**: the
-  `telemetry_summary` docstring and the module docstring list the six fields
-  (tool name, timestamp, success, error code, duration, answer-size estimate),
-  say explicitly that arguments, results, paths, symbols, addresses and binary
-  content are never written, and give both controls (`GHYDRA_TELEMETRY=0`,
-  deleting the file). "Local only" is a claim; the fields are what can be
-  checked, so the fields are now in the text.
-- **The capability rules into the single core (I1, slice 6)**: the ATT&CK/MBC
-  triage module was pure by construction — envelopes in, report out — so the
-  whole thing moved: `ghydra/core/capabilities.py` now owns the ten rules, the
-  evidence helpers and the composer, `ghydra/capabilities.py` is a re-export
-  shim (every existing import still works) and the bridge delegates to the
-  generated copy. The step also showed the guard doing its job twice: a helper
-  the generated region no longer owned was left referenced
-  (`name '_cap_items' is not defined`), which the capability suite caught at
-  once, and the "no second copy" invariant had to be refined — a *delegating*
-  wrapper with the public name is exactly what this mechanism produces, so the
-  test now accepts it only when its body calls the generated name.
-- **The fleet merge into the single core (I1, slice 5)**: `ghydra/core/fleet.py`
-  owns the two rules that make a fleet answer trustworthy — the merge is by
-  **file identity** (two ports serving one program are one row, and their
-  disagreement is reported rather than overwritten) and a port that did not
-  answer is **carried** as unreachable ("not present" is not "not asked"). Both
-  surfaces now collect the answers and hand them to the same merge, so the same
-  fleet cannot group differently on the CLI and through the bridge. The step
-  also replaced a brittle test — one that counted a field tuple by text, which
-  became legitimately two once fleet owned its own tuple — with one that scales:
-  **no core function may be defined twice in the bridge**.
-- **The snapshot comparison into the single core (I1, slice 4)**:
-  `ghydra/core/diff.py` owns what "what changed?" means — a function is
-  identified by its address (a rename is not an add plus a remove), imports and
-  strings are compared as sets of names (order, repeats and empty values are
-  noise), and a section is only complete when *both* listings were read to their
-  end. `analysis_diff` and the mission both use it through one function, and the
-  bridge delegates to the generated copy. The step also cost a lesson worth
-  recording: an anchor that ended at "the next `def`" swallowed the three
-  runbook tools that live after the function, which the runbook suite caught at
-  once (`runbook_record` no longer registered). The splice now ends at the next
-  tool decorator, and the suites that assert tool registration are the guard
-  against repeating it.
-- **`examples/`: reverse engineering as a CI test**: the smallest useful
-  example of the thing a pipeline can gate on — `examples/asserts.json` (eight
-  assertions covering every kind, each with the `message` that explains *why* it
-  exists) and `examples/ci/analyze.yml` (a GitHub Actions template that starts a
-  headless instance, runs the assertions, uploads **SARIF** to code scanning and
-  keeps the JUnit report, stopping the run with `if: always()`). Validated
-  end-to-end against a live Ghidra 12.2 headless run: 8 assertions, 3 passed /
-  5 failed, exit 1, and a SARIF 2.1.0 document with one result per failure.
-  Writing the example found two real bugs: `reaches` and `has_xref_to` let a 404
-  **escape** instead of producing a verdict (a missing name now fails the
-  assertion, while a transport error still raises), and a `reaches` assertion
-  printed `reaches None` because it has no single `name` (it is labelled
-  `main -> strcmp` now). The scan evidence also stopped conflating distinct
-  names with entries. `test_assertions.py` keeps the example valid so it cannot
-  rot.
-- **Single core, generated into the bridge (I1, slice 1)**: the bridge ships as
-  one file and cannot import `ghydra`, so the pure helpers were duplicated — the
-  canonical-JSON digest alone existed three times (runbook, cache, and the two
-  that drifted apart). I1 replaces the copies with **one source and a
-  generator**: `ghydra/core/digest.py` defines the canonical form, its SHA-256
-  and the "stable view" of an answer, and `scripts/gen_core.py` writes them into
-  the bridge between markers as `_core_*`. The named helpers
-  (`_runbook_digest`, `_cache_digest`, …) are now one-line delegations, so a fix
-  lands in one place. The mechanism is guarded where drift would appear: the
-  generator has a `--check` mode, `test_core.py` asserts the region is current
-  and byte-identical to a fresh generation **and** that a tampered region is
-  detected, and **both CI pipelines run the check** before compiling. The rule
-  for the core: pure functions only — a generated copy of a pure function is
-  identical on both sides, which is what makes it safe.- **Fleet queries (R7)**: a question can now be asked of several instances at
-  once. `ghydra fleet overview|has-function|has-import|has-string|xrefs-to
-  --ports 8192,8193` and the bridge tool `fleet_query(kind, ports, target)`
-  merge the answers **by file identity** — the program's `programId`, falling
-  back to its path — so two ports serving the same binary are one row (with both
-  ports listed, and a disagreement between them reported), while two binaries
-  that merely share a name in different projects stay apart. A port that does
-  not answer is reported as `unreachable`, never dropped: "not present" must not
-  be confused with "not asked". An import/string absence is only claimed from a
-  listing read to its end (`complete: false` otherwise). `test_fleet.py` covers
-  the identity fallbacks, the merge, the disagreement, the unreachable member,
-  the truncated listing, the CLI and the bridge — and asserts both sides produce
-  the same report.- **Decompile cache on disk (I11)**: decompilation is the expensive call in
-  this API, and a session that revisits a function paid for it again.
-  `ghydra functions decompile --cache` (CLI) and
-  `functions_decompile(use_cache=True)` (bridge) now serve an unchanged program
-  from `~/.ghydra/cache`, keyed on the program's identity — `programId`,
-  `path`, `language`, `imageBase`, `creationDate` and the reported statistics —
-  so a different binary never reads another one's answer. The server exposes no
-  modification counter, so the cache is **opt-in**, has a **max age** (24 h by
-  default, `--max-age 0` forces a fresh answer), is **bounded** (50 MB, oldest
-  evicted first) and can be inspected and cleared with `ghydra cache
-  stats|path|clear` (`cache_stats` / `cache_clear` on the bridge). A cache
-  failure is never a failed call: a full disk costs a re-decompile. The note
-  that an answer came from the cache goes to **stderr**, so the answer itself
-  stays parseable. `test_cache.py` covers the identity, the key, the age, the
-  bound, eviction, the unwritable disk, the CLI and the bridge, and asserts the
-  two sides compute the same key and read each other's entries.- **`mission_start` on the bridge**: mission mode now has a tool as well as a
-  CLI, so the three surfaces agree. `mission_start(goal, max_calls, max_tokens,
-  output, verify)` runs the same plan through the bridge's own primitives, writes
-  the dossier to `~/.ghydra/missions/<id>.md` and answers with it. The bridge
-  version is stateless (no checkpoint/resume — that is the CLI's), and the
-  parity test asserts both sides produce the same hints, the same findings, the
-  same skipped steps and the same stop on a spent budget. The `mission`
-  namespace joins the `core` group, so it is always visible.- **The `--scripts` suite no longer flakes on its own fixture**: the fixture
-  handed its port to a test before `serve_forever()` was accepting connections,
-  and every immediate retry landed in that same closed window - which read as an
-  unretryable `CONNECTION_ERROR` in roughly two runs out of five on this
-  machine. It now waits until the port actually answers, listens with a backlog
-  of 128 (the bridge opens a connection per call), and retries with exponential
-  backoff on both the bridge and the CLI paths. Six consecutive suite runs and
-  two full `--no-ghidra` runs are clean.- **Mission mode (R8)**: `ghydra mission start -g "<objective>"` runs a plan
-  (program fingerprint, capability leads, source-to-sink hypotheses, address
-  context) against a **hard budget** of calls, tokens and wall-clock, and writes
-  an auditable dossier. It asks the user nothing: a doubt becomes an `unknown`
-  finding with its reason. Before keeping a conclusion it **re-reads its own
-  evidence** and compares the digests — a finding whose evidence moved is
-  reported as `unverified` (and the command exits 1), never silently kept. The
-  state is checkpointed after every step (`~/.ghydra/missions/<id>.json`), so
-  `ghydra mission resume` continues without re-paying the calls already made and
-  may raise the budget; `ghydra mission show` reads a dossier without calling
-  anything. Hints (source, sink, address, function) are parsed from the goal
-  text — nothing is inferred beyond the words. `test_mission.py` covers the hint
-  parser, the budget stop, a plan with no source/sink (an unknown, not a clean
-  bill), a moved-evidence `unverified`, checkpoint round-trip and resume, the
-  dossier, and the CLI. The bridge keeps exposing the primitives the plan
-  composes; a `mission_start` bridge tool is the remaining follow-up.- **Source-to-sink hypotheses (R5)**: `analysis_taint(source, sink)`
-  (`ghydra analysis taint -s recv -t system`) composes the references to each
-  name, the pcode of the functions that call them and the call graph into
-  candidate data flows, each with its confidence (`direct` when the sink call
-  follows the source call in one function, `reachable` when a call path
-  connects the two functions, `weak` when the sink runs before the source or
-  the bounded search gave up) and the evidence addresses. Three honesty rules
-  are enforced by the tests: a sink that precedes the source is never a flow, a
-  truncated search is `weak` rather than a proven path, and "nothing found" is
-  never rendered as safety. The bridge duplicates the engine (single-file
-  rule); `test_taint.py` asserts both sides produce the same report.- **Reproducible runbooks and `analysis_diff` (R6)**: `ghydra runbook
-  record -s steps.json` turns a sequence of API calls into a versionable JSONL
-  file (`<program>.ghydrarb.jsonl`) that records a digest of every answer;
-  `ghydra runbook replay` re-runs it and says which answers are identical,
-  which moved and which now fail (`--fail-on-change` makes it a CI gate), and
-  `ghydra runbook show` reads one without calling anything. `analysis_diff`
-  (CLI `ghydra analysis diff --a-port ... --b-port ...`, bridge
-  `analysis_diff`) compares two instances on the facts the API already returns
-  - program fingerprint, functions by address (a rename is not an add plus a
-  remove), imports and defined strings - so a patch diff or a firmware
-  regression becomes a report. A listing that could not be read to its end is
-  reported as a floor, never as a removal. The bridge duplicates the logic
-  (single-file rule); `test_runbook.py` asserts the two sides produce the same
-  digest, the same comparison view and the same diff.- **Read-only mode, dry-run and a local audit trail (I12)**: a Ghidra started
-  with `-Dghidra.mcp.readOnly=true` or `GHYDRA_READ_ONLY=1` refuses every
-  `POST`/`PUT`/`PATCH`/`DELETE` with `403 READ_ONLY_MODE` - one `before`
-  handler, so a mutation endpoint added later is covered without anyone
-  remembering to ask - and every mutation is appended to a local JSONL trail
-  (`~/.ghydra/audit.jsonl`, `GHYDRA_AUDIT_LOG`, disable with `GHYDRA_AUDIT=0`):
-  timestamp, request id, method, path, status, duration and port, capped at
-  ~1 MB and never carrying the request body. `/capabilities` advertises both
-  (`features.read_only`, `features.audit_log`), the CLI answers `--dry-run`
-  with the exact request it would send (client-side: the server never sees it)
-  and `ghydra audit` reads the trail back. `test_read_only.py` covers the
-  client, the CLI, the reader and the Java contract; `ReadOnlyGuardTest`
-  covers the method set and the JSON escaping.
-- **`ghydra assert`: CI assertions with JUnit and SARIF (I16)**: a JSON file
-  of assertions (`has_import`, `no_import`, `has_string`, `no_string`,
-  `has_function`, `no_function`, `has_xref_to`, `reaches`) is evaluated against
-  the running instance and rendered as text, JUnit XML (`--format junit`) or
-  SARIF 2.1.0 (`--format sarif`), exiting non-zero on a failure. A truncated
-  listing is reported as *inconclusive*, never as a pass: proving the absence
-  of an import requires reading the whole list. `test_assertions.py` covers
-  the loader, the evaluator, both renderers and the command.
-- **`?count=false` on the listings (I10)**: the symbol and function listings
-  used to walk the whole program to compute `meta.total`. `?count=false`
-  skips that walk: the page is still exact, `meta.total` is absent and
-  `meta.counted` is `false`, and the `next` link comes from a full page
-  instead of a total that was never computed. `functions_list` and
-  `symbols_list` expose it as `count`, and `PaginatedResultTest` pins the
-  counted/uncounted rules.
-- **Local telemetry and `ghydra stats` (I14)**: the bridge records what it
-  actually did — one JSON object per call (tool, ok, error code, latency,
-  estimated tokens) under `~/.ghydra/telemetry.jsonl`, capped at ~1 MB, never
-  sent anywhere and disabled with `GHYDRA_TELEMETRY=0`. The new
-  `telemetry_summary` tool and `ghydra stats` aggregate it (calls, failures,
-  latency and token volume per tool, the error codes seen) and **recommend the
-  composed tool when the log shows the pattern one replaces** — 4+ inspection
-  calls point at `analysis_context_pack`, 4+ listings at `programs_overview`,
-  4+ decompiles at `functions_batch_decompile`, and a slow tool at
-  `async_mode`. The recorder swallows every failure: telemetry never breaks a
-  call. `test_telemetry.py` covers the recorder, the bound, the state dir, the
-  disable switch, the summarizers' parity and the CLI/tool renderers;
-  `--telemetry` joins `--no-ghidra`.
-- **Progressive tool discovery (I15)**: 120 tools in one list degrade tool
-  selection. The bridge now groups them by workflow (`core`, `functions`,
-  `data`, `types`, `scripts`, `headless`, `kuna`, `x64dbg`) and loads only the
-  groups a session asks for — with `GHYDRA_TOOL_GROUPS=core,functions` at
-  startup, or at runtime. Four meta-tools are always loaded:
-  `tools_groups` (the groups, their sizes and whether they are loaded),
-  `tools_search` (searches the FULL catalogue, including hidden tools, and
-  says which group to load), `tools_load_group` and `tools_unload_group`.
-  `core` can never be unloaded, and the meta-tools survive every profile, so a
-  hidden tool is always findable and recoverable. The catalogue is captured
-  before any profile is applied; a client that caches the list must re-read it
-  after a runtime change (a restart with the env var gives a guaranteed
-  profile). `test_tool_groups.py` covers the map, the profile switch, the
-  stash/restore and the four tools; `--tool-groups` joins `--no-ghidra`.
-- **`context_pack`: one answered question within a token budget (R3)**: the
-  `analysis_context_pack` tool and `ghydra analysis context-pack` compose the
-  endpoints a question needs into ONE ranked dossier — three question models
-  (what it does / where the data comes from / what changed, PT or EN) with
-  exact-endpoint retrieval, graph expansion (callers/callees/xrefs), an
-  approximate token budget, **citable addresses** for every section, and an
-  explicit list of what was omitted and why. A section that fails is reported
-  with its error code, never hidden. The builder lives in
-  `ghydra/contextpack.py` with a copy in the bridge (parity asserted by
-  `test_context_pack.py`).
-- **Actionable HATEOAS (I8)**: every text answer now ends with a `Next:` line
-  built from the envelope's `_links` — the hrefs carry real values, so the
-  suggestion is the bridge call that follows (`functions_decompile(address="…")`),
-  including the next page for paginated listings. A link that does not map to a
-  registered tool is left out: a wrong suggestion is worse than none.
-- **`--json` anywhere and UTF-8 output (I4)**: the CLI entrypoint reconfigures
-  stdout/stderr to UTF-8 with `errors="replace"` before any output, so Rich tables
-  no longer raise `UnicodeEncodeError` on a cp1252 Windows pipe, and a custom root
-  group lifts a `--json` found in any position into `GHYDRA_JSON` — both
-  `ghydra --json functions list` and `ghydra functions list --json` work now, and so
-  does the environment variable alone. `test_errors.py` runs the CLI under
-  `PYTHONIOENCODING=cp1252` to prove it.
-- **Machine-readable error contract (I9)**: a static guard asserts every
-  `Response.error(...)` call site in the Java sources passes a non-empty,
-  code-shaped literal as its first string argument — no handler can ship an error an
-  agent cannot branch on — and the bridge's `format_error` now keeps the envelope's
-  request id in the text (`Error [CODE]: msg (request id: ...)`), so an agent that
-  wants the server's log line for the exact failure has the handle to ask with.
-- **Background tasks for long operations (I7)**: `functions_batch_decompile`
-  and `headless_start` gain `async_mode=True` — a task handle (`T-0001`)
-  comes back immediately, the blocking call runs in a background thread, and
-  the new `tasks_get`/`tasks_list`/`tasks_cancel` tools poll and cancel it.
-  The synchronous default is unchanged (a plain call behaves exactly as
-  before). Cancelling is honest about what it stops: the waiting, not the
-  server-side work — a batch keeps decompiling and a headless run keeps
-  running (that is what `headless_stop` is for); the task's result is
-  discarded. The registry generalizes the Kuna job pattern and lives in the
-  bridge process, like the jobs. `test_tasks.py` covers the lifecycle, the
-  cancel semantics, the fallback and the tool contract; `--tasks` joins
-  `--no-ghidra`.
-- **Capability triage (R4)**: `analysis_capabilities_summary` (bridge),
-  `ghydra analysis capabilities-summary` (CLI) composes the program, imported
-  symbols and defined strings into one ranked ATT&CK/MBC-style report — each
-  technique with its confidence, score and the evidence (name + address) behind
-  it, plus the explicit "a lead for an analyst, not a verdict" method line. A
-  technique is only reported when an import or string actually matches one of
-  the 10 rules; failures are listed, never hidden. The rule pack lives in
-  `ghydra/capabilities.py` with a byte-identical copy in the bridge (parity
-  asserted by `test_capabilities_summary.py`, the Kuna-taxonomy pattern);
-  `--capability-summary` joins `--no-ghidra`. No new endpoint: it composes
-  `/program` + `/symbols/imports` + `/strings`, so `API_VERSION` stays 3000.
-- **Honest CI (I6)**: `run_tests.py` now accepts any number of suite flags in one
-  invocation and reports each result separately, plus `--no-ghidra`, which expands
-  to the suites that always execute. Both the GitHub Actions and Gitea Actions
-  `build.yml` install the Python package and run exactly that set on every push/PR,
-  so a green run is real evidence instead of a summary made of skipped suites.
-  `test_runner.py` covers the new multi-flag behaviour and the `--no-ghidra`
-  contract; `TESTING.md` documents it.
-- **Documentation drift guard (I13)**: `scripts/check_docs.py` counts
-  `@mcp.tool()`/`@mcp.prompt()`/`@mcp.resource()` and `FORMATTERS` entries from the
-  AST, counts REST routes in the Java resources, and compares them with the
-  "N tools in M namespaces" claims in `README.md` and `AGENTS.md`. It also runs
-  `scripts/version.py --check` and verifies that `ghydra/x64dbg.py` uses
-  `__version__` instead of a second hardcoded release number. Wired into CI as the
-  `--docs` suite (part of `--no-ghidra`); `test_docs.py` covers the pure checks.
-- **Sync with upstream v3.1.1**: incorporates the merged PyGhidra fix (PR #12)
-  plus the maintainer's runtime-preservation and regression work.
+- **The suites take the instance they are told to.** All of them honor
+  `GHYDRAMCP_TEST_PORT` now; the HTTP, data, comments and REA suites hardcoded
+  8192, and the instance that serves a program is not always the first one.
+- **The suites live in [`tests/`](tests/)** and the runner builds every suite
+  command from one helper; the documentation and the reference pages moved to
+  [`docs/`](docs/), with a guard that resolves **every local link** in every
+  tracked document.
+- **CI is honest**: the runner reports each suite separately, and `--no-ghidra`
+  expands to the suites that always execute — a green run is evidence, not a
+  summary of skips.
+- **The x64dbg fixture** listens with a 128-deep backlog and waits until the
+  port answers, and the client retries a dropped loopback connection — the
+  machine resets about one in fourteen, and that is not the code.
 
 ## [3.1.1] - 2026-11-07
 
