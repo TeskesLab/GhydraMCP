@@ -1,5 +1,5 @@
 """GhydraMCP CLI package."""
 
-__version__ = "3.36.8"
+__version__ = "3.36.9"
 
 __all__ = ["__version__"]

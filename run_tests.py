@@ -1016,6 +1016,31 @@ def run_target_tests():
     return passed
 
 
+def run_cli_failure_tests():
+    """Run the command-failure suite — no command may let an exception out."""
+    print_header("Running CLI Failure Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_cli_failures.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running CLI failure tests: {e}")
+        return False
+
+
 def run_progress_tests():
     """Run the progress reporter suite — what a long step is doing."""
     print_header("Running Progress Tests")
@@ -1128,6 +1153,7 @@ NO_GHIDRA_SUITES = (
     "--doctor",
     "--launcher",
     "--progress",
+    "--cli-failures",
 )
 
 SUITES = {
@@ -1170,6 +1196,7 @@ SUITES = {
     "--doctor": run_doctor_tests,
     "--launcher": run_launcher_tests,
     "--progress": run_progress_tests,
+    "--cli-failures": run_cli_failure_tests,
     "--gateway": run_gateway_tests,
 }
 

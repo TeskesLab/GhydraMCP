@@ -1302,3 +1302,23 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
   that failed, had a third thing to be misled by. It says it failed, and how
   long it lasted, and it re-raises. The reporter had no test at all; it has one
   now, and the package has no module left that no test reaches.
+
+- **`ghydra session open` answered with a traceback.** The session layer starts
+  a headless run, and the headless layer raises `HeadlessError` — a **sibling**
+  of `SessionError`, not a subclass, so the command's `except SessionError` did
+  not catch it and the user saw a stack trace instead of "no such binary". The
+  session layer now translates the provider's failure into its own taxonomy and
+  keeps the code, so the caller has one type to handle and the reason is still
+  machine-readable.
+- **No command was tested at the level the user runs it.** 26 of the 40 command
+  modules were reached by no test at all, and the `GhidraError` mistake in the
+  target command survived exactly because of that. A new suite walks the whole
+  Click tree — **155 leaf commands** — with nothing serving, and asserts that
+  **no command lets an exception out**: a command may answer 0 or 1, but it may
+  not crash. The walk found the `session open` traceback.
+  The network is cut at the HTTP adapter (the client talks through a session,
+  and the instance discovery builds a client of its own, so cutting `requests.get`
+  missed both) and the walk runs in a temporary directory: the evidence export
+  writes its bundle into the current directory, and the walk used to leave
+  `default-evidence.json` and `default-evidence.md` in the repository root. The
+  walk went from **611 s to 2.5 s**, and a bound in the test keeps it there.
