@@ -1016,6 +1016,31 @@ def run_target_tests():
     return passed
 
 
+def run_formatter_interface_tests():
+    """Run the formatter interface suite - the base and its two children."""
+    print_header("Running Formatter Interface Tests")
+
+    try:
+        result = subprocess.run(
+            suite_script("test_formatter_interface.py"),
+            capture_output=True,
+            text=True
+        )
+
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+
+        return result.returncode == 0
+    except Exception as e:
+        print(f"Error running formatter interface tests: {e}")
+        return False
+
+
 def run_formatter_tests():
     """Run the formatter suite - every formatter, with its own tool's answer."""
     print_header("Running Formatter Tests")
@@ -1206,6 +1231,7 @@ NO_GHIDRA_SUITES = (
     "--cli-failures",
     "--bridge-tools",
     "--formatters",
+    "--formatter-interface",
 )
 
 SUITES = {
@@ -1251,6 +1277,7 @@ SUITES = {
     "--cli-failures": run_cli_failure_tests,
     "--bridge-tools": run_bridge_tool_tests,
     "--formatters": run_formatter_tests,
+    "--formatter-interface": run_formatter_interface_tests,
     "--gateway": run_gateway_tests,
 }
 

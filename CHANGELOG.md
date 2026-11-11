@@ -1351,3 +1351,10 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
   formatter with its own tool: the tool is called with the network cut, its
   answer goes into its formatter, and the formatter has to answer — and it has
   to answer for an **error** too, because any tool can fail.
+
+- **Nine output methods lived only on the two children of the base.** The rule
+  for adding an endpoint says the output method goes on `BaseFormatter` **and**
+  on both `JSONFormatter` and `TableFormatter`. Nine were on both children and
+  **not on the base** — and the base is the interface, so a third formatter
+  would not have been asked for them at all. The base declares them now, and a
+  test keeps the three sets in step.
