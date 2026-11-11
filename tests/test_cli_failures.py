@@ -21,8 +21,8 @@ Two things keep the walk honest and cheap:
   repository.
 """
 
-import io
 import os
+import shutil
 import socket
 import sys
 import tempfile
@@ -229,6 +229,41 @@ class CommandFailureTests(unittest.TestCase):
         # ports that are not there.
         self.assertLess(took, 120.0,
                         f"the walk took {took:.0f}s; it is meant to be cheap")
+
+    def test_the_walk_passes_on_a_machine_without_ghidra(self):
+        """The CI has no Ghidra, and the failure it showed was here.
+
+        `session open` fails while the runner is being **built** — the
+        installation is looked for there — so the provider's error escaped the
+        session layer on that machine and not on this one. The walk is run with
+        the lookup failing, which is what the CI sees.
+        """
+        from ghydra.launcher import LauncherError
+
+        def no_ghidra(*arguments, **keywords):
+            raise LauncherError("no Ghidra installation found")
+
+        workspace = tempfile.mkdtemp(prefix="ghydra-cli-walk-")
+        try:
+            with mock.patch.dict(os.environ,
+                                 {"GHYDRA_STATE_DIR": workspace}):
+                patches = _no_network()
+                for patcher in patches:
+                    patcher.start()
+                try:
+                    with mock.patch("os.getcwd", return_value=workspace):
+                        with mock.patch("ghydra.launcher.find_ghidra_home",
+                                        no_ghidra):
+                            checked, failures = self._walk()
+                finally:
+                    for patcher in patches:
+                        patcher.stop()
+        finally:
+            shutil.rmtree(workspace, ignore_errors=True)
+        self.assertGreater(checked, 100)
+        self.assertEqual([], failures,
+                         f"{len(failures)} command(s) let an exception out "
+                         "without an installation")
 
     def test_the_walk_reaches_every_command(self):
         """The guard above is only as good as the walk."""

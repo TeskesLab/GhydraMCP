@@ -1330,3 +1330,10 @@ Changes since the last published TeskesLab release, [`v2.4.1`](https://github.co
   may refuse on purpose (the MCP layer turns that into an error answer for the
   agent, with the message the tool wrote), but it may not raise a `NameError`
   or an `AttributeError` on the way to reporting the failure.
+
+- **The session layer's fix did not cover the whole provider.** The translation
+  of the headless failure into the session's own taxonomy wrapped the *start* of
+  the run, but the installation is looked for while the runner is **built** — so
+  on a machine without Ghidra (the CI) the failure came from the constructor and
+  escaped anyway. The CI caught it; this machine could not, because it has an
+  installation. The walk now runs in both conditions.

@@ -395,6 +395,47 @@ class SessionTests(_StateDirTestCase):
         self.assertNotEqual(first, other)
         self.assertTrue(first.startswith("s-"))
 
+    def test_a_provider_failure_is_translated_into_a_session_error(self):
+        """The provider's error must not escape the layer that owns it.
+
+        `HeadlessError` and `SessionError` are siblings, so the CLI's
+        `except SessionError` did not catch it and the user saw a traceback
+        instead of the reason.
+        """
+        def refuse(*arguments, **keywords):
+            raise headless.HeadlessError("no such binary",
+                                         code="HEADLESS_NO_FILE")
+
+        original = sessions._build_runner
+        sessions._build_runner = refuse
+        self.addCleanup(lambda: setattr(sessions, "_build_runner", original))
+
+        with self.assertRaises(sessions.SessionError) as caught:
+            sessions.open_session("C:\\bin\\missing.exe", name="missing")
+        self.assertEqual("HEADLESS_NO_FILE", caught.exception.code)
+        self.assertIn("no such binary", str(caught.exception))
+
+    def test_a_failure_while_building_the_runner_is_translated_too(self):
+        """The installation is looked for while the runner is built.
+
+        On a machine without Ghidra the failure comes from there and not from
+        the run — and the CI has no Ghidra, so this is the path it takes.
+        """
+        def refuse(*arguments, **keywords):
+            raise headless.HeadlessError(
+                "no Ghidra installation found. Set GHIDRA_HOME, or pass "
+                "--ghidra-home with the path of the installation.",
+                code="HEADLESS_NO_LAUNCHER")
+
+        original = sessions._build_runner
+        sessions._build_runner = refuse
+        self.addCleanup(lambda: setattr(sessions, "_build_runner", original))
+
+        with self.assertRaises(sessions.SessionError) as caught:
+            sessions.open_session("C:\\bin\\cmd.exe", name="cmd")
+        self.assertEqual("HEADLESS_NO_LAUNCHER", caught.exception.code)
+        self.assertIn("GHIDRA_HOME", str(caught.exception))
+
     def test_opening_a_session_starts_a_run(self):
         """Opening a session starts the run and remembers it."""
         session = sessions.open_session("C:\\bin\\cmd.exe", name="cmd")
