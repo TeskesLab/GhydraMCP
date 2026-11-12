@@ -43,6 +43,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Remove obsolete fixed-count tool/formatter tests that rejected valid catalogue
+  additions in CI; retain the per-tool failure-handling and formatter checks.
 - Bounded BSim batch/filter queries now fit the HTTP parser after URL encoding,
   including maximum-length JSON and Unicode filters; query limits are unchanged.
 - Partial native instruction captures retain unmatched rows as unknown/unobserved

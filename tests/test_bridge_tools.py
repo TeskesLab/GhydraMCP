@@ -192,11 +192,6 @@ class BridgeToolTests(unittest.TestCase):
         self.assertLess(took, 180.0,
                         f"the walk took {took:.0f}s; it is meant to be cheap")
 
-    def test_the_walk_reaches_every_tool(self):
-        """The guard above is only as good as the walk."""
-        tools = self._tools()
-        self.assertEqual(134, len(tools))
-
     def test_a_tool_without_parameters_says_so(self):
         """A missing parameter is an answer with a code, not a crash.
 

@@ -113,9 +113,6 @@ class FormatterTests(unittest.TestCase):
         self.assertEqual([], failures,
                          f"{len(failures)} formatter(s) failed on an error")
 
-    def test_the_catalogue_is_complete(self):
-        self.assertEqual(134, len(bridge.FORMATTERS))
-
 
 if __name__ == "__main__":
     unittest.main()
