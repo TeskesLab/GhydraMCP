@@ -43,6 +43,9 @@ ghydra --json functions list | jq '.result[0]'
   `connections list` and approved profile IDs only. Never read credential files,
   put credentials in URLs/argv/environment, or enable scripts on credential workers.
   Separate worker UID/host and authenticated API transport are required for isolation.
+  Native caches require one Ghidra identity per server host:port and one PKI
+  certificate per worker JVM. Use separate workers for different identities;
+  restart the credential-bearing worker after credential rotation.
 - Query: `ghydra --port TARGET --json bsim query --profile CORPUS --name FUNCTION`.
   Status is configuration only; a real query must succeed. BSim requires a native
   signature-capable decompiler; ordinary C decompilation is not proof (the tested
@@ -59,6 +62,8 @@ ghydra --json functions list | jq '.result[0]'
   open Program instance, not a filename/path; Next carries both guards.
   Ranking is page-local. For selected functions, use `bsim batch-query` with
   repeated `--address` (MCP `bsim_batch_query` takes JSON text `addresses`).
+  Preserve qualified addresses such as `ram::0x1000` from results; both CLI and
+  MCP accept that canonical form.
   Both share the query filters and return source-bound match IDs. At most 100
   sources and 200 candidate slots per request; skips/errors/caps are incomplete,
   never no-match evidence. No overview/batch operation applies changes.
@@ -94,6 +99,30 @@ ghydra --json functions list | jq '.result[0]'
 
 References: [connections](../../docs/GHYDRA_CONNECTIONS.md),
 [repositories](../../docs/GHYDRA_REPOSITORIES.md), [BSim](../../docs/GHYDRA_BSIM.md).
+
+### Repository-backed sessions
+
+Use an approved repository profile and one literal program path, not a binary:
+
+```bash
+ghydra session open --repository-profile REPO --program folder/program --name remote
+ghydra session list
+ghydra session close SESSION_ID
+```
+
+- Read-only is the default. Add `--writable --commit "Reviewed changes"` only
+  with explicit write approval and the required checkout/check-in grants.
+- Closing saves the independent workspace and checks in saved writable changes
+  to the originally approved program before graceful shutdown. MCP `session_close`
+  can close CLI-created sessions when both use the same `GHYDRA_STATE_DIR`.
+- On `HEADLESS_STOP_REFUSED`, keep the worker, checkout and session state.
+  Correct the reported cause and retry; never force-kill or delete state to
+  bypass an unconfirmed save/check-in, ownership lookup or shutdown timeout.
+- Check `saved`, `checked_in` and `confirmation_unknown` separately. A successful
+  close or no-op save does not prove that a repository version was published.
+  Retries read fresh checkout metadata rather than reusing an old confirmation.
+
+See [shutdown details](../../docs/GHYDRA_CONNECTIONS.md#closing-repository-backed-sessions).
 
 ## Command Reference
 
