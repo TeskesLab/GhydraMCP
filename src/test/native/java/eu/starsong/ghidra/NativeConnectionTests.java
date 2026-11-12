@@ -25,6 +25,7 @@ public final class NativeConnectionTests {
             eu.starsong.ghidra.server.NativeRepositoryIntegrationTest.class,
             eu.starsong.ghidra.connection.WorkerAuthenticationTest.class,
             eu.starsong.ghidra.connection.WorkerTLSTest.class,
+            eu.starsong.ghidra.connection.WorkerPkiTest.class,
             eu.starsong.ghidra.connection.WorkerHttpTest.class);
         for (var failure : result.getFailures()) {
             System.err.println(failure.getTestHeader());

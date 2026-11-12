@@ -39,7 +39,7 @@ public final class WorkerTLS {
                 if (Security.insertProviderAt(provider, 1) < 0) throw new KeyManagementException();
                 // Native socket factories restore this cached context on every construction.
                 // Build that cache through our provider, not through an unverified default.
-                Class<?> initializer = Class.forName("ghidra.net.DefaultSSLContextInitializer");
+                Class<?> initializer = nativeInitializer();
                 if (!Boolean.TRUE.equals(initializer.getMethod("initialize", boolean.class)
                         .invoke(null, true))) throw new KeyManagementException();
             }
@@ -50,6 +50,11 @@ public final class WorkerTLS {
             throw new ConnectionException("CONNECTION_TLS_FAILED", 503,
                 "The worker could not initialize verified TLS. Check its certificate configuration.");
         }
+    }
+
+    static Class<?> nativeInitializer() throws ClassNotFoundException {
+        try { return Class.forName("ghidra.net.DefaultSSLContextInitializer"); }
+        catch (ClassNotFoundException older) { return Class.forName("ghidra.net.SSLContextInitializer"); }
     }
 
     private static TrustManager[] trustManagers() throws Exception {

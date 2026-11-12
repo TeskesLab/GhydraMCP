@@ -208,6 +208,24 @@ public class BSimMultiQueryTest {
         assertEquals(0, invalid.get("searched"));
     }
 
+    @Test public void quotedExecutableRemainsLiteralInEverySourceQuery() throws Exception {
+        String executable = "target' OR '1'='1";
+        InsertRequest insert = new InsertRequest();
+        configure(insert.manage);
+        add(insert.manage, "quoted_wanted", 3, executable, "gcc", "1", 120, 0);
+        assertNotNull(insert.execute((FunctionDatabase) connection));
+        var data = BSimMultiQueryService.run(program, "[\"0x1000\",\"0x2000\"]", 0, 0, 1,
+            0.1, 0, null, null, executable, "x86:LE:64:default", "gcc", "{\"Version\":\"1\"}",
+            signatures(false, false));
+        assertEquals(2, data.get("searched"));
+        assertEquals(2, rows(data).size());
+        for (var source : rows(data)) {
+            assertEquals(1, matches(source).size());
+            assertEquals(executable, matches(source).get(0).get("executable"));
+            assertEquals("quoted_wanted", matches(source).get(0).get("function"));
+        }
+    }
+
     @Test public void malformedRequestsAndCanonicalDuplicatesFailBeforeOpeningGenerator() {
         for (String addresses : List.of("[]", "null", "{}", "[1]", "[\"\"]", "[\"0x1000\",\"0x1000\"]",
                 "[\"0x1000\",\"ram::0x1000\"]", "[\"not an address\"]", " ".repeat(16385))) {

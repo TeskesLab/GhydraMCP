@@ -99,7 +99,7 @@ component. Component names use ASCII letters/digits, underscore, dot and hyphen;
 `.` and `..` are forbidden. No userinfo, passwords, query strings, fragments,
 percent-encoded names, backslashes or traversal are accepted. H2 paths must be
 absolute and cannot contain JDBC parameters/traversal. Use a dedicated profile
-for each approved endpoint/identity/policy; selection never rewrites global
+for each approved endpoint/identity/policy; selection never rewrites persistent global
 configuration.
 
 PKI uses a private identity store whose native format and certificate chain are
@@ -232,6 +232,11 @@ per server host:port** and **one PKI certificate per JVM**. Profiles must not be
 used to switch identities within those cache boundaries. Run separate isolated
 workers/JVMs when different identities or PKI certificates are needed, including
 distinct reader/writer identities on the same native Ghidra server.
+
+On Ghidra 11/12, the worker retains the selected PKI store path in its native JVM
+keystore property so SSL-context resets do not discard the identity. Passwords
+remain in the native callback, not JVM properties; no native preferences are written.
+
 Native servers that disable username selection must use the worker's native
 default username for password/SSH profiles. A mismatch fails before any password
 or signature is supplied; an authenticated account must match the profile.

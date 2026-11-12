@@ -195,7 +195,8 @@ bsim_query(name="decode_packet", profile="corpus-reader",
            max_matches=5)
 ```
 
-Filters match exact database metadata values and combine with **AND**. Native
+Filters match exact database metadata values and combine with **AND**. Quotes and
+SQL-like text are literal values, not query syntax. Native
 BSim applies them before the match limit, so better matches from other binaries
 do not use up the requested result slots. Filtering supports local H2 and native
 PostgreSQL BSim profiles; credentials stay on the worker. Elasticsearch and

@@ -105,9 +105,16 @@ public class BSimMetadataFilterTest {
     }
 
     private List<SimilarityNote> query(BSimMetadataFilter filter, int limit) throws Exception {
+        return query(filter, limit, 1);
+    }
+
+    private List<SimilarityNote> query(BSimMetadataFilter filter, int limit, int sources) throws Exception {
         QueryNearest query = new QueryNearest();
         configure(query.manage);
-        add(query.manage, 100, "source", "source", ARCHITECTURE, COMPILER, "libc", "1.0", 128);
+        for (int source = 0; source < sources; source++) {
+            add(query.manage, 100 + source, "source" + source, "source", ARCHITECTURE, COMPILER,
+                "libc", "1.0", 128);
+        }
         query.max = limit;
         query.thresh = 0.1;
         query.signifthresh = -Double.MAX_VALUE;
@@ -139,6 +146,83 @@ public class BSimMetadataFilterTest {
             "compiler", COMPILER, "categories", Map.of("Library", "libc", "Version", "1.0")),
             filter.predicates());
         assertEquals(List.of("Library", "Version"), BSimMetadataFilter.availableCategories(info));
+    }
+
+    @Test public void allPredicatesAlsoApplyBeforeEachNativeSourceLimit() throws Exception {
+        var filter = BSimMetadataFilter.parse(EXECUTABLE, ARCHITECTURE, COMPILER,
+            "{\"Library\":\"libc\",\"Version\":\"1.0\"}");
+        var matches = query(filter, 1, 2);
+        assertEquals(2, matches.size());
+        for (var match : matches) {
+            assertEquals("wanted", match.getFunctionDescription().getFunctionName());
+            assertTrue(match.getSimilarity() < 1.0);
+        }
+    }
+
+    @Test public void executableQuotesAreLiteralWithoutMissingOrDoubleEscaping() throws Exception {
+        List<String> names = List.of("quote'name", "quote''name", "path\\quote'name", "name'); --");
+        InsertRequest insert = new InsertRequest();
+        configure(insert.manage);
+        for (int i = 0; i < names.size(); i++) {
+            add(insert.manage, 10 + i, "quoted" + i, names.get(i), ARCHITECTURE, COMPILER,
+                "libc", "1.0", 128);
+        }
+        assertNotNull(insert.execute((FunctionDatabase) connection));
+        for (int i = 0; i < names.size(); i++) {
+            var filter = BSimMetadataFilter.parse(names.get(i), null, null, null);
+            var matches = query(filter, 1);
+            assertEquals(names.get(i), 1, matches.size());
+            assertEquals("quoted" + i, matches.get(0).getFunctionDescription().getFunctionName());
+            assertEquals(names.get(i), filter.predicates().get("executable"));
+        }
+        assertTrue(query(BSimMetadataFilter.parse("absent' OR '1'='1", null, null, null), 1).isEmpty());
+    }
+
+    @Test public void quotedIdentifierMetadataUsesExactResolvedIdsBeforeLimit() throws Exception {
+        String architecture = "cpu' OR '1'='1";
+        String compiler = "cc' OR '1'='1";
+        // Native category types forbid apostrophes, unlike architecture/compiler/category values.
+        // Exercise that refusal too, and use a valid OR-like category name for the positive query.
+        String rejectedCategory = "Kind' OR '1'='1";
+        var rejected = new ghidra.features.bsim.query.protocol.InstallCategoryRequest();
+        rejected.type_name = rejectedCategory;
+        assertNull("native category types must reject apostrophes",
+            rejected.execute((FunctionDatabase) connection));
+        assertFalse(BSimMetadataFilter.availableCategories(info).contains(rejectedCategory));
+        try {
+            BSimMetadataFilter.parse(null, null, null,
+                "{\"" + rejectedCategory + "\":\"anything\"}").build(connection, info);
+            fail("unconfigured quoted category broadened the query");
+        } catch (IllegalArgumentException expected) {
+            assertEquals("unknown executable category: " + rejectedCategory, expected.getMessage());
+        }
+        String category = "Kind OR (1)";
+        String categoryValue = "cat' OR '1'='1";
+        for (String name : List.of(category, "OtherKind")) {
+            var install = new ghidra.features.bsim.query.protocol.InstallCategoryRequest();
+            install.type_name = name;
+            assertNotNull(String.valueOf(BSimDatabase.call(connection, "getLastError")),
+                install.execute((FunctionDatabase) connection));
+        }
+        info = connection.getClass().getMethod("getInfo").invoke(connection);
+        InsertRequest insert = new InsertRequest();
+        configure(insert.manage);
+        // Each better match violates exactly one resolved-string predicate.
+        for (int i = 0; i < 5; i++) {
+            var function = add(insert.manage, 20 + i, i == 4 ? "literal_wanted" : "literal_wrong" + i,
+                "literal_metadata", i == 0 ? ARCHITECTURE : architecture,
+                i == 1 ? COMPILER : compiler, "libc", "1.0", i == 4 ? 120 : 128);
+            insert.manage.setExeCategories(function.getExecutableRecord(), new ArrayList<>(List.of(
+                new CategoryRecord(i == 2 ? "OtherKind" : category, i == 3 ? "other" : categoryValue),
+                new CategoryRecord("Version", "1.0"))));
+        }
+        assertNotNull(insert.execute((FunctionDatabase) connection));
+        var filter = BSimMetadataFilter.parse("literal_metadata", architecture, compiler,
+            "{\"" + category + "\":\"" + categoryValue + "\",\"Version\":\"1.0\"}");
+        var matches = query(filter, 1);
+        assertEquals(1, matches.size());
+        assertEquals("literal_wanted", matches.get(0).getFunctionDescription().getFunctionName());
+        assertTrue(matches.get(0).getSimilarity() < 1.0);
     }
 
     @Test public void twoCategoryNamesRequireBothNotEither() throws Exception {

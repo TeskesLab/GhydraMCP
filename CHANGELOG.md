@@ -43,6 +43,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Support Ghidra 11 TLS initializer, socket-factory and PKI keystore APIs without
+  weakening certificate/hostname checks; verify native client-certificate use.
+- Preserve the selected native PKI identity across headless SSL-context resets.
+- Keep quoted executable-name filters exact on Ghidra 11 SQL backends rather
+  than treating quote/OR-like text as SQL; preserve Ghidra 12 literal handling.
 - Restore Ghidra 11 repository support by resolving the native link predicate
   across Ghidra 11/12 while continuing to reject linked repository targets.
 - Remove obsolete fixed-count tool/formatter tests that rejected valid catalogue

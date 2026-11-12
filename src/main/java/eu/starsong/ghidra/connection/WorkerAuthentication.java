@@ -274,12 +274,21 @@ public final class WorkerAuthentication {
             Class<?> provider = Class.forName("ghidra.security.KeyStorePasswordProvider");
             Class<?> application = Class.forName("ghidra.net.ApplicationKeyManagerFactory");
             application.getMethod("setKeyStorePasswordProvider", provider).invoke(null, authenticator);
-            Class<?> factory = Class.forName("ghidra.net.DefaultKeyManagerFactory");
-            boolean configured = Boolean.TRUE.equals(factory.getMethod("setDefaultKeyStore",
-                String.class, boolean.class).invoke(null, path, false));
+            Class<?> factory;
+            try { factory = Class.forName("ghidra.net.DefaultKeyManagerFactory"); }
+            catch (ClassNotFoundException older) { factory = application; }
+            // Native headless SSL resets discard transient setters. Preserve only the
+            // nonsecret identity path in this one-identity JVM, never a password or preference.
+            String property = (String) factory.getField("KEYSTORE_PATH_PROPERTY").get(null);
+            String existing = System.getProperty(property);
+            if (existing != null && !existing.equals(path)) throw new ConnectionException(
+                "CONNECTION_PROFILE_INVALID", 409,
+                "Different certificate identities require separate Ghidra workers.");
+            System.setProperty(property, path);
+            boolean configured = Boolean.TRUE.equals(factory.getMethod("initialize").invoke(null));
             if (!configured) throw new ConnectionException("CONNECTION_AUTH_FAILED", 503,
                 "The worker could not load the configured certificate identity.");
-            Class<?> ssl = Class.forName("ghidra.net.DefaultSSLContextInitializer");
+            Class<?> ssl = WorkerTLS.nativeInitializer();
             if (!Boolean.TRUE.equals(ssl.getMethod("initialize", boolean.class).invoke(null, true))) {
                 throw new ConnectionException("CONNECTION_AUTH_FAILED", 503,
                     "The worker could not initialize certificate authentication.");

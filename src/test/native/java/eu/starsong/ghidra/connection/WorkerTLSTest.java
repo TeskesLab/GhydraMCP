@@ -66,9 +66,14 @@ public class WorkerTLSTest {
     private SSLSocketFactory nativeSockets() throws Exception {
         WorkerTLS.initialize();
         // This used to restore Ghidra's permissive cached context over a strict default.
-        assertEquals(Boolean.TRUE, Class.forName("ghidra.net.DefaultSSLContextInitializer")
-            .getMethod("initialize", boolean.class).invoke(null, true));
-        return new ghidra.net.DefaultSSLSocketFactory();
+        Class<?> initializer;
+        Class<?> factory;
+        try { initializer = Class.forName("ghidra.net.DefaultSSLContextInitializer"); }
+        catch (ClassNotFoundException older) { initializer = Class.forName("ghidra.net.SSLContextInitializer"); }
+        assertEquals(Boolean.TRUE, initializer.getMethod("initialize", boolean.class).invoke(null, true));
+        try { factory = Class.forName("ghidra.net.DefaultSSLSocketFactory"); }
+        catch (ClassNotFoundException older) { factory = Class.forName("ghidra.net.ApplicationSSLSocketFactory"); }
+        return (SSLSocketFactory) factory.getConstructor().newInstance();
     }
 
     @FunctionalInterface private interface Connect {

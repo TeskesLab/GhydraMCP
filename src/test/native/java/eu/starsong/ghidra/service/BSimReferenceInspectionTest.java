@@ -97,7 +97,7 @@ public class BSimReferenceInspectionTest {
             DomainFile file = proxy(DomainFile.class, (p, method, args) -> switch (method.getName()) {
                 case "getDomainObjectClass" -> Program.class;
                 case "exists", "isVersioned" -> true;
-                case "isLink" -> linkedFile;
+                case "isLink", "isLinkFile" -> linkedFile;
                 case "getLatestVersion", "getVersion" -> 7;
                 case "getPathname" -> "/program";
                 case "getReadOnlyDomainObject" -> {

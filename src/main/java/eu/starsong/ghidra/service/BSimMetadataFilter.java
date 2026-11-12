@@ -4,6 +4,7 @@ import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 import java.io.IOException;
 import java.io.StringReader;
+import java.lang.reflect.Array;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -120,9 +121,16 @@ public final class BSimMetadataFilter {
         Class<?> typeClass = Class.forName(TYPES + "BSimFilterType", true, loader);
         Object filter = filterClass.getConstructor().newInstance();
         Method add = filterClass.getMethod("addAtom", typeClass, String.class);
+        String executable = metadata.get("executable");
+        if (executable != null) {
+            Object type = Class.forName(TYPES + "ExecutableNameBSimFilterType", true, loader)
+                .getConstructor().newInstance();
+            addExact(filter, type, executable, add, filterClass);
+            quoteExecutableSQL(filter, filterClass, executable, loader);
+        }
         for (Map.Entry<String, String> entry : metadata.entrySet()) {
+            if (entry.getKey().equals("executable")) continue;
             String simpleName = switch (entry.getKey()) {
-                case "executable" -> "ExecutableNameBSimFilterType";
                 case "architecture" -> "ArchitectureBSimFilterType";
                 case "compiler" -> "CompilerBSimFilterType";
                 default -> throw new IllegalArgumentException("unknown metadata filter");
@@ -138,6 +146,40 @@ public final class BSimMetadataFilter {
             addExact(filter, type, entry.getValue(), add, filterClass);
         }
         return filter;
+    }
+
+    /**
+     * Ghidra 11 emits executable names as raw SQL literals; 12 escapes them itself. Probe the
+     * native SQL emitter, not the version, so neither missing nor double escaping is possible.
+     * This filter is used only by native H2/PostgreSQL QueryNearest, never client evaluation.
+     * Keep the public predicates unchanged and verify the encoded atom's final SQL before use.
+     */
+    private static void quoteExecutableSQL(Object filter, Class<?> filterClass, String value,
+            ClassLoader loader) throws ReflectiveOperationException {
+        String quoted = value.replace("'", "''");
+        String prefix = " AND (desctable.id_exe = exetable.id) AND (exetable.name_exec = '";
+        String expected = prefix + quoted + "')";
+        Class<?> resolution = Class.forName(
+            "ghidra.features.bsim.query.client.IDSQLResolution", true, loader);
+        Object resolutions = Array.newInstance(resolution, 1);
+        Method emit = Class.forName("ghidra.features.bsim.query.client.SQLEffects", true, loader)
+            .getMethod("createFilter", filterClass, resolutions.getClass(),
+                Class.forName("ghidra.features.bsim.query.SQLFunctionDatabase", true, loader));
+        Object clause = emit.invoke(null, filter, resolutions, null);
+        Method where = clause.getClass().getMethod("whereClause");
+        if (!",exetable".equals(clause.getClass().getMethod("tableClause").invoke(clause))) {
+            throw new UnsupportedOperationException("native BSim changed executable SQL filter tables");
+        }
+        String actual = (String) where.invoke(clause);
+        if (expected.equals(actual)) return;
+        if ((prefix + value + "')").equals(actual)) {
+            // Only the legacy raw-literal emitter gets an SQL-encoded atom value.
+            Object atom = filterClass.getMethod("getAtom", int.class).invoke(filter, 0);
+            atom.getClass().getField("value").set(atom, quoted);
+            clause = emit.invoke(null, filter, resolutions, null);
+            if (expected.equals(where.invoke(clause))) return;
+        }
+        throw new UnsupportedOperationException("native BSim cannot emit an exact executable SQL filter");
     }
 
     private static void addExact(Object filter, Object type, String value, Method add,
