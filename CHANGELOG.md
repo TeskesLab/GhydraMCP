@@ -43,6 +43,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Make standalone MCP session/headless close honor CLI repository state: save the
+  workspace, confirm explicit check-in, and retain the worker and running session
+  on refusal or timeout instead of force-killing it or reporting a false close.
 - Support Ghidra 11 TLS initializer, socket-factory and PKI keystore APIs without
   weakening certificate/hostname checks; verify native client-certificate use.
 - Preserve the selected native PKI identity across headless SSL-context resets.

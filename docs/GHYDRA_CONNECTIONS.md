@@ -266,3 +266,23 @@ only the Java worker reads private identities in its native authentication scope
 No native login username, password or identity path enters argv, stdin,
 environment or persisted launcher state. Python setup can write/rotate credentials
 only as the trusted human operator; it exposes no credential-read interface.
+
+### Closing repository-backed sessions
+
+The standalone MCP bridge can close repository sessions opened by the CLI using
+their shared `GHYDRA_STATE_DIR`. It verifies the remembered worker PID and repository
+selection, saves the active independent workspace with `workspace_only=true`, and,
+for writable sessions, checks in saved changes to the originally approved program
+with the stored explicit comment and `keep_checked_out=true`. It never reads the
+private connection store or imports the CLI runner.
+
+Save/check-in refusal, an unconfirmed response or worker ownership lookup, or a
+shutdown timeout returns `HEADLESS_STOP_REFUSED`; the session stays running and the
+worker, checkout, and state remain available. A missing or replaced remembered
+worker is refused without changing the session. Normal shutdown never signals or
+force-kills a worker.
+A retry reads fresh checkout metadata before deciding whether another check-in is
+needed, so later saved edits are not hidden by an earlier publication confirmation.
+Successful close records separate `saved`, `checked_in`, and
+`confirmation_unknown` fields. `saved=false` with no unsaved changes is a successful
+no-op save, not proof that a repository version was published.

@@ -11634,7 +11634,7 @@ def _headless_process_alive(pid: int) -> bool:
     return True
 
 
-def _headless_process_is_ours(pid: int) -> bool:
+def _headless_process_is_ours(pid: int, port: int | None = None) -> bool:
     """Whether the process is the headless run this bridge started.
 
     A PID on its own says nothing - the operating system reuses them, and
@@ -11656,7 +11656,8 @@ def _headless_process_is_ours(pid: int) -> bool:
                                     capture_output=True, text=True, timeout=30).stdout or ""
     except (OSError, subprocess.SubprocessError):
         return False
-    return HEADLESS_SCRIPT.lower() in (output or "").lower()
+    return (HEADLESS_SCRIPT.lower() in (output or "").lower()
+            and (port is None or re.search(rf"port={int(port)}(?!\d)", output) is not None))
 
 
 def _headless_load_state(port: int) -> dict:
@@ -11853,30 +11854,148 @@ def headless_stop(port: int = HEADLESS_DEFAULT_PORT, timeout: int = 20) -> dict:
     return _headless_stop_raw(port, timeout)
 
 
-def _headless_stop_raw(port: int = HEADLESS_DEFAULT_PORT, timeout: int = 20) -> dict:
-    """The stop itself, without the tool around it."""
+def _headless_repository_request(state: dict, method: str, path: str, **kwargs) -> dict | None:
+    """Confirm a scoped worker response without exposing native errors or reading credentials."""
+    host = state.get("host") or ghidra_host
+    try:
+        response = _http_session().request(
+            method, f"http://{host}:{int(state['port'])}{path}", timeout=30, **kwargs)
+        payload = response.json()
+    except Exception:
+        return None
+    if (not response.ok or not isinstance(payload, dict)
+            or payload.get("success") is not True):
+        return None
+    result = payload.get("result")
+    return result if isinstance(result, dict) else None
+
+
+def _headless_repository_entry(state: dict) -> dict | None:
+    """Read fresh saved-change metadata for exactly the originally approved program."""
+    path = "/" + state["program"]
+    folder = path.rpartition("/")[0] or "/"
+    offset = 0
+    while True:
+        page = _headless_repository_request(
+            state, "GET", "/repositories/files",
+            params={"profile": state["repository_profile"], "path": folder,
+                    "offset": offset, "limit": 1000})
+        entries = page.get("entries") if page is not None else None
+        if not isinstance(entries, list):
+            return None
+        entry = next((row for row in entries if isinstance(row, dict)
+                      and row.get("path") == path and row.get("type") == "file"), None)
+        if entry is not None:
+            return entry
+        if not page.get("has_more") or not entries:
+            return None
+        offset += len(entries)
+
+
+def _headless_save_repository(port: int, state: dict) -> bool:
+    """Save the independent workspace, never the analyzer's bootstrap program."""
+    state["repository_saved"] = None
+    result = _headless_repository_request(
+        state, "POST", "/program/save", params={"workspace_only": "true"})
+    value = result.get("saved") if result is not None else None
+    state["repository_saved"] = value if type(value) is bool else None
+    if value is True:
+        state["checked_in"] = None
+    _headless_save_state(port, state)
+    return (value is True or (value is False and result.get("detail") == "no unsaved changes"))
+
+
+def _headless_checkin_repository(port: int, state: dict) -> bool:
+    """Publish saved changes, with fresh metadata even after a timed-out stop."""
+    previously_confirmed = state.get("checked_in") is True
+    state["checked_in"] = None
+    _headless_save_state(port, state)
+    entry = _headless_repository_entry(state)
+    modified = entry.get("modified_since_checkout") if entry is not None else None
+    if modified is False:
+        state["checked_in"] = previously_confirmed
+        _headless_save_state(port, state)
+        return True
+    if modified is not True:
+        return False
+    result = _headless_repository_request(
+        state, "POST", "/repositories/checkin",
+        json={"profile": state["repository_profile"], "path": "/" + state["program"],
+              "comment": state["commit"], "keep_checked_out": True})
+    value = result.get("checked_in") if result is not None else None
+    state["checked_in"] = value if type(value) is bool else None
+    _headless_save_state(port, state)
+    return value is True
+
+
+def _headless_stop_raw(port: int = HEADLESS_DEFAULT_PORT, timeout: int = 20,
+                       *, session: dict | None = None) -> dict:
+    """Save/check in before a polite stop; retain the worker on any refusal."""
     state = _headless_load_state(port)
+    if session is not None and session.get("repository_profile"):
+        if (not state or state.get("pid") != session.get("pid")
+                or any(state.get(key) != session.get(key)
+                       for key in ("repository_profile", "program", "writable", "commit"))):
+            return {"success": False,
+                    "error": {"code": "SESSION_NOT_RUNNING",
+                              "message": "The repository worker state is unavailable."}}
     if not state:
         return {"success": False,
                 "error": {"code": "HEADLESS_NO_RUN",
                           "message": f"no headless run is known on port {port}"}}
 
-    saved = False
-    try:
-        requests.post(f"http://{ghidra_host}:{int(port)}/program/save", timeout=30)
-        saved = True
-    except Exception:
-        saved = False
-
+    repository = bool(state.get("repository_profile"))
     pid = int(state.get("pid") or 0)
-    if not pid or not _headless_process_is_ours(pid):
+    if not pid or not _headless_process_is_ours(pid, port=port):
+        if repository:
+            # A failed ownership lookup is not proof that the worker is gone.
+            # Keep its checkout and session addressable until ownership is known.
+            return {"success": False,
+                    "error": {"code": "HEADLESS_STOP_REFUSED",
+                              "message": "Repository worker ownership could not be confirmed; its process and state were retained."}}
         # The state outlived the run, and the PID may belong to something
         # else by now. Nothing is killed.
         _headless_clear_state(port)
         return {"success": True,
                 "result": {"message": f"the run on port {port} was not there "
                                       f"anymore; the stale state was cleared",
-                           "port": int(port), "saved": saved, "stopped": False}}
+                           "port": int(port), "saved": False, "stopped": False}}
+
+    if repository:
+        program = state.get("program")
+        commit = state.get("commit")
+        # The CLI persists a canonical literal path and an explicit write approval.
+        # Never fall back to a local stop when repository state is incomplete.
+        if (not isinstance(program, str) or not program
+                or any(not part or part in (".", "..") or part.startswith("-")
+                       for part in program.split("/"))
+                or any(c in program for c in "\\*?%:#")
+                or any(ord(c) < 32 or ord(c) == 127 for c in program)
+                or type(state.get("writable")) is not bool
+                or state["writable"] != (commit is not None)
+                or (commit is not None and
+                    (not isinstance(commit, str) or not commit.strip() or len(commit) > 4096
+                     or any(ord(c) < 32 for c in commit)))):
+            return {"success": False,
+                    "error": {"code": "HEADLESS_STOP_REFUSED",
+                              "message": "The repository close approval is unavailable; the worker remains available."}}
+        state["port"] = int(port)
+        if not _headless_save_repository(port, state):
+            return {"success": False,
+                    "error": {"code": "HEADLESS_STOP_REFUSED",
+                              "message": "The active repository workspace could not be saved; the worker remains available."}}
+        if state["writable"] and not _headless_checkin_repository(port, state):
+            return {"success": False,
+                    "error": {"code": "HEADLESS_STOP_REFUSED",
+                              "message": "Repository check-in was not confirmed; the worker remains available."}}
+        saved = state["repository_saved"] is True
+    else:
+        try:
+            response = requests.post(
+                f"http://{state.get('host') or ghidra_host}:{int(port)}/program/save", timeout=30)
+            saved = response.ok
+        except Exception:
+            saved = False
 
     flag = _headless_stop_file(port)
     try:
@@ -11896,33 +12015,30 @@ def _headless_stop_raw(port: int = HEADLESS_DEFAULT_PORT, timeout: int = 20) -> 
             time.sleep(HEADLESS_POLL)
 
     if not stopped:
-        if os.name == "nt":
-            try:
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                               capture_output=True, timeout=timeout)
-            except (OSError, subprocess.SubprocessError):
-                pass
-        else:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
-        deadline = time.time() + max(1, int(timeout))
-        while time.time() < deadline and _headless_process_alive(pid):
-            time.sleep(HEADLESS_POLL)
-        if _headless_process_alive(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
-        stopped = True
+        # Cancelling the request lets the still-live worker continue serving.
+        # Normal shutdown must never turn a timeout/refusal into a forced kill.
+        try:
+            os.remove(_headless_stop_file(port))
+        except OSError:
+            pass
+        return {"success": False,
+                "error": {"code": "HEADLESS_STOP_REFUSED",
+                          "message": "The worker has not finished stopping; its process and state were retained."}}
 
+    try:
+        os.remove(_headless_stop_file(port))
+    except OSError:
+        pass
     _headless_clear_state(port)
     with instances_lock:
         active_instances.pop(int(port), None)
-    return {"success": True,
-            "result": {"message": f"the run on port {port} was stopped",
-                       "port": int(port), "saved": saved, "stopped": True}}
+    result = {"message": f"the run on port {port} was stopped",
+              "port": int(port), "saved": saved, "stopped": True}
+    if repository:
+        result.update(saved=state.get("repository_saved"), checked_in=state.get("checked_in"),
+                      confirmation_unknown=(state.get("repository_saved") is None
+                                            or state.get("checked_in") is None))
+    return {"success": True, "result": result}
 
 
 @mcp.tool()
@@ -12412,7 +12528,16 @@ def session_close(session_id: str) -> dict:
                     "error": {"code": "SESSION_NOT_RUNNING",
                               "message": f"the session '{session.get('name')}' is "
                                          f"not running"}}
-        stopped = _headless_stop_raw(int(session.get("port") or 8192))
+        port = int(session.get("port") or HEADLESS_DEFAULT_PORT)
+        stopped = (_headless_stop_raw(port, session=session) if session.get("repository_profile")
+                   else _headless_stop_raw(port))
+        if not stopped.get("success"):
+            return stopped
+        if session.get("repository_profile"):
+            result = stopped.get("result", {})
+            session.setdefault("extra", {}).update(
+                saved=result.get("saved"), checked_in=result.get("checked_in"),
+                confirmation_unknown=result.get("confirmation_unknown", True))
         session["state"] = "stopped"
         session["updated_at"] = time.time()
         _sessions_save(sessions)

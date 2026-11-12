@@ -1,5 +1,6 @@
 """Repository lifecycle over prepared HTTP requests, without sockets or private stores."""
 import contextlib
+import itertools
 import json
 import os
 import subprocess
@@ -29,6 +30,7 @@ class RepositoryHTTPFixture(BaseAdapter):
         self.saved_changes = False
         self.checkins = []
         self.calls = []
+        self.urls = []
         self.failures = {}
         self.save_result = None
         self.checkin_result = None
@@ -38,6 +40,7 @@ class RepositoryHTTPFixture(BaseAdapter):
         pass
 
     def send(self, request, **kwargs):
+        self.urls.append(request.url)
         route = urlsplit(request.url)
         query = {key: value[0] for key, value in parse_qs(route.query).items()}
         body = json.loads(request.body) if request.body else None
@@ -496,6 +499,333 @@ class RepositoryHeadlessTests(unittest.TestCase):
         self.assertFalse(outcome["confirmation_unknown"])
         self.assertEqual("CLI-reviewed changes", self.http.checkins[0]["comment"])
         self.assert_no_signals()
+
+
+class BridgeProcessOwnershipTests(unittest.TestCase):
+    def test_process_marker_also_requires_exact_worker_port(self):
+        import bridge_mcp_hydra as bridge
+
+        with mock.patch.object(subprocess, "run", return_value=mock.Mock(
+                stdout="java GhidraHeadlessServer port=81920")):
+            self.assertFalse(bridge._headless_process_is_ours(4567, port=8192))
+            self.assertTrue(bridge._headless_process_is_ours(4567, port=81920))
+
+
+class RepositoryBridgeLifecycleTests(unittest.TestCase):
+    """The standalone MCP bridge consumes CLI state without importing its runner."""
+
+    def setUp(self):
+        import bridge_mcp_hydra as bridge
+
+        self.bridge = bridge
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        root = self.stack.enter_context(tempfile.TemporaryDirectory())
+        self.stack.enter_context(mock.patch.dict(os.environ, {"GHYDRA_STATE_DIR": root}))
+        self.stack.enter_context(mock.patch.object(bridge, "RAW_OUTPUT", True))
+        self.http = RepositoryHTTPFixture()
+        self.http.online = True
+        self.http.file.update(checked_out=True, exclusive=True)
+        self.http.active = {"path": self.http.path, "read_only": False, "version": 7}
+        self.transport = requests.Session()
+        self.transport.trust_env = False
+        self.transport.mount("http://", self.http)
+        self.stack.callback(self.transport.close)
+        self.stack.enter_context(mock.patch.object(bridge, "_http_session", return_value=self.transport))
+        self.stack.enter_context(mock.patch.object(
+            headless.HeadlessRunner, "from_instance", side_effect=AssertionError("CLI runner imported")))
+        self.stack.enter_context(mock.patch.object(
+            connections, "load_profile", side_effect=AssertionError("Private profile read")))
+        self.ours = self.stack.enter_context(
+            mock.patch.object(bridge, "_headless_process_is_ours", return_value=True))
+        self.stack.enter_context(mock.patch.object(
+            bridge, "_headless_process_alive", side_effect=self.process_alive))
+        self.stack.enter_context(mock.patch.object(
+            bridge, "_headless_api_answers", side_effect=lambda *args: self.http.online))
+        self.stack.enter_context(mock.patch.object(
+            bridge.time, "time", side_effect=itertools.count(1000, 0.25).__next__))
+        self.stack.enter_context(mock.patch.object(bridge.time, "sleep"))
+        self.signal_pid = self.stack.enter_context(mock.patch.object(os, "kill"))
+        self.signal_tree = self.stack.enter_context(mock.patch.object(subprocess, "run"))
+        self.signal_group = (self.stack.enter_context(mock.patch.object(os, "killpg"))
+                             if hasattr(os, "killpg") else None)
+        self.instance = headless.HeadlessInstance(
+            port=65421, host="worker.invalid", pid=4567, repository_profile="approved",
+            program="folder/program.exe", writable=True, commit="Reviewed analysis")
+        headless.save_state(self.instance)
+        runner = mock.Mock(instance=self.instance)
+        runner.start.return_value = self.instance
+        with mock.patch.object(sessions, "_build_runner", return_value=runner):
+            self.session = sessions.open_session(
+                repository_profile="approved", program=self.instance.program, writable=True,
+                commit=self.instance.commit, name="remote", port=self.instance.port)
+        self.flag = bridge._headless_stop_file(self.instance.port)
+        self.stack.enter_context(mock.patch.dict(
+            bridge.active_instances, {self.instance.port: {"url": self.instance.url}}, clear=True))
+
+    def process_alive(self, pid):
+        self.assertEqual(self.instance.pid, pid)
+        if os.path.isfile(self.flag) and not self.http.refuse_stop:
+            os.remove(self.flag)
+            self.http.online = False
+        return self.http.online
+
+    def close_session(self):
+        return json.loads(self.bridge.session_close(self.session.id))
+
+    def assert_retained(self, outcome):
+        self.assertIs(False, outcome["success"])
+        self.assertEqual("HEADLESS_STOP_REFUSED", outcome["error"]["code"])
+        self.assertEqual(sessions.STATE_RUNNING, sessions.get_session(self.session.id).state)
+        self.assertEqual(self.instance.pid, headless.load_state(self.instance.port).pid)
+        self.assertTrue(self.http.online)
+        self.assertIn(self.instance.port, self.bridge.active_instances)
+        self.assertFalse(os.path.exists(self.flag))
+        for private in ("private-identity", "private-password", "/private/key"):
+            self.assertNotIn(private, json.dumps(outcome))
+        self.signal_pid.assert_not_called()
+        self.signal_tree.assert_not_called()
+        if self.signal_group is not None:
+            self.signal_group.assert_not_called()
+
+    def test_cli_shared_session_saves_checks_in_then_stops(self):
+        self.http.dirty = True
+        outcome = self.close_session()
+        self.assertIs(True, outcome["success"])
+        result = outcome["result"]
+        self.assertEqual("stopped", result["session"]["state"])
+        self.assertEqual({"saved": True, "checked_in": True, "confirmation_unknown": False},
+                         {key: result["session"]["extra"][key]
+                          for key in ("saved", "checked_in", "confirmation_unknown")})
+        self.assertIs(True, result["stopped"]["result"]["stopped"])
+        self.assertEqual([
+            ("POST", "/program/save", {"workspace_only": "true"}, None),
+            ("GET", "/repositories/files", {"profile": "approved", "path": "/folder",
+                                          "offset": "0", "limit": "1000"}, None),
+            ("POST", "/repositories/checkin", {}, {
+                "profile": "approved", "path": self.http.path,
+                "comment": "Reviewed analysis", "keep_checked_out": True})], self.http.calls)
+        self.assertTrue(all(urlsplit(url).hostname == self.instance.host for url in self.http.urls))
+        self.assertIsNone(headless.load_state(self.instance.port))
+        self.assertNotIn(self.instance.port, self.bridge.active_instances)
+        self.assertIs(True, sessions.get_session(self.session.id).extra["checked_in"])
+        self.ours.assert_called_once_with(self.instance.pid, port=self.instance.port)
+        self.signal_pid.assert_not_called()
+        self.signal_tree.assert_not_called()
+
+    def test_consumer_text_reports_save_refusal_not_closed(self):
+        self.http.failures["/program/save"] = (403, "CONNECTION_PERMISSION_DENIED")
+        with mock.patch.object(self.bridge, "RAW_OUTPUT", False):
+            text = self.bridge.session_close(self.session.id)
+        self.assertIn("HEADLESS_STOP_REFUSED", text)
+        self.assertNotIn("was closed", text)
+        self.assertNotIn("private-password", text)
+        self.assertEqual(sessions.STATE_RUNNING, sessions.get_session(self.session.id).state)
+
+    def test_save_http_or_envelope_refusal_retains_cli_session(self):
+        for status in (200, 403):
+            with self.subTest(status=status):
+                self.http.failures["/program/save"] = (status, "CONNECTION_PERMISSION_DENIED")
+                self.assert_retained(self.close_session())
+                self.assertIsNone(headless.load_state(self.instance.port).repository_saved)
+                self.assertFalse(self.http.operations("/repositories/checkin"))
+
+    def test_unconfirmed_or_analyzer_save_is_not_a_repository_save(self):
+        for result, expected in (({}, None), ({"saved": False, "analyzer_owned": True}, False),
+                                 ({"saved": "true"}, None)):
+            with self.subTest(result=result):
+                self.http.save_result = result
+                self.assert_retained(self.close_session())
+                self.assertIs(expected, headless.load_state(self.instance.port).repository_saved)
+                self.assertFalse(self.http.operations("/repositories/checkin"))
+
+    def test_checkin_http_or_envelope_refusal_retains_saved_checkout(self):
+        for status in (200, 403, 409):
+            with self.subTest(status=status):
+                self.http.dirty = True
+                self.http.failures["/repositories/checkin"] = (status, "REPOSITORY_CONFLICT")
+                self.assert_retained(self.close_session())
+                remembered = headless.load_state(self.instance.port)
+                self.assertIs(True, remembered.repository_saved)
+                self.assertIsNone(remembered.checked_in)
+                self.assertTrue(self.http.saved_changes)
+
+    def test_checkin_requires_explicit_boolean_confirmation(self):
+        for result, expected in (({}, None), ({"checked_in": False}, False),
+                                 ({"checked_in": "true"}, None)):
+            with self.subTest(result=result):
+                self.http.dirty = True
+                self.http.checkin_result = result
+                self.assert_retained(self.close_session())
+                self.assertIs(expected, headless.load_state(self.instance.port).checked_in)
+
+    def test_lost_checkin_response_is_not_retried_or_reported_as_stopped(self):
+        self.http.dirty = True
+        send = self.http.send
+
+        def lose_checkin_response(request, **kwargs):
+            response = send(request, **kwargs)
+            if urlsplit(request.url).path == "/repositories/checkin":
+                raise requests.Timeout("private-password /private/key")
+            return response
+
+        with mock.patch.object(self.http, "send", side_effect=lose_checkin_response):
+            self.assert_retained(self.close_session())
+        self.assertEqual(1, len(self.http.checkins))
+        self.assertEqual(1, len(self.http.operations("/repositories/checkin")))
+        self.assertIsNone(headless.load_state(self.instance.port).checked_in)
+
+    def test_stop_timeout_retains_confirmation_and_retry_does_not_republish(self):
+        self.http.dirty = True
+        self.http.refuse_stop = True
+        self.assert_retained(self.close_session())
+        self.assertIs(True, headless.load_state(self.instance.port).checked_in)
+        status = json.loads(self.bridge.headless_status(self.instance.port))
+        self.assertIs(True, status["result"]["known"])
+        self.assertIs(True, status["result"]["running"])
+        self.http.refuse_stop = False
+        self.assertIs(True, self.close_session()["success"])
+        self.assertEqual(1, len(self.http.checkins))
+        self.assertEqual(2, len(self.http.operations("/repositories/files")))
+
+    def test_retry_fresh_metadata_publishes_external_saved_changes_across_pages(self):
+        self.http.dirty = True
+        self.http.refuse_stop = True
+        self.assert_retained(self.close_session())
+        # A later HTTP edit/save must invalidate the previous publication even
+        # when this close's own save has no new in-memory changes to write.
+        self.http.saved_changes = True
+        self.http.prefix = [{"path": "/folder/other", "type": "file"} for _ in range(1000)]
+        self.http.refuse_stop = False
+        outcome = self.close_session()
+        self.assertIs(True, outcome["success"])
+        self.assertIs(False, outcome["result"]["session"]["extra"]["saved"])
+        self.assertIs(True, outcome["result"]["session"]["extra"]["checked_in"])
+        self.assertEqual(2, len(self.http.checkins))
+        self.assertEqual(["0", "1000"], [
+            call[2]["offset"] for call in self.http.operations("/repositories/files")[-2:]])
+
+    def test_unknown_checkout_metadata_cannot_reuse_prior_confirmation(self):
+        self.http.dirty = True
+        self.http.refuse_stop = True
+        self.assert_retained(self.close_session())
+        self.http.saved_changes = None
+        self.assert_retained(self.close_session())
+        self.assertIsNone(headless.load_state(self.instance.port).checked_in)
+        self.assertEqual(1, len(self.http.checkins))
+
+    def test_checkin_targets_original_program_not_current_selection(self):
+        self.http.active = {"path": "/another/program", "read_only": False, "version": 1}
+        self.http.saved_changes = True
+        self.http.dirty = True
+        self.assertIs(True, self.close_session()["success"])
+        self.assertEqual(self.http.path, self.http.checkins[0]["path"])
+
+    def test_readonly_cli_session_saves_without_checkin(self):
+        self.instance.writable = self.session.writable = False
+        self.instance.commit = self.session.commit = None
+        headless.save_state(self.instance)
+        sessions._save_store([self.session])
+        self.http.active["read_only"] = True
+        outcome = self.close_session()
+        self.assertIs(True, outcome["success"])
+        self.assertIs(False, outcome["result"]["session"]["extra"]["saved"])
+        self.assertIsNone(outcome["result"]["session"]["extra"]["checked_in"])
+        self.assertFalse(self.http.operations("/repositories/checkin"))
+
+    def test_missing_replaced_or_mismatched_worker_state_never_closes_cli_session(self):
+        for key, value in (("pid", 9876), ("repository_profile", ""),
+                           ("program", "folder/other"), ("commit", "Different approval")):
+            with self.subTest(key=key):
+                state = self.instance.to_dict()
+                state[key] = value
+                self.bridge._headless_save_state(self.instance.port, state)
+                outcome = self.close_session()
+                self.assertIs(False, outcome["success"])
+                self.assertEqual("SESSION_NOT_RUNNING", outcome["error"]["code"])
+                self.assertEqual(sessions.STATE_RUNNING, sessions.get_session(self.session.id).state)
+                self.assertEqual(value, self.bridge._headless_load_state(self.instance.port)[key])
+        self.bridge._headless_clear_state(self.instance.port)
+        self.assertIs(False, self.close_session()["success"])
+        self.assertFalse(self.http.calls)
+        self.signal_pid.assert_not_called()
+        self.signal_tree.assert_not_called()
+
+    def test_unconfirmed_repository_worker_ownership_retains_live_session_without_http(self):
+        self.ours.return_value = False
+        self.assert_retained(self.close_session())
+        self.assertEqual(self.instance.to_dict(), headless.load_state(self.instance.port).to_dict())
+        self.assertFalse(self.http.calls)
+        self.assertTrue(json.loads(self.bridge.headless_status(self.instance.port))["result"]["running"])
+
+    def test_missing_repository_worker_pid_is_not_a_successful_close(self):
+        self.instance.pid = self.session.pid = 0
+        headless.save_state(self.instance)
+        sessions._save_store([self.session])
+        outcome = self.close_session()
+        self.assertIs(False, outcome["success"])
+        self.assertEqual("HEADLESS_STOP_REFUSED", outcome["error"]["code"])
+        self.assertEqual(sessions.STATE_RUNNING, sessions.get_session(self.session.id).state)
+        self.assertEqual(self.instance.to_dict(), headless.load_state(self.instance.port).to_dict())
+        self.assertFalse(self.http.calls)
+        self.ours.assert_not_called()
+        self.signal_pid.assert_not_called()
+        self.signal_tree.assert_not_called()
+
+    def test_headless_stop_also_enforces_repository_save_and_checkin(self):
+        self.http.dirty = True
+        outcome = json.loads(self.bridge.headless_stop(self.instance.port))
+        self.assertIs(True, outcome["success"])
+        self.assertIs(True, outcome["result"]["saved"])
+        self.assertIs(True, outcome["result"]["checked_in"])
+        self.assertEqual(1, len(self.http.checkins))
+
+    def test_save_timeout_or_malformed_response_retains_worker(self):
+        with mock.patch.object(self.http, "send", side_effect=requests.Timeout("private-password")):
+            outcome = self.close_session()
+        self.assert_retained(outcome)
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b"private-password not JSON"
+        with mock.patch.object(self.http, "send", return_value=response):
+            outcome = self.close_session()
+        self.assert_retained(outcome)
+        self.assertIsNone(headless.load_state(self.instance.port).repository_saved)
+
+    def test_stop_file_failure_retains_confirmed_checkout_and_session(self):
+        self.http.dirty = True
+        with mock.patch.object(os, "makedirs", side_effect=OSError("cannot create stop flag")):
+            outcome = self.close_session()
+        self.assert_retained(outcome)
+        self.assertIs(True, headless.load_state(self.instance.port).checked_in)
+
+    def test_local_session_close_preserves_polite_exit_and_truthful_save_status(self):
+        self.session.repository_profile = ""
+        self.session.program = ""
+        self.session.writable = False
+        self.session.commit = None
+        sessions._save_store([self.session])
+        self.bridge._headless_save_state(
+            self.instance.port, {"port": self.instance.port, "pid": self.instance.pid})
+        self.http.refuse_stop = True
+        with mock.patch.object(requests, "post", return_value=mock.Mock(ok=False)):
+            self.assert_retained(self.close_session())
+            self.http.refuse_stop = False
+            outcome = self.close_session()
+        self.assertIs(True, outcome["success"])
+        self.assertIs(True, outcome["result"]["stopped"]["result"]["stopped"])
+        self.assertIs(False, outcome["result"]["stopped"]["result"]["saved"])
+        self.assertEqual(sessions.STATE_STOPPED, sessions.get_session(self.session.id).state)
+        self.signal_pid.assert_not_called()
+        self.signal_tree.assert_not_called()
+
+    def test_local_stop_timeout_is_not_a_success_and_never_signals(self):
+        self.bridge._headless_save_state(
+            self.instance.port, {"port": self.instance.port, "pid": self.instance.pid})
+        self.http.refuse_stop = True
+        response = mock.Mock(ok=False)
+        with mock.patch.object(requests, "post", return_value=response):
+            self.assert_retained(json.loads(self.bridge.headless_stop(self.instance.port)))
 
 
 class RepositorySessionTests(unittest.TestCase):
