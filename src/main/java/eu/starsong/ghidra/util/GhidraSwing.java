@@ -4,6 +4,12 @@ import ghidra.util.Swing;
 import ghidra.util.exception.UnableToSwingException;
 
 import java.util.concurrent.TimeUnit;
+import javax.swing.SwingUtilities;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -34,6 +40,61 @@ public final class GhidraSwing {
         T get() throws Exception;
     }
 
+    /** Serializes on the actual EDT even when native Ghidra Swing dispatch is headless-inline. */
+    public static void runNow(Runnable operation, long timeout, TimeUnit unit)
+            throws UnableToSwingException {
+        if (SwingUtilities.isEventDispatchThread()) {
+            Swing.runNow(operation, timeout, unit);
+            return;
+        }
+        AtomicBoolean pending = new AtomicBoolean(true);
+        CountDownLatch started = new CountDownLatch(1);
+        CompletableFuture<Void> finished = new CompletableFuture<>();
+        SwingUtilities.invokeLater(() -> {
+            if (!pending.compareAndSet(true, false)) return;
+            started.countDown();
+            try {
+                Swing.runNow(operation, timeout, unit);
+                finished.complete(null);
+            } catch (Throwable e) {
+                finished.completeExceptionally(e);
+            }
+        });
+        try {
+            if (!started.await(timeout, unit) && pending.compareAndSet(true, false)) {
+                throw new UnableToSwingException("Timed out waiting to reach the Swing thread");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            if (pending.compareAndSet(true, false)) {
+                throw new UnableToSwingException("Interrupted waiting to reach the Swing thread");
+            }
+        }
+        // A started callback may own a transaction or consumer: never abandon it.
+        join(finished);
+    }
+
+    /** Acquires/releases native resources without abandoning a callback on interruption/timeout. */
+    public static <T> T runUninterruptibly(Supplier<T> operation) {
+        if (SwingUtilities.isEventDispatchThread()) return operation.get();
+        CompletableFuture<T> finished = new CompletableFuture<>();
+        SwingUtilities.invokeLater(() -> {
+            try { finished.complete(operation.get()); }
+            catch (Throwable e) { finished.completeExceptionally(e); }
+        });
+        return join(finished);
+    }
+
+    private static <T> T join(CompletableFuture<T> finished) {
+        try {
+            return finished.join();
+        } catch (CompletionException e) {
+            if (e.getCause() instanceof RuntimeException runtime) throw runtime;
+            if (e.getCause() instanceof Error error) throw error;
+            throw e;
+        }
+    }
+
     /**
      * Runs a read-only operation on the Swing thread and returns its result.
      *
@@ -60,7 +121,7 @@ public final class GhidraSwing {
         };
 
         try {
-            Swing.runNow(task, READ_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            runNow(task, READ_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (UnableToSwingException e) {
             throw new ReadException(
                 "Timed out after " + READ_TIMEOUT_SECONDS + "s waiting for the Swing thread", e);

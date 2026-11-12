@@ -53,6 +53,7 @@ A command-line interface for GhydraMCP that provides access to Ghidra's reverse 
 - [Fleet queries (R7)](#fleet-queries-r7)
 - [BSim (R1)](#bsim-r1)
   - [The digital twin (R2)](#the-digital-twin-r2)
+- [Worker connections and native repositories](#worker-connections-and-native-repositories)
 
 <!-- /toc -->
 
@@ -1293,8 +1294,35 @@ ghydra bsim ingest        # generate signatures for the open program and insert 
 ghydra bsim query         # which stored functions look like this one
 ghydra bsim apply-names   # name a function after its best match (dry run by default)
 ghydra bsim diff          # what changed between two versions, paired by signature
+ghydra --json bsim status
+ghydra --port 8192 bsim compare-match MATCH_ID --profile corpus \
+  --reference-profile repository-reader --reference-port 8193
+ghydra --port 8192 bsim prepare-apply MATCH_ID --profile corpus \
+  --reference-profile repository-reader --reference-port 8193
+ghydra --port 8192 bsim apply-match MATCH_ID --profile corpus --apply-token TOKEN
+```
 
-> The signature subsystem has its own guide: `GHYDRA_BSIM.md` (setup, corpus, the four traps).
+`bsim query` accepts exact server-side `--executable`, `--architecture` and
+`--compiler` filters, plus repeatable `--category NAME=VALUE`. Predicates combine
+with AND before `--max-matches`; duplicate category names are refused.
+
+```bash
+ghydra --json bsim query --profile corpus --name decode_packet \
+  --executable libcodec.so --compiler gcc --category Library=codec
+```
+
+Use the query result's `available_categories` for legal category names.
+`result.filters` records the search scope; no matches in that scope does not
+prove absence from the corpus. Invalid or unsupported filters never fall back
+to an unfiltered query.
+
+
+> See [BSim](GHYDRA_BSIM.md) for setup and selected-match comparison. It verifies
+> reference MD5/address, keeps both active programs unchanged, and reports an
+> unapplied code/signature/type preview. Truncated evidence is not equality.
+> Signature/type changes require the separate explicit prepare/apply commands.
+> Review the prepared preview before using its token. Conflicts and stale tokens
+> are refused; failed writes roll back. No save or repository publication occurs.
 
 ### The digital twin (R2)
 
@@ -1315,8 +1343,6 @@ it is not complete — a capped snapshot, or one shorter than the API's own coun
 is marked `functions_complete: false`, because a diff over it would otherwise
 report phantom removals. It cannot decompile, read memory, or see a change made
 after it was taken.
-ghydra --json bsim status
-```
 
 BSim is a Ghidra **feature**, not a plugin API, so the plugin discovers it by
 loading the class — a build may ship without it, and `available: false` is a
@@ -1325,3 +1351,21 @@ normal answer, not an error. The signature database is configuration
 `GHYDRA_BSIM_DATABASE` environment variable); `ready` is true only when the
 engine is present *and* a database is named, and `reason` says what is missing
 otherwise.
+
+## Worker connections and native repositories
+
+`ghydra connections list` reads the selected worker's safe profile catalog.
+Human-only provisioning uses `ghydra connections --directory <private-store>`
+under the isolated worker identity; no credential setup is exposed through MCP.
+See [worker setup and security boundaries](GHYDRA_CONNECTIONS.md).
+
+```sh
+ghydra repositories status --profile team-repository
+ghydra repositories list-files --profile team-repository --path / --offset 0 --limit 100
+ghydra repositories open --profile team-repository --path /samples/program
+```
+
+Repository checkout and check-in are explicit; saving a program does not publish
+a version. See [native repository operations](GHYDRA_REPOSITORIES.md) and
+[repository-backed headless sessions](GHYDRA_HEADLESS.md#native-ghidra-server-repository-workers).
+

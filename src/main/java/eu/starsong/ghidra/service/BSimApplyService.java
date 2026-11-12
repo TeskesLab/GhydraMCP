@@ -159,11 +159,11 @@ public final class BSimApplyService {
             // The helper wraps everything into a RuntimeException (its
             // TransactionException for a refused transaction), so a rename that
             // Ghidra refuses arrives here with the reason in the cause chain.
-            String reason = BSimDatabase.describe(
-                failed.getCause() == null ? failed : failed.getCause());
-            boolean refused = reason.contains("DuplicateName")
-                || reason.contains("InvalidInput")
-                || reason.toLowerCase().contains("already exists");
+            Throwable cause = BSimDatabase.unwrap(failed);
+            String type = cause.getClass().getSimpleName();
+            boolean refused = type.contains("DuplicateName") || type.contains("InvalidInput");
+            String reason = refused ? "Ghidra refused the requested function name"
+                : "the function could not be renamed";
             data.put("success", Boolean.FALSE);
             data.put("code", refused ? "BSIM_RENAME_REFUSED" : "BSIM_RENAME_FAILED");
             data.put("reason", reason);

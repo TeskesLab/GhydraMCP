@@ -8,6 +8,7 @@ annotations on a client that records what it was asked to do.
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -266,24 +267,30 @@ class HeadlessStopTests(unittest.TestCase):
                 runner.stop()
             self.assertTrue(os.path.exists(lock))
 
-    def test_the_stop_flag_is_removed_after_a_kill(self):
-        """A run that was killed leaves no flag behind.
-
-        The flag would stop the next run on that port as soon as it starts.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
+    def test_timed_out_stop_retains_state_and_never_signals_the_worker(self):
+        """A normal timeout is a refusal, not permission to discard selections."""
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"GHYDRA_STATE_DIR": tmp}):
             runner = self._runner(tmp)
             runner.instance.pid = 999999
+            runner.instance.token = "owned"
             runner.save = lambda: False
-            flag = headless.stop_file_path(runner.port)
-            os.makedirs(os.path.dirname(flag), exist_ok=True)
-            with open(flag, "w", encoding="utf-8") as handle:
-                handle.write("stop")
-            with mock.patch.object(headless, "process_is_ours", return_value=True), \
-                    mock.patch.object(runner, "_child_exited", return_value=False), \
-                    mock.patch("subprocess.run"):
-                runner.stop(timeout=1)
+            headless.save_state(runner.instance)
+            flag = os.path.join(tmp, "stop")
+            with mock.patch.object(headless, "stop_file_path", return_value=flag), \
+                    mock.patch.object(headless, "process_is_ours", return_value=True), \
+                    mock.patch.object(runner, "_wait_for_exit", return_value=False), \
+                    mock.patch.object(os, "kill") as signal_pid, \
+                    mock.patch.object(subprocess, "run") as signal_tree:
+                with self.assertRaises(headless.HeadlessError) as caught:
+                    runner.stop(timeout=0)
+            self.assertEqual("HEADLESS_STOP_REFUSED", caught.exception.code)
+            remembered = headless.load_state(runner.port)
+            assert remembered is not None, "A live worker must retain its state"
+            self.assertEqual("owned", remembered.token)
             self.assertFalse(os.path.exists(flag))
+            signal_pid.assert_not_called()
+            signal_tree.assert_not_called()
 
     def test_a_run_that_is_already_there_is_refused(self):
         """A run that is still analysing keeps the port.
@@ -385,6 +392,36 @@ class HeadlessSaveTests(unittest.TestCase):
             self.assertTrue(saved,
                             "the analysis was saved and the answer said it was not")
 
+    def test_custom_state_directory_can_stop_and_reap_its_worker(self):
+        """The script's configured stop flag must end the process without a signal."""
+        watcher = (
+            "import os, sys, time\n"
+            "flag = os.path.join(os.environ['GHYDRA_STATE_DIR'], "
+            "'headless-' + sys.argv[1] + '.stop')\n"
+            "deadline = time.monotonic() + 10\n"
+            "while not os.path.isfile(flag):\n"
+            "    if time.monotonic() >= deadline: sys.exit(2)\n"
+            "    time.sleep(0.01)\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+                os.environ, {"GHYDRA_STATE_DIR": tmp, "HOME": tmp, "USERPROFILE": tmp}):
+            runner = self._runner(tmp)
+            child = subprocess.Popen(
+                [sys.executable, "-c", watcher, str(runner.port),
+                 headless.SCRIPT_NAME, f"port={runner.port}"])
+            runner.process = child
+            runner.instance.pid = child.pid
+            headless.save_state(runner.instance)
+            try:
+                with mock.patch.object(runner, "save", return_value=True):
+                    self.assertTrue(runner.stop(timeout=3))
+                self.assertEqual(0, child.wait(timeout=2))
+                self.assertIsNone(headless.load_state(runner.port))
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=5)
+
     def test_a_refused_api_save_without_a_write_is_not_a_save(self):
         """A run that was killed did not save the analysis."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -396,26 +433,6 @@ class HeadlessSaveTests(unittest.TestCase):
                     mock.patch.object(runner, "_wait_for_exit", return_value=True):
                 saved = runner.stop(timeout=1)
             self.assertFalse(saved)
-
-    def test_the_script_stops_the_server_before_it_returns(self):
-        """A headless run has to be able to end.
-
-        The threads of the server are not daemons, and a JVM with a live
-        Jetty does not exit: the run stayed alive after the analyzer had
-        saved the program, and the launcher had to kill it - the polite stop
-        turned into the blunt one, and the analysis of a program that was
-        being saved was lost.
-        """
-        script = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "src", "main", "resources", "ghidra_scripts",
-            "GhidraHeadlessServer.java")
-        with open(script, "r", encoding="utf-8") as handle:
-            body = handle.read()
-        self.assertIn("handle.stop()", body,
-                      "the script does not stop the server it started")
-        self.assertLess(body.index("handle.stop()"), body.index("HEADLESS STOPPED"),
-                        "the server is stopped after the script announced that it stopped")
 
 
 class HeadlessOwnershipTests(unittest.TestCase):
@@ -711,11 +728,6 @@ class HeadlessDiscoveryTests(unittest.TestCase):
                     headless.HeadlessRunner(binary=binary, port=port)
                 self.assertEqual(caught.exception.code, "HEADLESS_BAD_PORT")
 
-    def test_stop_file_lives_with_the_state(self):
-        """The stop file is where the launcher can find it."""
-        path = headless.stop_file_path(8192)
-        self.assertTrue(path.endswith(os.path.join(".ghidra", "headless-8192.stop")))
-
     def test_status_of_an_unknown_port(self):
         """A port nobody serves is reported as such."""
         state = headless.status(65533)
@@ -955,13 +967,8 @@ class ReportTargetTests(unittest.TestCase):
         self.assertTrue(report_module.is_local_host("localhost"))
         self.assertFalse(report_module.is_local_host("192.0.2.1"))
 
-    def test_a_run_that_does_not_come_up_is_stopped(self):
-        """The analyzer of a start that failed is not left behind.
-
-        The command reports the failure and exits, but the analyzer was
-        already spawned - and it would keep the project busy and might
-        start serving later.
-        """
+    def test_cli_does_not_stop_again_after_runner_start_aborts(self):
+        """The runner owns failed-start cleanup; a duplicate stop can lose its error."""
         from click.testing import CliRunner
         from ghydra.cli import headless as headless_cli
 
@@ -977,7 +984,7 @@ class ReportTargetTests(unittest.TestCase):
                 headless_cli.headless, ["start", "C:\\bin\\cmd.exe"],
                 obj={"formatter": _Formatter()})
         self.assertEqual(result.exit_code, 1)
-        runner.stop.assert_called()
+        runner.stop.assert_not_called()
 
 
 class _RecordingClient:

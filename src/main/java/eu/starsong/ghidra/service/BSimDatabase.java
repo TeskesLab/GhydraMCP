@@ -1,5 +1,8 @@
 package eu.starsong.ghidra.service;
 
+import eu.starsong.ghidra.connection.ConnectionProfiles;
+import eu.starsong.ghidra.connection.Profile;
+import eu.starsong.ghidra.connection.WorkerAuthentication;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URL;
@@ -27,6 +30,7 @@ final class BSimDatabase {
 
     static final String SERVER_INFO = "ghidra.features.bsim.query.BSimServerInfo";
     static final String H2_DATABASE = "ghidra.features.bsim.query.file.H2FileFunctionDatabase";
+    static final String CLIENT_FACTORY = "ghidra.features.bsim.query.BSimClientFactory";
     static final String GEN_SIGNATURES = "ghidra.features.bsim.query.GenSignatures";
     static final String FUNCTION_DATABASE = "ghidra.features.bsim.query.FunctionDatabase";
     static final String DATABASE_INFO =
@@ -82,44 +86,59 @@ final class BSimDatabase {
      */
     static Object open(String database, boolean createWhenMissing,
             boolean trackCallGraph, Map<String, Object> data) {
+        Object connection = null;
+        boolean remote = BSimService.remote();
+        String local = remote ? null : BSimService.localDatabase(database);
         try {
             ClassLoader loader = loader();
             Class<?> serverInfoClass = Class.forName(SERVER_INFO, true, loader);
-            Object serverInfo = serverInfoClass.getConstructor(String.class)
-                .newInstance(database);
-            Class<?> h2Class = Class.forName(H2_DATABASE, true, loader);
-            Object connection = h2Class.getConstructor(serverInfoClass)
-                .newInstance(serverInfo);
-
-            boolean existed = exists(database);
-            if (!existed) {
-                if (!createWhenMissing) {
-                    failure(data, "BSIM_NO_DATABASE",
-                        "the signature database does not exist: " + database
-                            + " (ingest a program first)");
-                    return null;
-                }
-                String created = create(connection, database, trackCallGraph);
-                if (created != null) {
-                    release(connection, database);
-                    failure(data, "BSIM_CREATE_FAILED", created);
-                    return null;
-                }
-                data.put("created", Boolean.TRUE);
-            } else {
+            if (remote) {
+                Profile profile = ConnectionProfiles.currentBsim();
+                Object serverInfo = WorkerAuthentication.bsimServerInfo(profile);
+                Class<?> factory = Class.forName(CLIENT_FACTORY, true, loader);
+                connection = factory.getMethod("buildClient", serverInfoClass, boolean.class)
+                    .invoke(null, serverInfo, false);
+                // Remote provisioning is an administrator operation, never ingest.
                 data.put("created", Boolean.FALSE);
+            } else {
+                if (!exists(local) && !createWhenMissing) {
+                    failure(data, "BSIM_NO_DATABASE",
+                        "the local signature database does not exist; ingest a program first");
+                    return null;
+                }
+                Object serverInfo = serverInfoClass.getConstructor(String.class)
+                    .newInstance(local);
+                Class<?> h2Class = Class.forName(H2_DATABASE, true, loader);
+                connection = h2Class.getConstructor(serverInfoClass).newInstance(serverInfo);
+                boolean existed = exists(local);
+                if (!existed) {
+                    String created = create(connection, local, trackCallGraph);
+                    if (created != null) {
+                        release(connection, database);
+                        failure(data, "BSIM_CREATE_FAILED", created);
+                        return null;
+                    }
+                }
+                data.put("created", !existed);
             }
-            if (!Boolean.TRUE.equals(
+            if (connection == null || !Boolean.TRUE.equals(
                     connection.getClass().getMethod("initialize").invoke(connection))) {
-                String reason = lastError(connection);
-                // An H2 handle that outlives the failure keeps the file locked.
                 release(connection, database);
                 failure(data, "BSIM_INIT_FAILED",
-                    "the signature database could not be opened: " + reason);
+                    remote ? "the remote signature database could not be opened; it must already exist"
+                        : "the local signature database could not be opened");
+                return null;
+            }
+            if (remote && "Unencrypted_No_Authentication".equals(
+                    String.valueOf(call(connection, "getConnectionType")))) {
+                release(connection, database);
+                failure(data, "BSIM_INIT_FAILED",
+                    "the remote signature database does not provide authenticated transport");
                 return null;
             }
             return connection;
         } catch (Throwable failed) {
+            release(connection, database);
             failure(data, "BSIM_INIT_FAILED", describe(unwrap(failed)));
             return null;
         }
@@ -145,8 +164,7 @@ final class BSimDatabase {
             Object response = commandClass.getMethod("execute", databaseClass)
                 .invoke(command, connection);
             if (response == null) {
-                return "the database was created but answered with no response: "
-                    + lastError(connection);
+                return "the database could not be created";
             }
             return null;
         } catch (Throwable failed) {
@@ -172,23 +190,9 @@ final class BSimDatabase {
     static String[] projectLocation(Program program) {
         String[] location = new String[] { null, null, null };
         try {
-            Object domainFile = program.getClass().getMethod("getDomainFile")
-                .invoke(program);
-            URL fileUrl = null;
-            for (String method : new String[] { "getSharedProjectURL",
-                    "getLocalProjectURL" }) {
-                try {
-                    fileUrl = (URL) domainFile.getClass()
-                        .getMethod(method,
-                            Class.forName("ghidra.framework.model.ProjectLocator"))
-                        .invoke(domainFile, new Object[] { null });
-                } catch (Throwable ignored) {
-                    // Try the next accessor.
-                }
-                if (fileUrl != null) {
-                    break;
-                }
-            }
+            var domainFile = program.getDomainFile();
+            URL fileUrl = domainFile.getSharedProjectURL(null);
+            if (fileUrl == null) fileUrl = domainFile.getLocalProjectURL(null);
             if (fileUrl == null) {
                 location[2] = "the program has not been saved to a project, so "
                     + "BSim cannot record a repository and a path for it";
@@ -234,6 +238,9 @@ final class BSimDatabase {
      */
     static void release(Object connection, String database) {
         closeQuietly(connection);
+        if (BSimService.remote()) {
+            return;
+        }
         try {
             ClassLoader loader = loader();
             Class<?> managerClass = Class.forName(
@@ -241,7 +248,7 @@ final class BSimDatabase {
                 true, loader);
             Class<?> serverInfoClass = Class.forName(SERVER_INFO, true, loader);
             Object serverInfo = serverInfoClass.getConstructor(String.class)
-                .newInstance(database);
+                .newInstance(BSimService.localDatabase(database));
             Object source = managerClass
                 .getMethod("getDataSourceIfExists", serverInfoClass)
                 .invoke(null, serverInfo);
@@ -307,9 +314,8 @@ final class BSimDatabase {
     }
 
     static String describe(Throwable cause) {
-        String message = cause.getMessage();
-        String type = cause.getClass().getSimpleName();
-        return message == null || message.isBlank() ? type : type + ": " + message;
+        // Native exceptions can include endpoints, identities and JDBC passwords.
+        return "the native BSim operation failed";
     }
 
     /**

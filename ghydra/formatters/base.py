@@ -444,3 +444,28 @@ class BaseFormatter(ABC):
             Formatted error string
         """
         pass
+
+    @abstractmethod
+    def format_connections(self, data: Dict[str, Any]) -> str:
+        """Format the safe worker profile catalog."""
+        pass
+
+    @abstractmethod
+    def format_repository(self, data: Dict[str, Any]) -> str:
+        """Format native repository status, files, or an operation outcome."""
+        pass
+
+    @abstractmethod
+    def format_bsim_comparison(self, data: Dict[str, Any]) -> str:
+        """Format a selected-match diff and its non-mutating change preview."""
+        pass
+
+    @abstractmethod
+    def format_bsim_prepare_apply(self, data: Dict[str, Any]) -> str:
+        """Format the complete unapplied native preview and explicit apply token."""
+        pass
+
+    @abstractmethod
+    def format_bsim_apply_match(self, data: Dict[str, Any]) -> str:
+        """Format the native outcome of an explicit prepared-match application."""
+        pass

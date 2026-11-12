@@ -31,10 +31,12 @@ public class GhidraHeadlessServer extends GhidraScript {
         Program program = currentProgram;
         Project project = state.getProject();
 
-        if (program == null) {
-            System.out.println("[GhydraMCP] HEADLESS FAILED: no program was imported");
-            return;
-        }
+        // GhidraScript starts a FlatProgramAPI transaction before run(). Serving
+        // for hours inside it prevents HTTP edits from committing or rolling
+        // back independently. end() closes only this script's tracked transaction;
+        // the framework's final end(true) is then a no-op. Never end arbitrary
+        // transactions discovered on the program.
+        end(true);
 
         int port = portFromArgs();
         Map<Integer, Object> instances = new ConcurrentHashMap<>();
@@ -44,7 +46,7 @@ public class GhidraHeadlessServer extends GhidraScript {
             GhydraServerFactory.startHeadless(program, project, port, instances, true);
 
         System.out.println("[GhidraMCP] HEADLESS READY port=" + port
-            + " program=" + program.getName()
+            + " program=" + (program != null ? program.getName() : "none")
             + " project=" + (project != null ? project.getName() : "none"));
         System.out.flush();
 
@@ -58,17 +60,18 @@ public class GhidraHeadlessServer extends GhidraScript {
         // the lock file behind, and the next run would refuse to open the
         // project.
         java.io.File stop = stopFile(port);
-        while (!stop.exists()) {
-            Thread.sleep(500);
+        while (true) {
+            while (!stop.exists()) Thread.sleep(500);
+            stop.delete();
+            try {
+                handle.stop();
+                break;
+            } catch (eu.starsong.ghidra.connection.ConnectionException
+                    | eu.starsong.ghidra.service.RepositoryService.RepositoryException refused) {
+                System.out.println("[GhydraMCP] HEADLESS STOP REFUSED: save work or finish active requests.");
+                System.out.flush();
+            }
         }
-        stop.delete();
-
-        // The server is stopped before the script returns. Its threads are
-        // not daemons, and a JVM with a live Jetty does not exit: the run
-        // would stay alive after the analyzer saved the program, and the
-        // launcher would have to kill it - which is the polite stop turned
-        // into the blunt one.
-        handle.stop();
         System.out.println("[GhydraMCP] HTTP server stopped on port " + port);
 
         System.out.println("[GhydraMCP] HEADLESS STOPPED port=" + port);
@@ -93,10 +96,10 @@ public class GhidraHeadlessServer extends GhidraScript {
         snapshot.put("headless", true);
         snapshot.put("toolName", null);
         snapshot.put("project", project != null ? project.getName() : null);
-        snapshot.put("file", program.getName());
-        snapshot.put("executable", program.getExecutablePath());
-        snapshot.put("architecture", program.getLanguageID().getIdAsString());
-        snapshot.put("imageBase", program.getImageBase().toString());
+        snapshot.put("file", program != null ? program.getName() : null);
+        snapshot.put("executable", program != null ? program.getExecutablePath() : null);
+        snapshot.put("architecture", program != null ? program.getLanguageID().getIdAsString() : null);
+        snapshot.put("imageBase", program != null ? program.getImageBase().toString() : null);
         return snapshot;
     }
 
@@ -106,8 +109,11 @@ public class GhidraHeadlessServer extends GhidraScript {
      * It sits with the other state of the launcher, in the home directory of
      * the user that runs the analysis.
      */
-    private java.io.File stopFile(int port) {        String home = System.getProperty("user.home", ".");
-        java.io.File dir = new java.io.File(home, ".ghidra");
+    private java.io.File stopFile(int port) {
+        String configured = System.getenv("GHYDRA_STATE_DIR");
+        java.io.File dir = configured == null || configured.isEmpty()
+            ? new java.io.File(System.getProperty("user.home", "."), ".ghidra")
+            : new java.io.File(configured);
         dir.mkdirs();
         return new java.io.File(dir, "headless-" + port + ".stop");
     }

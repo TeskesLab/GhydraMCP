@@ -34,6 +34,7 @@
   - [12. Raw Image](#12-raw-image)
   - [13. BSim (signatures)](#13-bsim-signatures)
 - [Design Considerations for AI Usage](#design-considerations-for-ai-usage)
+- [14. Worker Connections and Native Repositories](#14-worker-connections-and-native-repositories)
 
 <!-- /toc -->
 
@@ -1119,12 +1120,90 @@ Which stored functions look like **one function of the open program**.
 | `min_similarity` | Similarity floor 0..1 (absent = 0.7) |
 | `min_significance` | Significance floor (absent = 0) |
 | `max_matches` | How many matches to return (absent = 10, cap 200) |
+| `executable` | Exact stored executable name |
+| `architecture` | Exact stored Ghidra language ID |
+| `compiler` | Exact stored compiler-specification ID |
+| `categories` | JSON text object of category name → nonempty string value |
 
 Each match carries `function`, `address`, `executable`, `path`, `similarity` and
 `significance` — **BSim's own numbers**, and the answer's `method` line says a
 match is a lead, not an identification. An empty answer states the threshold it
 used (`"no stored function is at least 0.8 similar (threshold used)"`), so
 "not in the corpus" cannot be mistaken for "the search was narrowed".
+
+Metadata predicates combine with AND inside native BSim before `max_matches`
+is applied. For example, URL-encode `categories={"Library":"codec","Version":"1.0"}`.
+Only one value per category is accepted; duplicate keys, malformed objects,
+unknown categories and unavailable native filters are rejected, never ignored.
+The result's `filters` describes the predicates used; `available_categories`
+lists the category names configured by the database. An empty scoped result
+does not establish absence outside that scope. Filter parameters may not be
+repeated.
+Filtering supports native H2 and PostgreSQL backends. Elasticsearch and unknown
+backends reject nonempty filters. Invalid predicates return HTTP 400
+`BSIM_FILTER_INVALID`; unavailable native filter support returns HTTP 400
+`BSIM_FILTER_UNSUPPORTED`.
+
+
+Rows also carry an opaque `match_id`, `executable_md5`, `repository_url`,
+`architecture`, `compiler`, and `reference_available`. Repository URLs contain no
+userinfo/query/fragment; unusable identities cannot be resolved automatically.
+Selections bind the source program/function/modification and originating profile.
+The newest 256 rows survive only in that worker process.
+
+#### Selected-match comparison
+
+- `GET /bsim/matches/{match_id}?profile=ID&max_code_lines=1000` returns
+  `{selection,target}`: exact candidate metadata and a consistent detached target
+  function snapshot. Unknown/evicted IDs fail; changed/closed/other active targets
+  fail with `BSIM_MATCH_STALE`. The wrong corpus profile cannot replay an ID.
+- `GET /repositories/inspect-match` on the reference worker accepts flat queries
+  `profile`, `match_id`, `repository_url`, `executable_md5`, `address`, optional
+  `function`, `version=-1`, `max_code_lines=1000`. It opens only an approved
+  repository binding at a concrete stored version, verifies MD5 and exact address,
+  and returns `{match_id,identity_verified,profile,path,version,snapshot}`.
+  No active selection, checkout, save or retained program cache is changed.
+- `GET /bsim/matches/{match_id}/validate?profile=ID` rechecks the source after
+  reference I/O and returns `{valid:true,match_id}` or a stale-selection error.
+
+Snapshots contain program identity, qualified function address/FQN, prototype,
+parameters, return type, calling convention, variadic flag, comment, a recursive
+type graph, code completeness and a modification stamp. Type graphs stop at
+256 nodes/depth16/4096 shape entries; code limits are 1..10000 lines per function.
+Missing/truncated evidence is explicitly incomplete. Decompilation stays off EDT.
+`bsim_compare_match` / `ghydra bsim compare-match` compose these read-only GETs
+and the shared pure comparator into textual C/signature/type differences and
+unapplied annotation previews. This does not perform native CodeDiffPlugin
+instruction alignment or signature/type transfer.
+
+#### Explicit selected-match signature/type application
+
+- `GET /bsim/matches/{match_id}/selection?profile=ID` returns the exact selected
+  identity without decompilation; preparation does not depend on truncated C.
+- `GET /repositories/export-match` accepts the selected identity/profile queries
+  used by inspection, with optional concrete `version` (`-1` selects latest).
+  It verifies the reference and exports its native signature/dependency types
+  without activation, checkout or mutation.
+- `POST /bsim/matches/{match_id}/prepare-apply?profile=ID` accepts JSON
+  `{"reference": EXPORT_RESULT}`. It validates the exact selected identity,
+  target stamp, ABI and native type conflicts without changing the target.
+  The response contains an exact preview and opaque worker-local `apply_token`.
+  This is a trusted-coordinator endpoint: fetch the export directly from the
+  approved reference worker over protected transport. The target does not
+  re-resolve the reference or authenticate arbitrary forwarded archives.
+  Preview `selection_identity_checked` means row/payload consistency, not an
+  attestation of reference-worker origin; a digest/token is not provenance.
+- `POST /bsim/matches/{match_id}/apply?profile=ID` accepts JSON
+  `{"apply_token": TOKEN}`. Only this separate explicit request applies the
+  prepared name/namespace, function signature and referenced native types.
+  The program identity/stamp, profile, token and write permissions are rechecked.
+
+Incompatible types are refused rather than silently overwritten. Failures roll
+back the transaction. Tokens cannot be reused, retargeted, or carried across
+worker restarts. No bytes, local variables or comments are transferred; neither
+operation saves, checks out or checks in a program. Native read-only policy applies.
+MCP tools are `bsim_prepare_apply` and `bsim_apply_match`; CLI commands are
+`bsim prepare-apply` and `bsim apply-match`. A comparison is never an apply request.
 
 Measured: `where.exe`'s `FUN_140001010` matched itself with **similarity 1.0 /
 significance 26.024 in 0.8 s** (0.2 s when asked by name).
@@ -1195,3 +1274,40 @@ Failure codes: `BSIM_NO_TARGET`, `BSIM_NO_DATABASE`, `BSIM_NO_PROGRAM`.
 - **Pagination & Filtering**: Essential for handling potentially large datasets (symbols, functions, xrefs, disassembly).
 - **Clear Error Reporting**: `success: false` and the `error` object provide actionable feedback.
 - **No Injected Summaries**: The API should return raw or structured Ghidra data, leaving interpretation and summarization to the AI agent.
+
+## 14. Worker Connections and Native Repositories
+
+Profiles are provisioned by a human under the isolated worker account. There
+is no credential-upload, profile-write or arbitrary endpoint parameter.
+See [worker setup](GHYDRA_CONNECTIONS.md) and
+[repository semantics](GHYDRA_REPOSITORIES.md).
+
+| Method / route | Input | Result |
+| --- | --- | --- |
+| `GET /connections` | none | IDs, kinds, backends and grants only |
+| `GET /repositories` | `profile` query | Native connectivity and effective read-only state |
+| `GET /repositories/files` | `profile`, `path=/`, `offset=0`, `limit=100` queries | Entries, total, continuation and explicit truncation |
+| `GET /repositories/inspect-match` | Bound selected-match identity queries; see §13 | Temporary verified read-only function snapshot |
+| `POST /repositories/open` | JSON `profile`, `path`, optional `version=-1` | Active program and read-only state |
+| `POST /repositories/checkout` | JSON `profile`, `path`, optional `exclusive=false` | Native checkout state |
+| `POST /repositories/checkin` | JSON `profile`, `path`, `comment`, optional `keep_checked_out=false` | Published version and remaining checkout |
+
+Every BSim route accepts optional `profile=ID`. Without it, the worker's
+default BSim profile or existing local H2 configuration applies. Native
+remote databases must already exist. `query`, `diff` and `apply-names` require
+the query grant; ingest requires its own grant. Remote `database_exists`
+is null until an operation connects; `connection_checked=false` makes clear
+that status is not a successful remote connection test.
+
+Repository opening does not check out a file. Program save is not check-in.
+API check-in requires a saved Program and exclusive checkout; it never
+silently merges or forces a conflicting version. Profile authorization is
+additional to native server permissions. Repository parameters outside the
+documented set are rejected.
+
+Profile workers block both script routes even when the script opt-in flag
+is set. Connection/repository failures use stable `CONNECTION_*` and
+`REPOSITORY_*` codes without native exception details. An authentication,
+certificate, ownership or permission failure does not fall back to another
+identity or endpoint.
+

@@ -23,7 +23,7 @@ headless runs expose the same API without a window.
 Optional local integrations connect the
 [x64dbg MCP server](https://github.com/duty1g/x64dbg-mcp-server) and
 [Kuna](https://github.com/Noelo-Lab/kuna). The bridge exposes
-**134 tools in 36 namespaces**, grouped into workflow profiles; see the
+**143 tools in 38 namespaces**, grouped into workflow profiles; see the
 [generated catalogue](docs/GHYDRA_TOOLS.md), not a second list here.
 
 **Prefer the CLI** for terminal, scripting, and shell-capable assistants. The
@@ -116,6 +116,7 @@ addressable MCP resources. Tool output defaults to text; use
 | [CLI reference](docs/GHYDRA_CLI.md) · [Cheat sheet](docs/GHYDRA_CHEATSHEET.md) | Commands and options |
 | [Concepts](docs/GHYDRA_CONCEPTS.md) · [Output formats](docs/GHYDRA_OUTPUT.md) | Evidence, budgets, envelopes, exit codes |
 | [Headless](docs/GHYDRA_HEADLESS.md) · [BSim](docs/GHYDRA_BSIM.md) | Runs, reports, and signature comparisons |
+| [Remote connections](docs/GHYDRA_CONNECTIONS.md) · [Shared repositories](docs/GHYDRA_REPOSITORIES.md) | Isolated credentials and native Ghidra Server access |
 | [Kuna](docs/GHYDRA_KUNA.md) · [x64dbg](docs/GHYDRA_X64DBG.md) | Optional decompiler and debugger integrations |
 | [Troubleshooting](docs/GHYDRA_TROUBLESHOOTING.md) · [Error codes](docs/GHYDRA_ERRORS.md) | Failures and remedies |
 

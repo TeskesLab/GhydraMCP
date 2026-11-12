@@ -68,6 +68,91 @@ ghydra inspect C:\bin\cmd.exe
 The command waits for the API to answer before it returns, so a script can use it as a gate: the
 next command talks to an instance that is up.
 
+### Native Ghidra Server repository workers
+
+Run these commands **out of band under the isolated POSIX worker account** that owns the
+private connection store, not under the agent's account. Provision an approved `ghidra`
+profile using [worker connection setup](GHYDRA_CONNECTIONS.md) first. The native repository
+must already exist; this mode never imports a local binary or creates a repository.
+
+```sh
+ghydra headless start --repository-profile team-repository \
+  --program folder/program.exe --connections-dir /srv/ghydra-worker/connections
+ghydra headless status --port 8192
+ghydra headless stop --port 8192
+```
+
+`--program` selects exactly one existing program relative to the profile's approved repository
+folder. An optional leading `/` is accepted; traversal, empty components, wildcard patterns,
+control characters, encoded paths and native option names are refused. Do not supply a binary,
+`--project-dir` or `--project-name` in repository mode. The directory may instead be selected
+by `GHYDRA_CONNECTIONS_DIR` (a path only, never credentials).
+
+The normal detached native JVM lifecycle starts a **persistent empty local project**, with no
+`-import`, `-process`, native repository URL, `-connect`, `-p`, `-keystore` or native `-commit`
+arguments. The bootstrap project lives under `~/ghidra_projects/repository-workers`; its stable
+name identifies the opaque profile and literal program path, not a local binary. It is not
+imported-binary provenance or evidence that a repository program was saved.
+
+The only connection JVM property is `-Dghydra.connections.dir`, an operator-supplied directory
+path. Python never opens the private profile/credential store and never supplies authentication
+through argv, environment or stdin. Java's isolated credential worker alone reads credentials,
+inside the approved scope of the repository HTTP operation. The profile ID and program path
+travel through the existing `/repositories` APIs after the local HTTP server is ready. No
+initial native-analyzer authentication or Python authentication supervisor exists. Worker
+scripting routes remain disabled; arbitrary native arguments and scripts are not accepted.
+
+Startup browses the selected program's parent folder through offset pages until the exact file
+is found. Read-only mode explicitly opens its **positive latest repository version**, obtaining
+an immutable snapshot even when the worker already has a writable local checkout.
+
+Writes require the `read`, `checkout` and `checkin` profile grants, plus both explicit options:
+
+```sh
+ghydra headless start --repository-profile team-repository --program folder/program.exe \
+  --connections-dir /srv/ghydra-worker/connections \
+  --writable --commit 'Reviewed analysis changes'
+```
+
+Writable startup reuses only a current exclusive local checkout. Otherwise it requests an
+exclusive checkout before opening the latest writable program. Existing nonexclusive/stale
+checkouts and server conflicts are refused, never overridden or merged automatically.
+
+**Save and check-in are separate operations.** Before normal stop, `/program/save` persists the
+active workspace locally. Only writable mode then explicitly checks in the original approved
+profile/program, with the operator's comment. This uses `keep_checked_out=true`: Ghidra cannot
+release the checkout while the native program remains open. The **exclusive checkout persists
+after stop**; arrange its release separately after closing programs, using the native repository
+workflow. Save alone never publishes a repository version.
+
+Stop reports independent `saved` and `checked_in` fields from the actual HTTP results, never
+native output matching, analyzer exit status, or bootstrap-project writes. `saved=false` with
+“no unsaved changes” is a valid unchanged workspace. `null` means no confirmation was received,
+not an invented success or failure; `confirmation_unknown` exposes that distinction. Refused or
+unconfirmed save/check-in leaves the worker and state available rather than discarding work.
+
+Before every writable check-in, the original file's metadata is read afresh.
+An unchanged checkout stops without publishing a version (`checked_in=false` if
+none was published during this run). A prior confirmed check-in is retained only
+when `modified_since_checkout=false`; edits saved separately through HTTP require
+another explicit check-in. Missing change-state confirmation refuses stop.
+
+Named sessions use the same options and retain the remote profile/program selection:
+
+```sh
+ghydra session open --repository-profile team-repository --program folder/program.exe \
+  --connections-dir /srv/ghydra-worker/connections --name review
+ghydra session close SESSION_ID
+ghydra session reopen SESSION_ID --connections-dir /srv/ghydra-worker/connections
+```
+
+Reopening a stopped session starts the same profile/program context, with Java resolving current
+approved credentials, including rotations. Stop reattaches from retained PID/port/profile/program
+metadata without Python credential reads. Save/check-in failures and shutdown refusals preserve
+the running session. Normal stop timeouts retain the worker and state and send **no termination
+signal**; only cleanup of an owned child whose startup failed may force termination.
+
+
 ### `ghydra headless status`
 
 What is on the port: whether the run is alive, whether the API answers, the program it serves, the
@@ -79,17 +164,17 @@ Ends the run. The program is saved first, so the project holds the analysis and 
 opened in Ghidra later. The answer says whether the analysis is in the project, and a save the
 server refused is not reported as a save.
 
-**The save is the analyzer's.** In a headless run the API cannot save the program: it is inside the
-transaction of the script that serves the API, and the server refuses with "Unable to lock due to
-active transaction". The analyzer saves the program when the script returns — which is what the
-stop file is for. So the answer is built from the project: Ghidra writes the content of the program
-under `<project>.rep/idata/`, in a file whose name starts with `db.`, and that is the witness of the
-save.
+**The serving script releases its own transaction before starting the API.**
+This permits explicit signature/type application to use an independent atomic
+transaction. It does not end unrelated transactions; those can still prevent an
+operation or save. On normal stop the analyzer also saves its program when the
+script returns. The project database under `<project>.rep/idata/` remains the
+on-disk witness used by the launcher, not an assumed success from a save request.
 
 The stop takes about a second. The script stops the server it started, the analyzer saves the
 program and closes the project, and the process exits. The server has to be stopped: the threads of
-a Jetty are not daemons, and a JVM with a live Jetty does not exit — so the run would stay alive
-after the analyzer had saved the program, and the launcher would have to kill it.
+a Jetty are not daemons, and a JVM with a live Jetty does not exit. If shutdown is refused or
+times out, the launcher retains the process and state; it does not force-kill a managed selection.
 
 The state of the run is erased only while it is still that run's state. A start that was refused
 before the analyzer was launched has no process of its own, and the state on disk belongs to a run
@@ -295,7 +380,8 @@ symbol" on the class, and on everything the class brings with it (`currentProgra
 `getScriptArgs()`). It was measured: the same failure happens for a script inside a Ghidra module
 and for one outside every module, so it is not about where the script lives.
 
-**Stopping the run.** The launcher leaves a stop file behind (`~/.ghidra/headless-<port>.stop`) and
+**Stopping the run.** The launcher leaves a stop file in `GHYDRA_STATE_DIR`, or
+`~/.ghidra/headless-<port>.stop` when no state directory is set, and
 the script returns when it sees it. The headless analyzer then saves the program and closes the
 project, and the project is left unlocked. Killing the process instead leaves the lock file
 behind, and the next run refuses to open the project.

@@ -33,7 +33,7 @@ import ghidra.util.task.TaskMonitor;
  * {@code NullPointerException: LSHVectorFactory.getSettings()} on a database
  * created in the same call.
  *
- * <p><b>A database that does not exist is created.</b> Measured:
+ * <p><b>A missing local H2 database is created; remote databases must exist.</b> Measured:
  * {@code initialize()} on a missing H2 file answers
  * {@code "Database does not exist: …mv.db"}, so the create happens first, with
  * Ghidra's {@code CreateDatabase} command and the {@code medium_nosize} template.
@@ -94,14 +94,10 @@ public final class BSimIngestService {
     }
 
     /**
-     * Generate signatures for {@code program} and insert them into the database
-     * named by {@link BSimService#database()}, creating it when it is absent.
+     * Generate signatures for {@code program} and insert them into the selected
+     * database, creating only local H2 databases when absent.
      *
-     * <p>Measured on Ghidra 12.2 / H2: creating the database with
-     * {@code trackcallgraph=true} makes the insert fail with a duplicate
-     * {@code callgraphtable(src,dest)} key for a program with normal recursion.
-     * The signature tables are exactly what a similarity query needs, so the
-     * default is off and turning it on is a request the caller makes knowingly.
+     * <p>Call graph records are sorted before insertion, following Ghidra's script.
      *
      * @param program       the analysed program (never null)
      * @param maxFunctions  how many functions to scan at most, 0 for all
@@ -257,7 +253,8 @@ public final class BSimIngestService {
                 .invoke(request, connection);
             if (response == null) {
                 String reason = BSimDatabase.lastError(connection);
-                if (reason != null && reason.toLowerCase().contains("already ingested")) {
+                if (reason != null && reason.toLowerCase(java.util.Locale.ROOT)
+                        .contains("already ingested")) {
                     // BSim keys an executable by its fingerprint and refuses a
                     // second insert of the same binary BEFORE it inserts a
                     // single function, so the functions of a previously capped
@@ -267,10 +264,10 @@ public final class BSimIngestService {
                     // called a success.
                     return reportAlreadyIngested(data, program, connection,
                         description, selected.size(), discovered, described,
-                        reason, started);
+                        "the executable is already ingested", started);
                 }
                 return BSimDatabase.failure(data, "BSIM_INSERT_FAILED",
-                    "the database refused the insert: " + reason);
+                    "the database refused the insert");
             }
 
             data.put("success", Boolean.TRUE);
@@ -287,7 +284,7 @@ public final class BSimIngestService {
             return data;
         } finally {
             BSimDatabase.disposeQuietly(signatureGenerator);
-            BSimDatabase.closeQuietly(connection);
+            BSimDatabase.release(connection, database);
         }
     }
 

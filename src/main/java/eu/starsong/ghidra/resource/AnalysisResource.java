@@ -6,10 +6,12 @@ import eu.starsong.ghidra.hateoas.Links;
 import eu.starsong.ghidra.hateoas.Paginator;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
+import eu.starsong.ghidra.server.ManagedProgramGuard;
 import eu.starsong.ghidra.server.Resource;
 import eu.starsong.ghidra.service.AnalysisService;
 import eu.starsong.ghidra.util.DataFlowUtil;
 import eu.starsong.ghidra.util.GhidraUtil;
+import eu.starsong.ghidra.util.GhidraSwing;
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 import ghidra.program.model.address.Address;
 import ghidra.util.task.TaskMonitor;
@@ -60,6 +62,7 @@ public class AnalysisResource implements Resource {
 
     private void run(GhidraContext ctx) {
         var program = ctx.requireProgram();
+        GhidraSwing.runRead(() -> ManagedProgramGuard.validateMutation(program));
         AutoAnalysisManager am = AutoAnalysisManager.getAnalysisManager(program);
         if (am.isAnalyzing()) {
             ctx.status(409);

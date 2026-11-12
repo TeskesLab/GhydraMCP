@@ -64,6 +64,10 @@ class Session:
     created_at: float = 0.0
     updated_at: float = 0.0
     extra: Dict[str, Any] = field(default_factory=dict)
+    repository_profile: str = ""
+    program: str = ""
+    writable: bool = False
+    commit: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -160,7 +164,11 @@ def _build_runner(binary: str,
                   port: int = DEFAULT_PORT,
                   ghidra_home: str = "",
                   java_home: str = "",
-                  host: str = "127.0.0.1"):
+                  host: str = "127.0.0.1",
+                  repository_profile: Optional[str] = None,
+                  program: Optional[str] = None,
+                  connections_dir: Optional[str] = None,
+                  writable: bool = False, commit: Optional[str] = None):
     """The headless runner that serves a session.
 
     The runner is built here and nowhere else, so a caller that wants a
@@ -174,6 +182,8 @@ def _build_runner(binary: str,
         ghidra_home=ghidra_home or None,
         java_home=java_home or None,
         host=host,
+        repository_profile=repository_profile, program=program,
+        connections_dir=connections_dir, writable=writable, commit=commit,
     )
 
 
@@ -226,24 +236,30 @@ def touch_session(session: Session) -> Session:
     return session
 
 
-def open_session(binary: str,
+def open_session(binary: str = "",
                  name: str = "",
                  port: int = DEFAULT_PORT,
                  ghidra_home: str = "",
                  java_home: str = "",
                  timeout: int = 900,
-                 provider: str = PROVIDER_GHIDRA) -> Session:
+                 provider: str = PROVIDER_GHIDRA,
+                 repository_profile: Optional[str] = None,
+                 program: Optional[str] = None,
+                 connections_dir: Optional[str] = None,
+                 writable: bool = False,
+                 commit: Optional[str] = None) -> Session:
     """Open a session: start the run, and remember it.
 
     The name is the name of the binary, unless the caller gives one. A
     name that is already taken is refused: two sessions with one name are
     two answers to one question.
     """
-    if not binary:
-        raise SessionError("no binary to open", code="SESSION_BAD_NAME")
-    binary = os.path.abspath(os.path.expanduser(binary))
+    if not binary and not repository_profile:
+        raise SessionError("no binary or repository profile to open", code="SESSION_BAD_NAME")
+    if not repository_profile:
+        binary = os.path.abspath(os.path.expanduser(binary))
     if not name:
-        name = os.path.splitext(binary_name(binary))[0] or "binary"
+        name = os.path.splitext(binary_name((program or "") if repository_profile else binary))[0] or "program"
     name = _check_name(name)
 
     sessions = _load_store()
@@ -262,9 +278,13 @@ def open_session(binary: str,
     # building the runner is where the installation is looked for, so on a
     # machine without Ghidra the failure comes from the constructor and not
     # from the run.
+    runner_options = {}
+    if repository_profile:
+        runner_options = dict(repository_profile=repository_profile, program=program,
+                              connections_dir=connections_dir, writable=writable, commit=commit)
     try:
         runner = _build_runner(binary, port=port, ghidra_home=ghidra_home,
-                               java_home=java_home)
+                               java_home=java_home, **runner_options)
         instance = runner.start(timeout=timeout)
     except Exception as exc:
         from .headless import HeadlessError
@@ -290,6 +310,10 @@ def open_session(binary: str,
         project=os.path.join(project_dir, project_name) if project_dir else project_name,
         created_at=now,
         updated_at=now,
+        repository_profile=repository_profile or "",
+        program=str(getattr(instance, "program", "") or ""),
+        writable=writable,
+        commit=commit,
         extra={
             "ghidra_home": ghidra_home,
             "java_home": java_home,
@@ -313,19 +337,36 @@ def close_session(session_id: str, timeout: int = 20) -> Session:
             f"the session {session.id} is not running", code="SESSION_NOT_RUNNING")
 
     extra = session.extra or {}
-    runner = _build_runner(
-        session.binary,
-        port=session.port,
-        ghidra_home=str(extra.get("ghidra_home") or ""),
-        java_home=str(extra.get("java_home") or ""),
-    )
+    if session.repository_profile:
+        from .headless import HeadlessRunner, load_state
+        remembered = load_state(session.port)
+        if remembered is None or remembered.pid != session.pid:
+            raise SessionError("The repository worker state is unavailable.",
+                               code="SESSION_NOT_RUNNING")
+        runner = HeadlessRunner.from_instance(remembered)
+    else:
+        runner = _build_runner(
+            session.binary,
+            port=session.port,
+            ghidra_home=str(extra.get("ghidra_home") or ""),
+            java_home=str(extra.get("java_home") or ""),
+        )
     instance = getattr(runner, "instance", None)
     if instance is not None:
         try:
             instance.pid = session.pid
         except (AttributeError, TypeError):
             pass
-    runner.stop(timeout=timeout)
+    from .headless import HeadlessError
+    try:
+        runner.stop(timeout=timeout)
+    except HeadlessError as exc:
+        raise SessionError(str(exc), code=exc.code) from exc
+    if session.repository_profile:
+        session.extra["saved"] = runner.instance.repository_saved
+        session.extra["checked_in"] = runner.instance.checked_in
+        session.extra["confirmation_unknown"] = (
+            runner.instance.repository_saved is None or runner.instance.checked_in is None)
 
     session.state = STATE_STOPPED
     session.updated_at = time.time()
@@ -337,4 +378,36 @@ def close_session(session_id: str, timeout: int = 20) -> Session:
     else:
         sessions.append(session)
     _save_store(sessions)
+    return session
+
+
+def reopen_session(session_id: str, connections_dir: Optional[str] = None,
+                   timeout: int = 900) -> Session:
+    """Restart a stopped context; scoped Java operations resolve current credentials."""
+    session = get_session(session_id)
+    if session.state == STATE_RUNNING:
+        raise SessionError("The session is already running.", code="SESSION_ALREADY")
+    extra = session.extra or {}
+    options = {}
+    if session.repository_profile:
+        options = dict(repository_profile=session.repository_profile, program=session.program,
+                       connections_dir=connections_dir, writable=session.writable,
+                       commit=session.commit)
+    try:
+        runner = _build_runner(session.binary, port=session.port,
+                               ghidra_home=extra.get("ghidra_home", ""),
+                               java_home=extra.get("java_home", ""), **options)
+        instance = runner.start(timeout=timeout)
+    except Exception as exc:
+        from .headless import HeadlessError
+        if isinstance(exc, HeadlessError):
+            raise SessionError(str(exc), code=exc.code) from None
+        raise
+    session.pid = instance.pid
+    session.state = STATE_RUNNING
+    session.updated_at = time.time()
+    for key in ("saved", "checked_in", "confirmation_unknown"):
+        session.extra.pop(key, None)
+    stored = _load_store()
+    _save_store([session if item.id == session.id else item for item in stored])
     return session

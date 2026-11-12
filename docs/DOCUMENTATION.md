@@ -20,13 +20,15 @@ are trying to do**, not by where the code lives.
 | do a specific job | [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) | task recipes and an illustrative assistant session |
 | translate an answer that looks wrong | [GHYDRA_TROUBLESHOOTING.md](GHYDRA_TROUBLESHOOTING.md) | error codes → cause → fix |
 | parse an answer, or wire it into CI | [GHYDRA_OUTPUT.md](GHYDRA_OUTPUT.md) | formats, the envelope, exit codes |
-| look up a tool | [GHYDRA_TOOLS.md](GHYDRA_TOOLS.md) | the generated catalogue (134 tools) |
+| look up a tool | [GHYDRA_TOOLS.md](GHYDRA_TOOLS.md) | the generated catalogue (140 tools) |
 | look up an error code | [GHYDRA_ERRORS.md](GHYDRA_ERRORS.md) | every code, its status and the line that raises it |
 | unify this with the x64dbg side | [../contract/README.md](../contract/README.md) | the contract: vocabulary, address model, error envelope, conformance |
 | recall a command | [GHYDRA_CHEATSHEET.md](GHYDRA_CHEATSHEET.md) | **generated** one-liner for every command |
 | use the CLI | [GHYDRA_CLI.md](GHYDRA_CLI.md) | every command |
 | call the REST API | [GHIDRA_HTTP_API.md](GHIDRA_HTTP_API.md) | every route, `API_VERSION` 3000 |
 | work with signatures | [GHYDRA_BSIM.md](GHYDRA_BSIM.md) | BSim: corpus, queries, comparisons, traps |
+| connect remote backends without sharing credentials | [GHYDRA_CONNECTIONS.md](GHYDRA_CONNECTIONS.md) | isolated worker setup, profiles, grants, TLS and rotation |
+| use a native shared Ghidra repository | [GHYDRA_REPOSITORIES.md](GHYDRA_REPOSITORIES.md) | repository operations, checkout/check-in and conflicts |
 | run without a window | [GHYDRA_HEADLESS.md](GHYDRA_HEADLESS.md) | headless runs and the report |
 | use Kuna | [GHYDRA_KUNA.md](GHYDRA_KUNA.md) | the decompiler integration, and its costs |
 | use x64dbg | [GHYDRA_X64DBG.md](GHYDRA_X64DBG.md) | the debugger integration, the address model |

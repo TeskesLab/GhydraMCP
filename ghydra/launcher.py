@@ -182,9 +182,9 @@ def required_jdk_major(ghidra_home: str) -> Optional[int]:
     return None
 
 
-def release_marking(ghidra_home: str) -> str:
-    """The marking of the release: PUBLIC, or empty."""
-    return application_properties(ghidra_home).get("application.release.marking", "")
+def release_name(ghidra_home: str) -> str:
+    """The native release name, such as PUBLIC or NIX."""
+    return application_properties(ghidra_home).get("application.release.name", "")
 
 
 # ------------------------------------------------------------------- the JDK
@@ -438,7 +438,10 @@ def headless_command(ghidra_home: str, java_home: str, project_dir: str,
                      process: bool = False, overwrite: bool = False,
                      extra: Optional[List[str]] = None,
                      maxmem: Optional[str] = None, script: str = "",
-                     script_args: Optional[List[str]] = None) -> List[str]:
+                     script_args: Optional[List[str]] = None,
+                     empty: bool = False,
+                     connections_dir: Optional[str] = None,
+                     repository_profile: Optional[str] = None) -> List[str]:
     """The command that starts a headless run.
 
     It is the JVM invocation the launcher makes, with the same arguments:
@@ -450,10 +453,16 @@ def headless_command(ghidra_home: str, java_home: str, project_dir: str,
     there fails, and the run never reaches the script that starts the
     server.
 
-    ``script`` is the name of a script to run after the analysis, with
-    ``script_args`` as its arguments. The script runs while the analysis is
-    still in the run, which is what lets it keep serving.
+    ``empty`` runs the script once without importing or processing a binary.
+    ``script_args`` supplies the script arguments. The script keeps the run
+    alive while it serves the API.
     """
+    if empty and (not script or binary or process or overwrite):
+        raise LauncherError("Empty project runs require a script and no binary operation.",
+                            code="LAUNCHER_INVALID_ARGUMENT")
+    if repository_profile and (not empty or extra or script != "GhidraHeadlessServer"):
+        raise LauncherError("Repository workers require the fixed empty-project bootstrap.",
+                            code="CONNECTION_PERMISSION_DENIED")
     java = java_binary(java_home)
     utility = os.path.join(ghidra_home, "Ghidra", "Framework", "Utility", "lib", "Utility.jar")
     if not os.path.isfile(utility):
@@ -476,16 +485,17 @@ def headless_command(ghidra_home: str, java_home: str, project_dir: str,
     # The stop file lives in the home directory of the user, and the script
     # looks for it with "user.home" - so the two have to agree.
     command.append(f"-Duser.home={os.path.expanduser('~')}")
+    if connections_dir:
+        command.append(f"-Dghydra.connections.dir={connections_dir}")
     command += ["-cp", utility, "ghidra.Ghidra",
                 "ghidra.app.util.headless.AnalyzeHeadless"]
     command += [project_dir, project_name]
     if process:
         command += ["-process", binary_name(binary)]
-    else:
+    elif not empty:
         command += ["-import", binary]
         if overwrite:
-            # The program that is in the project is replaced by the file
-            # that is on disk now - which is what a rebuilt binary needs.
+            # Replace an existing program with the rebuilt binary.
             command += ["-overwrite"]
     if script:
         command += ["-postScript", script]
@@ -501,7 +511,7 @@ def headless_command(ghidra_home: str, java_home: str, project_dir: str,
 def user_settings_dir() -> str:
     """Where Ghidra keeps the per-user state.
 
-    The layout is Ghidra's own: ``<settings>/ghidra/ghidra_<version>_<marking>``.
+    The layout is Ghidra's own: ``<settings>/ghidra/ghidra_<version>_<release>``.
     """
     if os.name == "nt":
         base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Roaming")
@@ -516,30 +526,28 @@ def user_settings_dir() -> str:
 def settings_version_dir(ghidra_home: str = "") -> str:
     """The version directory of the settings.
 
-    It is ``ghidra_<version>_<marking>``, and the version comes from the
+    It is ``ghidra_<version>_<release>``, and the version comes from the
     installation when there is one - otherwise the newest directory that is
     there.
     """
     root = user_settings_dir()
     version = ghidra_version(ghidra_home) if ghidra_home else ""
-    marking = release_marking(ghidra_home) if ghidra_home else ""
+    release = release_name(ghidra_home) if ghidra_home else ""
     if version:
-        name = f"ghidra_{version.replace('.', '_')}"
-        if marking:
-            name += f"_{marking}"
-        candidate = os.path.join(root, name)
-        if os.path.isdir(candidate):
-            return candidate
+        name = f"ghidra_{version}"
+        if release:
+            name += f"_{release}"
+        return os.path.join(root, name)
     try:
         entries = sorted(
             entry for entry in os.listdir(root)
             if entry.startswith("ghidra_") and os.path.isdir(os.path.join(root, entry))
         )
     except OSError:
-        return os.path.join(root, name if version else "")
+        return root
     if entries:
         return os.path.join(root, entries[-1])
-    return os.path.join(root, name if version else "")
+    return root
 
 
 def extension_dir(ghidra_home: str = "") -> str:

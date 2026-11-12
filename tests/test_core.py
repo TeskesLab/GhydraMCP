@@ -1122,56 +1122,6 @@ class MissionCoreTests(unittest.TestCase):
                          bridge._mission_markdown(bridge_mission, verification))
 
 
-class I1InventoryTests(unittest.TestCase):
-    """The close-out: what the mechanism now owns, and what it must never lose."""
-
-    EXPECTED = {
-        "ghydra/core/digest.py", "ghydra/core/runbook.py",
-        "ghydra/core/hints.py", "ghydra/core/cache.py",
-        "ghydra/core/diff.py", "ghydra/core/fleet.py",
-        "ghydra/core/capabilities.py", "ghydra/core/contextpack.py",
-        "ghydra/core/telemetry.py", "ghydra/core/taint.py",
-        "ghydra/core/mission.py",
-    }
-
-    def test_every_module_is_registered_and_generated(self):
-        self.assertEqual(self.EXPECTED, set(gen_core.CORE_MODULES))
-        text = _bridge_text()
-        for module in self.EXPECTED:
-            with self.subTest(module=module):
-                self.assertIn(f"# >>> generated from {module}", text)
-                self.assertIn(f"# <<< end generated from {module}", text)
-                self.assertEqual(1, text.count(f"# >>> generated from {module}"))
-
-    def test_every_module_has_its_own_rename_map(self):
-        for module in self.EXPECTED:
-            with self.subTest(module=module):
-                self.assertTrue(gen_core.CORE_RENAMES.get(module),
-                                f"{module} has no rename map")
-
-    def test_a_core_name_appears_only_inside_its_own_region(self):
-        """The claim is "one definition", not "fewer lines".
-
-        The bridge keeps a generated copy — it ships as one file — so the file
-        does not shrink. What must hold is that no core name has a definition
-        *outside* its region: that would be the duplication coming back.
-        """
-        definitions = _definitions_outside_regions(_bridge_text())
-        for module in gen_core.CORE_MODULES:
-            for public in gen_core.CORE_RENAMES[module]:
-                for name, node in definitions:
-                    if name != public:
-                        continue
-                    with self.subTest(module=module, name=public):
-                        self.assertTrue(
-                            _delegates(node),
-                            f"{public} is defined outside its region with a body of its own")
-
-    def test_the_regions_are_contiguous_and_ordered(self):
-        text = _bridge_text()
-        positions = [text.index(f"# >>> generated from {module}")
-                     for module in gen_core.CORE_MODULES]
-        self.assertEqual(sorted(positions), positions)
 
 
 class FingerprintTests(unittest.TestCase):

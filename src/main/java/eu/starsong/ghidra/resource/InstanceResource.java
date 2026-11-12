@@ -73,7 +73,7 @@ public class InstanceResource implements Resource {
 
         List<Map<String, Object>> instanceList = new ArrayList<>();
         for (Integer port : instances.keySet()) {
-            Map<String, Object> instance = snapshotFor(port, instances);
+            Map<String, Object> instance = snapshotFor(ctx, port);
             instance.put("isCurrent", port == ctx.port());
 
             Map<String, Object> links = new LinkedHashMap<>();
@@ -105,7 +105,7 @@ public class InstanceResource implements Resource {
                 "Instance not found on port: " + port, "INSTANCE_NOT_FOUND");
         }
 
-        Map<String, Object> instance = snapshotFor(port, instances);
+        Map<String, Object> instance = snapshotFor(ctx, port);
         instance.put("isCurrent", port == ctx.port());
         instance.put("active", true);
 
@@ -125,14 +125,25 @@ public class InstanceResource implements Resource {
      * <p>A headless instance has no plugin: it registers the snapshot it
      * built itself, so the entry is a map and it is read as one.
      */
-    private Map<String, Object> snapshotFor(Integer port, Map<Integer, ?> instances) {
-        Object pluginInstance = instances.get(port);
+    private Map<String, Object> snapshotFor(GhidraContext ctx, Integer port) {
+        Object pluginInstance = ctx.activeInstances().get(port);
         if (pluginInstance instanceof eu.starsong.ghidra.GhydraPlugin p) {
             return new LinkedHashMap<>(p.getInstanceSnapshot());
         }
         if (pluginInstance instanceof Map<?, ?> given) {
             Map<String, Object> snapshot = new LinkedHashMap<>();
             given.forEach((key, value) -> snapshot.put(String.valueOf(key), value));
+            if (port == ctx.port() && ctx.hasRepositorySelection()) {
+                eu.starsong.ghidra.util.GhidraSwing.runRead(() -> {
+                    var program = ctx.requireProgram();
+                    var project = ctx.project();
+                    snapshot.put("project", project == null ? null : project.getName());
+                    snapshot.put("file", program.getName());
+                    snapshot.put("executable", program.getExecutablePath());
+                    snapshot.put("architecture", program.getLanguageID().getIdAsString());
+                    snapshot.put("imageBase", program.getImageBase().toString());
+                });
+            }
             return snapshot;
         }
         Map<String, Object> fallback = new LinkedHashMap<>();

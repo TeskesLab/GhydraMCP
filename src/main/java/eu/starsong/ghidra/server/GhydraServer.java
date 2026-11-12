@@ -1,6 +1,7 @@
 package eu.starsong.ghidra.server;
 
 import eu.starsong.ghidra.api.ApiConstants;
+import eu.starsong.ghidra.connection.ConnectionProfiles;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.middleware.AuditTrail;
 import eu.starsong.ghidra.middleware.CorsHandler;
@@ -34,13 +35,13 @@ public class GhydraServer {
     private final boolean isBaseInstance;
     private final List<Resource> resources = new ArrayList<>();
 
-    /** The program this instance serves when there is no CodeBrowser behind it. */
-    private final ghidra.program.model.listing.Program program;
-
-    /** The project this instance serves when there is no CodeBrowser behind it. */
-    private final ghidra.framework.model.Project project;
+    /** Shared headless selection and its extra program consumer. */
+    private final ActiveProgram activeProgram;
 
     private Javalin app;
+    private final Object lifecycle = new Object();
+    private int activeRequests;
+    private boolean stopping;
 
     public GhydraServer(PluginTool tool, int port, Map<Integer, Object> activeInstances, boolean isBaseInstance) {
         this(tool, port, activeInstances, isBaseInstance, null, null);
@@ -59,8 +60,7 @@ public class GhydraServer {
         this.port = port;
         this.activeInstances = activeInstances;
         this.isBaseInstance = isBaseInstance;
-        this.program = program;
-        this.project = project;
+        this.activeProgram = new ActiveProgram(program, project);
     }
 
     /**
@@ -85,6 +85,7 @@ public class GhydraServer {
      * Start the server.
      */
     public void start() {
+        eu.starsong.ghidra.connection.WorkerTLS.initialize();
         app = Javalin.create(config -> {
             config.showJavalinBanner = false;
 
@@ -101,12 +102,14 @@ public class GhydraServer {
         // moved between 11.x and 12.2, before any request can hit them.
         CompatibilityService.logAtStartup();
 
-        // Bind interface is configurable. Default keeps the historical all-interfaces
-        // behaviour so cross-host setups (e.g. bridge in WSL -> Ghidra on Windows) keep
-        // working; set -Dghidra.mcp.bind.host=127.0.0.1 (or GHYDRA_BIND_HOST) to lock down.
+        // Credential workers stay local unless the operator explicitly selects an interface.
+        // Ordinary instances retain their historical cross-host default.
         String bindHost = System.getProperty("ghidra.mcp.bind.host");
         if (bindHost == null || bindHost.isEmpty()) {
             bindHost = System.getenv("GHYDRA_BIND_HOST");
+        }
+        if ((bindHost == null || bindHost.isEmpty()) && ConnectionProfiles.enabled()) {
+            bindHost = "127.0.0.1";
         }
         if (bindHost != null && !bindHost.isEmpty()) {
             app.start(bindHost, port);
@@ -121,10 +124,47 @@ public class GhydraServer {
      * Stop the server.
      */
     public void stop() {
-        if (app != null) {
-            app.stop();
-            Msg.info(this, "GhydraMCP HTTP server stopped on port " + port);
+        if (stopChecked(() -> {})) Thread.currentThread().interrupt();
+    }
+
+    boolean isHeadless() { return tool == null; }
+
+    boolean stopChecked(Runnable preflight) {
+        boolean interrupted = false;
+        synchronized (lifecycle) {
+            stopping = true;
+            long deadline = isHeadless()
+                ? System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5) : Long.MAX_VALUE;
+            while (activeRequests != 0) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) {
+                    stopping = false;
+                    throw new eu.starsong.ghidra.connection.ConnectionException(
+                        "REPOSITORY_CONFLICT", 409, "Worker requests are still active; shutdown was refused.");
+                }
+                try {
+                    java.util.concurrent.TimeUnit.NANOSECONDS.timedWait(lifecycle, remaining);
+                } catch (InterruptedException cancelled) {
+                    if (isHeadless()) {
+                        stopping = false;
+                        Thread.currentThread().interrupt();
+                        throw new eu.starsong.ghidra.connection.ConnectionException(
+                            "REPOSITORY_CONFLICT", 409, "Worker shutdown was interrupted.");
+                    }
+                    interrupted = true; // GUI disposal must retain ownership until cleanup completes.
+                }
+            }
         }
+        try {
+            preflight.run();
+            if (app != null) {
+                app.stop();
+                Msg.info(this, "GhydraMCP HTTP server stopped on port " + port);
+            }
+        } finally {
+            synchronized (lifecycle) { stopping = false; }
+        }
+        return interrupted;
     }
 
     /**
@@ -154,6 +194,27 @@ public class GhydraServer {
 
     private void configureMiddleware() {
         app.before(new CorsHandler());
+        app.before(ctx -> {
+            synchronized (lifecycle) {
+                if (!stopping) {
+                    activeRequests++;
+                    ctx.attribute("ghydra.request-active", true);
+                    return;
+                }
+            }
+            ctx.status(503);
+            ctx.json(Response.error(ctx, port, "WORKER_STOPPING", "The worker is checking shutdown safety.").build());
+            ctx.skipRemainingHandlers();
+        });
+        app.after(ctx -> {
+            synchronized (lifecycle) {
+                if (Boolean.TRUE.equals(ctx.attribute("ghydra.request-active"))) {
+                    ctx.attribute("ghydra.request-active", false);
+                    activeRequests--;
+                    lifecycle.notifyAll();
+                }
+            }
+        });
 
         // I12: a read-only instance refuses every mutation, and every mutation
         // is written to a local audit trail. Registration order matters: CORS
@@ -161,6 +222,15 @@ public class GhydraServer {
         ReadOnlyGuard.register(app, port);
         AuditTrail.register(app, port);
 
+
+        app.exception(eu.starsong.ghidra.connection.ConnectionException.class, (e, ctx) -> {
+            ctx.status(e.status());
+            ctx.json(Response.error(ctx, port, e.code(), e.getMessage()).build());
+        });
+        app.exception(eu.starsong.ghidra.service.RepositoryService.RepositoryException.class, (e, ctx) -> {
+            ctx.status(e.status());
+            ctx.json(Response.error(ctx, port, e.code(), e.getMessage()).build());
+        });
         app.exception(GhidraContext.NoProgramException.class, (e, ctx) -> {
             ctx.status(HttpStatus.SERVICE_UNAVAILABLE);
             ctx.json(Response.error(ctx, port, "NO_PROGRAM_LOADED", e.getMessage()).build());
@@ -200,13 +270,17 @@ public class GhydraServer {
         // (bad address, malformed param, etc.); treat them as 400, not 500.
         app.exception(IllegalArgumentException.class, (e, ctx) -> {
             ctx.status(HttpStatus.BAD_REQUEST);
-            ctx.json(Response.error(ctx, port, "BAD_REQUEST", e.getMessage()).build());
+            ctx.json(Response.error(ctx, port, "BAD_REQUEST",
+                eu.starsong.ghidra.connection.ConnectionProfiles.enabled()
+                    ? "Invalid request parameters." : e.getMessage()).build());
         });
 
         // Malformed request bodies (bodyAsClass) throw from Gson; that's client error, not 500.
         app.exception(com.google.gson.JsonSyntaxException.class, (e, ctx) -> {
             ctx.status(HttpStatus.BAD_REQUEST);
-            ctx.json(Response.error(ctx, port, "INVALID_JSON", "Malformed JSON body: " + e.getMessage()).build());
+            ctx.json(Response.error(ctx, port, "INVALID_JSON",
+                eu.starsong.ghidra.connection.ConnectionProfiles.enabled()
+                    ? "Malformed JSON request." : "Malformed JSON body: " + e.getMessage()).build());
         });
 
         // A jar built against the wrong Ghidra series throws NoSuchMethodError —
@@ -237,7 +311,11 @@ public class GhydraServer {
      * This is passed to resources for creating handlers.
      */
     private GhidraContext createContext(io.javalin.http.Context ctx) {
-        return new GhidraContext(ctx, tool, port, activeInstances, program, project);
+        return new GhidraContext(ctx, tool, port, activeInstances, activeProgram);
+    }
+
+    void releaseActiveProgram() {
+        activeProgram.close();
     }
 
     // -------------------------------------------------------------------------

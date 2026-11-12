@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Remote BSim PostgreSQL/Elasticsearch connections through worker-owned profiles,
+  with separate query/ingest grants and local H2 support.
+- Native Ghidra Server repository status, bounded listings, program opening,
+  explicit checkout/check-in, and repository-backed headless sessions.
+- Out-of-band credential provisioning, private POSIX storage, verified worker
+  TLS, credential-free MCP discovery, and enforced script restrictions.
+- Explicit BSim match selection with identity-verified, temporary read-only
+  repository inspection, textual C/signature/type comparison, and non-mutating
+  change previews through MCP and CLI without switching active programs.
+- Explicit prepared BSim signature/type application for an LLM-selected match,
+  with native dependency-type transfer, stale-token and conflict checks, and
+  transactional rollback; comparisons never apply changes on their own.
+- Server-side BSim executable, architecture, compiler and category filters in
+  MCP and CLI, applied before the match limit with explicit search-scope evidence
+  and fail-closed validation.
+
+### Changed
+
+- Credential workers bind to loopback by default and suppress native exception
+  details. Remote headless sessions use scoped worker APIs; credentials never
+  enter launcher argv or stdin.
+- Normal headless stop timeouts retain live analysis and report a refusal instead
+  of killing a worker with unsaved repository edits.
+- Native connection regressions run against the Ghidra build matrix.
+- Fresh workers use Ghidra's native dotted-version extension directory. The CLI,
+  bridge and native stop script honor the same `GHYDRA_STATE_DIR`.
+
+### Fixed
+
+- BSim MCP ingestion and naming now send an explicit POST payload instead of
+  failing before the request reaches the worker.
+- Explicitly empty MCP BSim filters are refused before HTTP instead of silently
+  running a broader query; omitted filters still search the configured corpus.
+- Repository reference lookup now disambiguates overlapping address spaces
+  instead of selecting an unrelated default-space function.
+- Unchanged writable workers stop without publishing, default BSim profiles
+  cannot change kind in place, and repository browsing releases clean inactive
+  views while refusing stale or nonexclusive writable checkouts.
+- Repository read-only opening now supports native minor-language compatibility
+  updates without changing stored versions. Mutation and analysis guards preserve
+  read-only policy for these views throughout their native lifetime.
+
 ## [3.2.0] - 2026-11-11
 
 Changes since **3.1.1**.

@@ -1,14 +1,12 @@
 # Ghydra CLI Skill
 
-Use this skill when the user asks to interact with Ghidra, reverse engineer a binary, analyze disassembly/decompilation, or work with functions, data types, structs, memory, cross-references, or any other Ghidra reverse engineering task via the `ghydra` CLI tool.
-
-Keywords: ghidra, reverse engineering, binary analysis, decompile, disassemble, ghydra, RE, firmware, malware, binary, disassembly, decompilation, cross-references, xrefs, callgraph, data flow, CFG, pcode, struct, data type, memory dump
+Use this skill only when operating Ghidra through the `ghydra` CLI. Generic reverse engineering and MCP-only work do not activate it; MCP-only work follows the mounted tool schemas. Analysis methodology belongs to the reverse-engineering skill.
 
 ## Prerequisites
 
-- Ghidra must be running with the GhydraMCP plugin loaded and a binary open in CodeBrowser
-- The `ghydra` CLI must be installed (`pip install -e .` from the GhydraMCP repo)
-- A Ghidra instance must be listening (default port 8192)
+- A Ghydra worker must be running: CodeBrowser with the plugin, or a headless worker. Program analysis needs a selected program; repository browsing can precede opening one.
+- Install the current CLI into an owned environment. On Nix use Nix-provided Python; on SSHFS put `UV_PROJECT_ENVIRONMENT` on local storage and invoke `uv run --python python3 python -m ghydra.cli`. See [operator setup](../../docs/GHYDRA_CONNECTIONS.md#nix-and-sshfs-checkouts).
+- Default HTTP port is 8192. Native Ghidra Server repository ports are separate.
 
 ## Workflow
 
@@ -20,13 +18,16 @@ Before any other command, check what Ghidra instances are available:
 ghydra instances list
 ```
 
-If no instances are found, the user needs to open a binary in Ghidra's CodeBrowser first.
+If none are found, check/start the intended GUI or headless worker. Do not assume a CodeBrowser is required.
 
-### 2. Set the working instance (if multiple)
+### 2. Target the intended instance explicitly
 
 ```bash
-ghydra instances use --port 8193
+ghydra --host HOST --port PORT --json functions list --limit 5
 ```
+
+CLI `instances use` is in-process only; it does not persist selection across shell
+commands. Use root `--host`/`--port` flags or `GHYDRA_HOST`/`GHYDRA_PORT`.
 
 ### 3. Use `--json` for structured data
 
@@ -35,6 +36,52 @@ When you need to parse or process output programmatically, use `--json`:
 ```bash
 ghydra --json functions list | jq '.result[0]'
 ```
+
+## Remote BSim and repository workflow
+
+- Human operators provision credentials outside the agent session. Agents use
+  `connections list` and approved profile IDs only. Never read credential files,
+  put credentials in URLs/argv/environment, or enable scripts on credential workers.
+  Separate worker UID/host and authenticated API transport are required for isolation.
+- Query: `ghydra --port TARGET --json bsim query --profile CORPUS --name FUNCTION`.
+  Status is configuration only; a real query must succeed. BSim requires a native
+  signature-capable decompiler; ordinary C decompilation is not proof (the tested
+  Nix Ghidra 12.1.2 decompiler lacked this module).
+- Narrow large corpora with exact `--executable`, `--architecture`, `--compiler`
+  and repeatable `--category NAME=VALUE` filters. Use `available_categories` from
+  a query for legal category names. All predicates combine with AND before the
+  match limit; invalid/unsupported filters fail closed. Retain `result.filters`
+  when reporting no matches: a filtered absence is not a corpus-wide absence.
+  MCP `bsim_query` takes categories as JSON text, not a nested object.
+- Select the exact query row's `match_id`, then run
+  `ghydra --port TARGET bsim compare-match MATCH_ID --profile CORPUS --reference-profile REPO --reference-port REFERENCE`.
+  Both workers share the configured HTTP host; separate workers can keep separate
+  credential stores. The temporary reference is read-only, URL/profile-bound and
+  MD5/address-verified. Neither worker's active selection changes.
+- Review the textual C diff, signature/type conflicts and exact annotation preview.
+  Nothing is applied. Missing/truncated evidence is incomplete, not equality;
+  raise `--max-code-lines` if necessary. IDs expire on restart/eviction and become
+  stale after target edits or selection changes; query again rather than guessing.
+- To apply a selected signature/types, explicitly call
+  `ghydra --port TARGET bsim prepare-apply MATCH_ID --profile CORPUS --reference-profile REPO --reference-port REFERENCE`.
+  Review its preview, then explicitly call
+  `ghydra --port TARGET bsim apply-match MATCH_ID --profile CORPUS --apply-token TOKEN`.
+  Never infer approval from a search or comparison. Stale/replayed tokens, ABI
+  mismatch and incompatible existing types are refused; failures roll back.
+- Read-only views support local minor-language compatibility adjustments without
+  changing stored versions. `Program.isChangeable()` is not permission; mutations
+  and analysis return `403 REPOSITORY_READ_ONLY`. Protection lasts until native close.
+- BSim version diff is a function-matching summary; selected-match comparison is
+  textual C plus structured signatures/types, not native CodeDiffPlugin alignment.
+  `apply-names` re-queries a best match; it does not apply the selected preview.
+  Signature/type transfer requires the separate explicit prepare/apply workflow;
+  unsolicited changes, comment transfer and bulk acceptance are not supported.
+  Similarity is a lead, not proof.
+- Writes need explicit authorization. Repository writes require checkout grants,
+  an exclusive checkout and a check-in comment; save alone does not publish.
+
+References: [connections](../../docs/GHYDRA_CONNECTIONS.md),
+[repositories](../../docs/GHYDRA_REPOSITORIES.md), [BSim](../../docs/GHYDRA_BSIM.md).
 
 ## Command Reference
 

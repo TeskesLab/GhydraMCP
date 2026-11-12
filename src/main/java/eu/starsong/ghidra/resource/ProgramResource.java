@@ -40,6 +40,12 @@ public class ProgramResource implements Resource {
 
     private void saveProgram(GhidraContext ctx) {
         boolean all = "true".equalsIgnoreCase(ctx.queryParam("all"));
+        if ("true".equalsIgnoreCase(ctx.queryParam("workspace_only")) && ctx.isHeadless()
+                && !ctx.hasRepositorySelection()) {
+            ctx.json(Response.ok(ctx.ctx(), ctx.port(), Map.of(
+                "saved", false, "analyzer_owned", true)).self("/program/save").build());
+            return;
+        }
         try {
             Object result = all
                 ? saveService.saveAllChanged(ctx.tool(), ctx.program())

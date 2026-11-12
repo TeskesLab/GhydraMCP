@@ -27,13 +27,16 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+from difflib import unified_diff
 from threading import Lock
 from typing import Annotated, Dict, List, Optional, Union, Any
-from urllib.parse import quote, unquote, urlencode, urlparse
+from urllib.parse import quote, unquote, unquote_plus, urlencode, urlparse
 
 import requests
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.resources import FunctionResource
+from mcp.server.fastmcp.utilities.func_metadata import FuncMetadata
 from pydantic import AnyUrl, BeforeValidator
 
 # ================= Core Infrastructure =================
@@ -1816,6 +1819,377 @@ def _core_mission_dossier(goal, mission_id, program, hints, budget, failed, skip
     lines.append('')
     return '\n'.join(lines)
 # <<< end generated from ghydra/core/mission.py
+
+
+# >>> generated from ghydra/core/bsim_compare.py (941dd59023e4405e) — edit the core, then run scripts/gen_core.py
+class _CoreBSimComparisonError(ValueError):
+    """A malformed comparison or a broken selected-match identity binding."""
+
+    def __init__(self, message, code='BSIM_COMPARISON_INVALID'):
+        super().__init__(message)
+        self.code = code
+
+def _bsim_identity_error():
+    raise _CoreBSimComparisonError('Selected BSim match identity does not match the snapshots', 'BSIM_IDENTITY_MISMATCH')
+
+def _bsim_address(value):
+    if not isinstance(value, str):
+        _bsim_identity_error()
+    match = re.fullmatch('(?:(.+)::)?(?:0[xX])?([0-9a-fA-F]+)', value)
+    if not match:
+        _bsim_identity_error()
+    return (match.group(1) or '', int(match.group(2), 16))
+
+def _bsim_same_address(first, second):
+    space_a, offset_a = _bsim_address(first)
+    space_b, offset_b = _bsim_address(second)
+    return offset_a == offset_b and (not space_a or not space_b or space_a == space_b)
+
+def _bsim_md5(value):
+    if not isinstance(value, str) or not re.fullmatch('[0-9a-fA-F]{32}', value):
+        _bsim_identity_error()
+    return value.lower()
+
+def _bsim_status(complete, different):
+    return {'complete': complete, 'status': 'incomplete' if not complete else 'different' if different else 'equal', 'equal': not different if complete else None, 'observed_differences': different}
+
+def _bsim_change(field, before, after):
+    return {'field': field, 'before': deepcopy(before), 'after': deepcopy(after)}
+
+def _bsim_value_changes(before, after, path):
+    if isinstance(before, dict) and isinstance(after, dict):
+        changes = []
+        for key in sorted(set(before) | set(after)):
+            child = path + '.' + str(key)
+            if key not in before or key not in after:
+                change = _bsim_change(child, before.get(key), after.get(key))
+                change['kind'] = 'added' if key not in before else 'removed'
+                changes.append(change)
+            else:
+                changes.extend(_bsim_value_changes(before[key], after[key], child))
+        return changes
+    if isinstance(before, list) and isinstance(after, list):
+        changes = []
+        for index in range(max(len(before), len(after))):
+            child = f'{path}[{index}]'
+            if index >= len(before) or index >= len(after):
+                change = _bsim_change(child, before[index] if index < len(before) else None, after[index] if index < len(after) else None)
+                change['kind'] = 'added' if index >= len(before) else 'removed'
+                changes.append(change)
+            else:
+                changes.extend(_bsim_value_changes(before[index], after[index], child))
+        return changes
+    if before != after or type(before) is not type(after):
+        return [dict(_bsim_change(path, before, after), kind='changed')]
+    return []
+
+def _bsim_type_parts(descriptor):
+    """Separate type edges from attributes without exposing local IDs as changes."""
+    shape = deepcopy(descriptor)
+    edges = {}
+    kind = descriptor.get('kind')
+    if not isinstance(kind, str):
+        kind = ''
+    for field in {'pointer': ('target',), 'array': ('element',), 'typedef': ('base',), 'bitfield': ('base',), 'function_definition': ('return_type',)}.get(kind, ()):
+        edges[field] = shape.pop(field, None)
+    collection = 'components' if kind in ('struct', 'union') else 'parameters' if kind == 'function_definition' else None
+    if collection and isinstance(shape.get(collection), list):
+        for index, item in enumerate(shape[collection]):
+            if isinstance(item, dict):
+                edges[f'{collection}[{index}].type'] = item.pop('type', None)
+    return (shape, edges)
+
+def _bsim_type_label(types, type_id):
+    descriptor = types.get(type_id) if isinstance(type_id, str) else None
+    if not isinstance(descriptor, dict):
+        return None
+    return {field: deepcopy(descriptor.get(field)) for field in ('kind', 'name', 'path', 'length')}
+
+def _bsim_type_evidence(types, type_id):
+    if _bsim_type_label(types, type_id) is None:
+        return None
+    reachable, pending = ({}, [type_id])
+    while pending and len(reachable) < 256:
+        current = pending.pop()
+        if not isinstance(current, str) or current in reachable:
+            continue
+        descriptor = types.get(current)
+        if isinstance(descriptor, dict):
+            reachable[current] = deepcopy(descriptor)
+            pending.extend(_bsim_type_parts(descriptor)[1].values())
+    return {'root': type_id, 'types': reachable}
+
+def _bsim_type_roots(function):
+    roots = {}
+    if 'return_type' in function:
+        roots['return_type'] = function['return_type']
+    parameters = function.get('parameters')
+    if isinstance(parameters, list):
+        for index, parameter in enumerate(parameters):
+            if isinstance(parameter, dict) and 'type' in parameter:
+                roots[f'parameters[{index}].type'] = parameter['type']
+    return roots
+
+def _bsim_type_inventory(snapshot):
+    types = snapshot.get('types')
+    types = types if isinstance(types, dict) else {}
+    missing, cycles, visited, active = ([], [], set(), {})
+
+    def visit(type_id, path, depth):
+        if not isinstance(type_id, str) or not isinstance(types.get(type_id), dict):
+            missing.append({'field': path, 'reason': 'missing_type'})
+            return
+        if type_id in active:
+            cycles.append({'field': path, 'type_id': type_id, 'ancestor': active[type_id]})
+            return
+        if type_id in visited:
+            return
+        if len(visited) >= 256 or depth > 16:
+            missing.append({'field': path, 'reason': 'type_graph_limit'})
+            return
+        visited.add(type_id)
+        descriptor = types[type_id]
+        if any((field not in descriptor for field in ('kind', 'name', 'path', 'length'))):
+            missing.append({'field': path, 'reason': 'incomplete_type_descriptor'})
+        kind = descriptor.get('kind')
+        required = {'array': ('count',), 'enum': ('values',), 'struct': ('components',), 'union': ('components',), 'bitfield': ('bit_offset', 'bit_size'), 'function_definition': ('parameters', 'varargs', 'calling_convention')}
+        if any((field not in descriptor for field in required.get(kind, ()))):
+            missing.append({'field': path, 'reason': 'incomplete_type_descriptor'})
+        collection = 'components' if kind in ('struct', 'union') else 'parameters'
+        if kind in ('struct', 'union', 'function_definition'):
+            members = descriptor.get(collection)
+            fields = ('name', 'offset', 'length', 'type', 'bitfield') if collection == 'components' else ('ordinal', 'name', 'type')
+            if not isinstance(members, list) or any((not isinstance(member, dict) or any((key not in member for key in fields)) for member in members)):
+                missing.append({'field': path, 'reason': 'incomplete_type_members'})
+        active[type_id] = path
+        for field, child in _bsim_type_parts(descriptor)[1].items():
+            visit(child, path + '.' + field, depth + 1)
+        del active[type_id]
+    function = snapshot['function']
+    if 'return_type' not in function:
+        missing.append({'field': 'return_type', 'reason': 'missing_type_root'})
+    parameters = function.get('parameters')
+    if not isinstance(parameters, list):
+        missing.append({'field': 'parameters', 'reason': 'missing_type_roots'})
+    else:
+        for index, parameter in enumerate(parameters):
+            if not isinstance(parameter, dict) or 'type' not in parameter:
+                missing.append({'field': f'parameters[{index}].type', 'reason': 'missing_type_root'})
+    for field, type_id in _bsim_type_roots(function).items():
+        visit(type_id, field, 0)
+    return {'complete': snapshot.get('types_complete') is True and (not missing), 'missing': missing, 'cycles': cycles, 'reachable_count': len(visited), 'reachable_ids': sorted(visited)}
+
+def _bsim_compare_type(types_a, types_b, id_a, id_b, path):
+    active, seen = (set(), set())
+
+    def compare(a, b, field, depth):
+        if not isinstance(a, str) or not isinstance(b, str):
+            return []
+        pair = (a, b)
+        if pair in active or pair in seen or depth > 16 or (len(seen) >= 65536):
+            return []
+        first, second = (types_a.get(a), types_b.get(b))
+        if not isinstance(first, dict) or not isinstance(second, dict):
+            return []
+        if any((key not in node for node in (first, second) for key in ('kind', 'name', 'path', 'length'))):
+            return []
+        active.add(pair)
+        seen.add(pair)
+        shape_a, edges_a = _bsim_type_parts(first)
+        shape_b, edges_b = _bsim_type_parts(second)
+        changes = _bsim_value_changes(shape_a, shape_b, field)
+        for edge in sorted(set(edges_a) | set(edges_b)):
+            child = field + '.' + edge
+            if edge in edges_a and edge in edges_b:
+                changes.extend(compare(edges_a[edge], edges_b[edge], child, depth + 1))
+            elif edge in edges_b and _bsim_type_label(types_b, edges_b[edge]) is not None:
+                changes.append(dict(_bsim_change(child, None, _bsim_type_label(types_b, edges_b[edge])), kind='added'))
+            elif edge in edges_a and _bsim_type_label(types_a, edges_a[edge]) is not None:
+                changes.append(dict(_bsim_change(child, _bsim_type_label(types_a, edges_a[edge]), None), kind='removed'))
+        active.remove(pair)
+        return changes
+    return compare(id_a, id_b, path, 0)
+
+def _bsim_code(snapshot):
+    code = snapshot.get('code')
+    if not isinstance(code, dict):
+        return {'text': None, 'complete': False, 'reason': 'missing_code'}
+    text = code.get('text')
+    available = isinstance(text, str) and bool(text.strip())
+    complete = available and code.get('complete') is True and (code.get('error') is None)
+    return {'text': text if isinstance(text, str) else None, 'complete': complete, 'reason': None if complete else 'code_unavailable' if not available else 'decompilation_error' if code.get('error') is not None else 'truncated_code'}
+
+def _bsim_unified_diff(before, after):
+    lines = unified_diff(before.splitlines(keepends=True), after.splitlines(keepends=True), fromfile='target.c', tofile='reference.c')
+    return ''.join((line if line.endswith('\n') else line + '\n\\ No newline at end of file\n' for line in lines))
+
+def _core_bsim_compare_match(selection, target, reference):
+    """Compare selected native evidence; never read, apply, import, or mutate it.
+
+    Raises BSimComparisonError with code BSIM_COMPARISON_INVALID for malformed
+    envelopes, or BSIM_IDENTITY_MISMATCH for any broken identity/stamp binding.
+    A successful identity check does not imply complete or interchangeable code.
+    """
+    if not isinstance(selection, dict) or not isinstance(target, dict) or (not isinstance(reference, dict)):
+        raise _CoreBSimComparisonError('Comparison requires selection and snapshot objects')
+    selected = selection.get('match')
+    binding = selection.get('target')
+    inspected = reference.get('snapshot')
+    if not isinstance(selected, dict) or not isinstance(binding, dict) or (not isinstance(inspected, dict)):
+        raise _CoreBSimComparisonError('Comparison requires selected match and reference snapshot')
+    if not all((isinstance(snapshot.get(field), dict) for snapshot in (target, inspected) for field in ('program', 'function'))):
+        raise _CoreBSimComparisonError('Comparison requires program and function identities')
+    match_id = selection.get('match_id')
+    if not isinstance(match_id, str) or not match_id or reference.get('match_id') != match_id or (selected.get('match_id') != match_id) or (reference.get('identity_verified') is not True):
+        _bsim_identity_error()
+    if _bsim_md5(selected.get('executable_md5')) != _bsim_md5(inspected['program'].get('md5')) or _bsim_md5(binding.get('md5')) != _bsim_md5(target['program'].get('md5')) or (not _bsim_same_address(binding.get('address'), target['function'].get('address'))) or (not _bsim_same_address(selected.get('address', selected.get('function_address')), inspected['function'].get('address'))) or (not isinstance(binding.get('modification'), int)) or isinstance(binding.get('modification'), bool) or (type(target.get('modification')) is not int) or (binding['modification'] != target['modification']):
+        _bsim_identity_error()
+    warnings = []
+    for field, message in (('language', 'Architecture/language differs between target and reference'), ('compiler', 'Compiler differs between target and reference'), ('pointer_size', 'Pointer size differs between target and reference')):
+        before, after = (target['program'].get(field), inspected['program'].get(field))
+        if before is None or after is None:
+            warnings.append(f'Cannot compare program {field}: metadata unavailable')
+        elif before != after:
+            warnings.append(message)
+    indexed_name = selected.get('function', selected.get('function_name', selected.get('name')))
+    if isinstance(indexed_name, str) and indexed_name != inspected['function'].get('name'):
+        warnings.append('Indexed match name differs from the current reference function name')
+    code_a, code_b = (_bsim_code(target), _bsim_code(inspected))
+    code_complete = code_a['complete'] and code_b['complete']
+    code_different = code_a['text'] is not None and code_b['text'] is not None and (code_a['text'] != code_b['text'])
+    code = dict(_bsim_status(code_complete, code_different), kind='textual_unified_c', source_complete=code_a['complete'], reference_complete=code_b['complete'], unified_diff=_bsim_unified_diff(code_a['text'], code_b['text']) if code_a['text'] is not None and code_b['text'] is not None else None)
+    function_a, function_b = (target['function'], inspected['function'])
+    types_a = target.get('types')
+    if not isinstance(types_a, dict):
+        types_a = {}
+    types_b = inspected.get('types')
+    if not isinstance(types_b, dict):
+        types_b = {}
+    inventory_a, inventory_b = (_bsim_type_inventory(target), _bsim_type_inventory(inspected))
+    signature_changes, type_differences, conflicts = ([], [], [])
+    missing_signature = {'source': [], 'reference': []}
+    required = ('name', 'prototype', 'calling_convention', 'varargs', 'return_type', 'parameters', 'comment')
+    for side, function in (('source', function_a), ('reference', function_b)):
+        missing_signature[side].extend((field for field in required if field not in function))
+        if not isinstance(function.get('name'), str):
+            missing_signature[side].append('name')
+        parameters = function.get('parameters')
+        if not isinstance(parameters, list):
+            missing_signature[side].append('parameters')
+        else:
+            for index, parameter in enumerate(parameters):
+                for field in ('ordinal', 'name', 'type'):
+                    if not isinstance(parameter, dict) or field not in parameter:
+                        missing_signature[side].append(f'parameters[{index}].{field}')
+
+    def add_signature(field, before, after):
+        if before != after:
+            signature_changes.append(_bsim_change(field, before, after))
+    for field in ('prototype', 'calling_convention', 'varargs', 'comment'):
+        if field in function_a and field in function_b:
+            add_signature(field, function_a[field], function_b[field])
+    if isinstance(function_a.get('name'), str) and isinstance(function_b.get('name'), str):
+        for field, index in (('namespace', 0), ('name', 2)):
+            first, second = (function_a['name'].rpartition('::'), function_b['name'].rpartition('::'))
+            add_signature(field, first[index], second[index])
+    roots_a, roots_b = (_bsim_type_roots(function_a), _bsim_type_roots(function_b))
+    for field in sorted(set(roots_a) | set(roots_b)):
+        if field in roots_a and field in roots_b:
+            changes = _bsim_compare_type(types_a, types_b, roots_a[field], roots_b[field], field)
+            type_differences.extend(changes)
+            if changes:
+                signature_changes.append(_bsim_change(field, _bsim_type_evidence(types_a, roots_a[field]), _bsim_type_evidence(types_b, roots_b[field])))
+        elif field.startswith('parameters[') and field in roots_b and isinstance(function_a.get('parameters'), list) and (int(field.split('[', 1)[1].split(']', 1)[0]) >= len(function_a['parameters'])):
+            label = _bsim_type_label(types_b, roots_b[field])
+            if label is not None:
+                type_differences.append(dict(_bsim_change(field, None, label), kind='added'))
+        elif field.startswith('parameters[') and field in roots_a and isinstance(function_b.get('parameters'), list) and (int(field.split('[', 1)[1].split(']', 1)[0]) >= len(function_b['parameters'])):
+            label = _bsim_type_label(types_a, roots_a[field])
+            if label is not None:
+                type_differences.append(dict(_bsim_change(field, label, None), kind='removed'))
+    by_path_a, by_path_b = ({}, {})
+    for types, by_path, inventory in ((types_a, by_path_a, inventory_a), (types_b, by_path_b, inventory_b)):
+        for type_id in inventory['reachable_ids']:
+            descriptor = types[type_id]
+            if isinstance(descriptor, dict) and isinstance(descriptor.get('path'), str):
+                by_path.setdefault(descriptor['path'], []).append(type_id)
+    for path in sorted(set(by_path_a) & set(by_path_b)):
+        for id_a in sorted(by_path_a[path]):
+            for id_b in sorted(by_path_b[path]):
+                changes = _bsim_compare_type(types_a, types_b, id_a, id_b, 'type')
+                if changes:
+                    conflicts.append({'path': path, 'source_id': id_a, 'reference_id': id_b, 'differences': changes})
+    parameters_a, parameters_b = (function_a.get('parameters'), function_b.get('parameters'))
+    if isinstance(parameters_a, list) and isinstance(parameters_b, list):
+        add_signature('parameter_count', len(parameters_a), len(parameters_b))
+        names_a = [name for parameter in parameters_a if isinstance(parameter, dict) and isinstance((name := parameter.get('name')), str)]
+        names_b = [name for parameter in parameters_b if isinstance(parameter, dict) and isinstance((name := parameter.get('name')), str)]
+        if len(names_a) == len(parameters_a) == len(names_b) == len(parameters_b) and len(set(names_a)) == len(names_a) and (sorted(names_a) == sorted(names_b)):
+            add_signature('parameter_order', names_a, names_b)
+        for index in range(max(len(parameters_a), len(parameters_b))):
+            first = parameters_a[index] if index < len(parameters_a) else None
+            second = parameters_b[index] if index < len(parameters_b) else None
+            if index >= len(parameters_a) or index >= len(parameters_b):
+
+                def describe(parameter, types):
+                    if not isinstance(parameter, dict):
+                        return None
+                    return dict(deepcopy(parameter), type=_bsim_type_evidence(types, parameter.get('type')))
+                signature_changes.append(_bsim_change(f'parameters[{index}]', describe(first, types_a), describe(second, types_b)))
+            elif isinstance(first, dict) and isinstance(second, dict):
+                for field in ('ordinal', 'name'):
+                    if field in first and field in second:
+                        add_signature(f'parameters[{index}].{field}', first[field], second[field])
+    types_complete = inventory_a['complete'] and inventory_b['complete']
+    signature_complete = types_complete and (not any(missing_signature.values()))
+    signature = dict(_bsim_status(signature_complete, bool(signature_changes)), changes=signature_changes)
+    type_comparison = dict(_bsim_status(types_complete, bool(type_differences or conflicts)), differences=type_differences, conflicts=conflicts, cycles={'source': inventory_a['cycles'], 'reference': inventory_b['cycles']})
+    evidence = {'source': {'code': {key: value for key, value in code_a.items() if key != 'text'}, 'types': inventory_a, 'missing_signature': sorted(set(missing_signature['source']))}, 'reference': {'code': {key: value for key, value in code_b.items() if key != 'text'}, 'types': inventory_b, 'missing_signature': sorted(set(missing_signature['reference']))}}
+    complete = code_complete and signature_complete and types_complete
+    if not complete:
+        warnings.append('Comparison evidence is incomplete; absence of differences is not equality')
+    warnings.append('Preview only: no changes were applied; textual C diff is not native CodeDiffPlugin analysis')
+    preview = [dict(change, kind='signature', complete=signature_complete) for change in signature_changes]
+    preview.extend((dict(change, kind='type', change_kind=change['kind'], complete=types_complete) for change in type_differences))
+
+    def identity(snapshot):
+        return {'program': deepcopy(snapshot['program']), 'function': {key: deepcopy(snapshot['function'].get(key)) for key in ('name', 'address')}, 'modification': snapshot.get('modification')}
+    reference_identity = identity(inspected)
+    reference_identity.update({key: deepcopy(reference.get(key)) for key in ('profile', 'path', 'version')})
+    return {'match_id': match_id, 'selected_match': deepcopy(selected), 'identity_verified': True, 'complete': complete, 'source': identity(target), 'target_reference': reference_identity, 'comparison': {'code': code, 'signature': signature, 'types': type_comparison, 'evidence': evidence}, 'preview': preview, 'warnings': warnings, 'applied': False}
+
+def _core_bsim_render_comparison(result):
+    """Render the shared human surface without I/O or snapshot duplication."""
+    comparison = result['comparison']
+    lines = [f"BSim selected match: {result['match_id']}", 'Identity verified: ' + ('yes' if result.get('identity_verified') is True else 'NO'), 'Evidence: ' + ('COMPLETE' if result.get('complete') is True else 'INCOMPLETE - absence of differences is not equality'), 'No changes applied. Proposed changes only; no claim of safe applicability.']
+    for label, section in (('Code (textual unified C)', 'code'), ('Signature', 'signature'), ('Referenced types', 'types')):
+        lines.append(f"{label}: {comparison[section]['status']}")
+    reference = result.get('target_reference', {})
+    lines.append('Reference: ' + json.dumps({field: reference.get(field) for field in ('profile', 'path', 'version')}, sort_keys=True, ensure_ascii=False))
+    lines.append('Proposed changes (current target -> reference):')
+    if not result.get('preview'):
+        lines.append('  None observed' + ('' if result.get('complete') else ' in available evidence'))
+    for change in result.get('preview', []):
+        suffix = '' if change.get('complete') is True else ' [INCOMPLETE evidence]'
+        lines.append(f"  [{change['kind']}] {change['field']}{suffix}")
+        for field in ('before', 'after'):
+            lines.append(f'    {field}: ' + json.dumps(change.get(field), sort_keys=True, ensure_ascii=False))
+    conflicts = comparison['types'].get('conflicts', [])
+    if conflicts:
+        lines.append('Unresolved type conflicts:')
+        lines.extend(('  ' + json.dumps(conflict, sort_keys=True, ensure_ascii=False) for conflict in conflicts))
+    lines.append('Warnings:')
+    lines.extend(('  - ' + warning for warning in result.get('warnings', [])))
+    lines.append('Textual unified C diff (not native CodeDiffPlugin analysis):')
+    diff = comparison['code'].get('unified_diff')
+    if diff:
+        lines.append(diff.rstrip('\n'))
+    elif diff is None:
+        lines.append('  Unavailable: code evidence missing')
+    else:
+        lines.append('  No textual differences observed' + ('' if comparison['code'].get('complete') else ' in incomplete code evidence'))
+    return '\n'.join(lines) + '\n'
+# <<< end generated from ghydra/core/bsim_compare.py
 
 
 def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
@@ -4060,8 +4434,8 @@ def format_bsim_status(response: dict, **kwargs) -> str:
              f"  engine: {'present' if result.get('available') else 'absent'}",
              f"  database: {result.get('database') or '(none configured)'}"]
     if result.get("database"):
-        lines.append(f"  database exists: "
-                     f"{'yes' if result.get('database_exists') else 'no'}")
+        exists = result.get("database_exists")
+        lines.append("  database exists: " + ("not checked" if exists is None else "yes" if exists else "no"))
     if result.get("reason"):
         lines.append(f"  {result['reason']}")
     return "\n".join(lines)
@@ -4110,6 +4484,12 @@ def format_bsim_query(response: dict, **kwargs) -> str:
              f"  threshold: similarity >= {result.get('min_similarity')}",
              f"  matches: {result.get('returned', 0)}"
              f" (of {result.get('total_considered', 0)} considered)"]
+    if result.get("filters"):
+        lines.append("  filters (AND, exact metadata): "
+                     + json.dumps(result["filters"], ensure_ascii=False, sort_keys=True))
+    if "available_categories" in result:
+        lines.append("  available categories: "
+                     + json.dumps(result["available_categories"], ensure_ascii=False))
     for match in result.get("matches") or []:
         where = match.get("executable") or "?"
         path = match.get("path")
@@ -4117,9 +4497,36 @@ def format_bsim_query(response: dict, **kwargs) -> str:
                      f" significance {match.get('significance')}:"
                      f" {match.get('function')} @ {match.get('address')}"
                      f" in {where}" + (f" ({path})" if path else ""))
+        lines.append(f"    match_id: {match.get('match_id')}"
+                     + ("" if match.get("reference_available") else " (reference unavailable)"))
     if result.get("reason"):
         lines.append(f"  {result['reason']}")
     return "\n".join(lines)
+
+
+def format_bsim_comparison(response: dict, **kwargs) -> str:
+    """Show the selected match's code diff and non-mutating change preview."""
+    if not response.get("success", False):
+        return format_error(response)
+    return _core_bsim_render_comparison(response.get("result", {}))
+
+
+def format_bsim_prepare_apply(response: dict, **kwargs) -> str:
+    """Show the complete native preview and token, never imply application."""
+    if not response.get("success", False):
+        return format_error(response)
+    return ("No changes applied. Review preview, then call bsim_apply_match explicitly.\n"
+            + json.dumps(response.get("result", {}), ensure_ascii=False, indent=2))
+
+
+def format_bsim_apply_match(response: dict, **kwargs) -> str:
+    """Retain the concrete native application outcome without truncation."""
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", {})
+    heading = ("Applied prepared signature and types." if result.get("applied") is True
+               else "No application confirmed.")
+    return heading + "\n" + json.dumps(result, ensure_ascii=False, indent=2)
 
 
 def format_bsim_apply_names(response: dict, **kwargs) -> str:
@@ -4323,8 +4730,17 @@ FORMATTERS = {
     "bsim_status": format_bsim_status,
     "bsim_ingest": format_bsim_ingest,
     "bsim_query": format_bsim_query,
+    "bsim_compare_match": format_bsim_comparison,
+    "bsim_prepare_apply": format_bsim_prepare_apply,
+    "bsim_apply_match": format_bsim_apply_match,
     "bsim_apply_names": format_bsim_apply_names,
     "bsim_diff_versions": format_bsim_diff,
+    "connections_list": format_generic_list,
+    "repositories_status": format_generic_dict,
+    "repositories_list_files": format_generic_dict,
+    "repositories_open": format_generic_dict,
+    "repositories_checkout": format_generic_dict,
+    "repositories_checkin": format_generic_dict,
 }
 
 
@@ -4409,7 +4825,11 @@ def _suggested_calls(response: dict, limit: int = 4) -> list[str]:
             continue
         path, _, query = href.partition("?")
         segments = [seg for seg in path.strip("/").split("/") if seg]
-        if len(segments) >= 2:
+        fixed = {"/connections": "connections_list", "/repositories": "repositories_status",
+                 "/repositories/files": "repositories_list_files"}.get(path)
+        if fixed in registered:
+            tool, values = fixed, []
+        elif len(segments) >= 2:
             candidates = (f"{segments[0]}_{segments[-1]}",
                           f"{segments[0]}_get_{segments[-1]}")
             tool = next((name for name in candidates if name in registered), None)
@@ -4429,6 +4849,12 @@ def _suggested_calls(response: dict, limit: int = 4) -> list[str]:
             key, sep, value = pair.partition("=")
             if sep and key in ("offset", "limit"):
                 args.append(f"{key}={value}")
+            elif sep and key == "profile" and (tool.startswith("bsim_") or tool.startswith("repositories_")):
+                args.append(f"profile={json.dumps(unquote_plus(value))}")
+            elif sep and key == "path" and tool == "repositories_list_files":
+                args.append(f"path={json.dumps(unquote_plus(value))}")
+        if tool.startswith("repositories_") and not any(arg.startswith("profile=") for arg in args):
+            continue
         suggestions.append(f"{tool}({', '.join(args)})" if args else f"{tool}()")
         if len(suggestions) >= limit:
             break
@@ -10790,7 +11216,8 @@ def _headless_log_path(port: int) -> str:
 
 def _headless_stop_file(port: int) -> str:
     """The file the launcher leaves behind to stop the run."""
-    return os.path.join(os.path.expanduser("~"), ".ghidra", f"headless-{int(port)}.stop")
+    directory = os.environ.get("GHYDRA_STATE_DIR") or os.path.join(os.path.expanduser("~"), ".ghidra")
+    return os.path.join(directory, f"headless-{int(port)}.stop")
 
 
 def _headless_candidate_homes() -> list:
@@ -13148,40 +13575,34 @@ def fleet_query(kind: str, ports: str, target: str | None = None) -> dict:
 
 @mcp.tool()
 @text_output
-def bsim_status(port: int | None = None) -> dict:
+def bsim_status(port: int | None = None, profile: str = "") -> dict:
     """Is a BSim signature query possible here, and against which database?
 
-    BSim is a Ghidra feature, not a plugin API, so it is discovered by loading
-    the class: a build may ship without it. The database is configuration
-    (-Dghidra.bsim.database or GHYDRA_BSIM_DATABASE), and the answer names it
-    rather than pretending a query would work.
+    Uses an approved worker profile or the configured local H2 database.
+    Remote status reports configuration, not a successful connection test.
+    Credentials are provisioned outside this tool and never accepted here.
 
     Args:
         port: Specific Ghidra instance port (optional)
+        profile: Optional worker-owned BSim profile ID; never a connection URL
 
     Returns:
         dict: available, database, database_exists, ready and the reason
     """
     port = _get_instance_port(port)
-    return simplify_response(safe_get(port, "bsim/status"))
+    return simplify_response(safe_get(port, "bsim/status", params={"profile": profile} if profile else None))
 
 
 @mcp.tool()
 @text_output
 def bsim_ingest(max_functions: int = 0, track_call_graph: bool = False,
-                port: int | None = None) -> dict:
+                port: int | None = None, profile: str = "") -> dict:
     """Generate BSim signatures for this program and insert them into the database
 
-    Ingests the *open* program: every function with a body is decompiled and its
-    signature stored in the configured database (-Dghidra.bsim.database or
-    GHYDRA_BSIM_DATABASE), which is created when it does not exist yet. That is
-    what makes a signature query possible later, and what a corpus is built from.
-
-    The call graph is **not** recorded by default: measured on Ghidra 12.2/H2, a
-    database created with `trackcallgraph=true` rejects the insert with a
-    duplicate `callgraphtable(src,dest)` key on ordinary recursion, and the
-    signature tables are what a similarity query needs. Pass
-    `track_call_graph=True` to ask for it anyway.
+    Ingests the open program into an approved worker profile or local H2.
+    Only local H2 databases are created automatically; remote databases must
+    already exist. A remote profile needs the ingest grant. Call-graph records
+    are sorted before insertion; recording the graph remains optional.
 
     Re-ingesting a program that is already there is not an error: the answer says
     `already_present` and inserted 0, because the goal — the program is in the
@@ -13191,6 +13612,7 @@ def bsim_ingest(max_functions: int = 0, track_call_graph: bool = False,
         max_functions: How many functions to scan at most (0 = all, default 0)
         track_call_graph: Record the call graph in the database (default False)
         port: Specific Ghidra instance port (optional)
+        profile: Optional worker-owned BSim profile ID; never credentials or a URL
 
     Returns:
         dict: discovered/scanned/described/inserted counts, whether the database
@@ -13198,23 +13620,39 @@ def bsim_ingest(max_functions: int = 0, track_call_graph: bool = False,
     """
     port = _get_instance_port(port)
     params = {}
+    if profile:
+        params["profile"] = profile
     if max_functions:
         params["max_functions"] = int(max_functions)
     params["track_call_graph"] = "true" if track_call_graph else "false"
-    return simplify_response(safe_post(port, "bsim/ingest", params=params))
+    return simplify_response(safe_post(port, "bsim/ingest", {}, params=params))
 
 
 
 
 
 
+
+
+class _BSimQueryMetadata(FuncMetadata):
+    """Keep exact metadata and JSON text intact until query validation.
+
+    FastMCP otherwise JSON-decodes string arguments first, losing duplicate
+    category keys and changing executable names such as "null" into None.
+    Ordinary argument-model validation still checks the declared types.
+    """
+
+    def pre_parse_json(self, data: dict[str, Any]) -> dict[str, Any]:
+        return data
 
 
 @mcp.tool()
 @text_output
 def bsim_query(address: str = "", name: str = "", min_similarity: float = 0.0,
                min_significance: float = 0.0, max_matches: int = 0,
-               port: int | None = None) -> dict:
+               port: int | None = None, profile: str = "", executable: str | None = None,
+               architecture: str | None = None, compiler: str | None = None,
+               categories: str | None = None) -> dict:
     """Which stored functions look like this one, according to BSim signatures
 
     Asks the signature database which of its functions are similar to one
@@ -13223,8 +13661,11 @@ def bsim_query(address: str = "", name: str = "", min_similarity: float = 0.0,
 
     A match is a **lead, not an identification**: similarity 1.0 means the bytes
     of the two functions' vectors are the same, not that they are the same
-    source. The corpus is whatever was ingested into the configured database
-    (-Dghidra.bsim.database or GHYDRA_BSIM_DATABASE).
+    source. The corpus is the selected worker profile or configured local H2.
+
+    Metadata filters are exact native BSim values combined with AND, applied
+    before the match limit. Omit unused filters; explicitly empty strings and
+    unknown or unsupported predicates are rejected.
 
     Args:
         address: The function address to ask about
@@ -13233,13 +13674,49 @@ def bsim_query(address: str = "", name: str = "", min_similarity: float = 0.0,
         min_significance: Significance floor (0 = no floor)
         max_matches: How many matches to return (0 = default 10, cap 200)
         port: Specific Ghidra instance port (optional)
+        profile: Optional worker-owned BSim profile ID with the query grant
+        executable: Exact executable metadata value (optional; AND with other filters)
+        architecture: Exact architecture metadata value (optional)
+        compiler: Exact compiler metadata value (optional)
+        categories: JSON text object of unique nonempty category names to nonempty
+            string values, e.g. {"Library":"libc","Version":"1.0"}; all AND
 
     Returns:
         dict: the function asked about, the thresholds used, and the matches
               with similarity, significance, function, address and executable
     """
-    port = _get_instance_port(port)
     params = {}
+    try:
+        for key, value in (("executable", executable), ("architecture", architecture),
+                           ("compiler", compiler)):
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{key} must be a nonblank exact metadata string")
+            params[key] = value
+        if categories is not None and not isinstance(categories, str):
+            raise ValueError("categories must be JSON text")
+        if categories is not None:
+            def unique_categories(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError(f"duplicate category name: {key}")
+                    result[key] = value
+                return result
+
+            parsed = json.loads(categories, object_pairs_hook=unique_categories)
+            if not isinstance(parsed, dict) or any(
+                    not key.strip() or not isinstance(value, str) or not value.strip()
+                    for key, value in parsed.items()):
+                raise ValueError("categories must be an object of nonempty string names and values")
+            params["categories"] = json.dumps(parsed, ensure_ascii=False)
+    except ValueError as exc:
+        return {"success": False, "error": {"code": "BSIM_FILTER_INVALID",
+                "message": str(exc)}}
+    port = _get_instance_port(port)
+    if profile:
+        params["profile"] = profile
     if address:
         params["address"] = address
     if name:
@@ -13253,11 +13730,169 @@ def bsim_query(address: str = "", name: str = "", min_similarity: float = 0.0,
     return simplify_response(safe_get(port, "bsim/query", params=params or None))
 
 
+_bsim_query_tool = mcp._tool_manager._tools["bsim_query"]
+_bsim_query_tool.fn_metadata = _BSimQueryMetadata(
+    arg_model=_bsim_query_tool.fn_metadata.arg_model)
+
+
+@mcp.tool()
+@text_output
+def bsim_compare_match(match_id: str, reference_profile: str, reference_port: int,
+                       profile: str = "", max_code_lines: int = 1000,
+                       port: int | None = None) -> dict:
+    """Compare an exact BSim match with a verified read-only repository reference.
+
+    Select a match_id from bsim_query on the target worker. The reference worker
+    uses its own approved Ghidra Server profile and keeps its current program.
+    Returns a textual C diff, structured signature/type differences and an exact
+    change preview. Nothing is renamed, imported, saved or checked out.
+    Missing/truncated evidence is incomplete, never proof of equivalence.
+
+    Args:
+        match_id: Exact opaque ID returned by bsim_query on this target worker.
+        reference_profile: Approved repository profile on the reference worker.
+        reference_port: Reference worker HTTP port on the configured host.
+        profile: BSim profile that produced the selected match, if configured.
+        max_code_lines: Maximum decompiled lines per function, 1..10000.
+        port: Target Ghidra instance port.
+
+    Returns:
+        dict: Identity-bound code/signature/type comparison and unapplied preview.
+    """
+    if (type(reference_port) is not int or not 1 <= reference_port <= 65535
+            or type(max_code_lines) is not int or not 1 <= max_code_lines <= 10000
+            or not reference_profile):
+        return {"success": False, "error": {"code": "BSIM_COMPARISON_INVALID",
+            "message": "Select a repository profile, valid reference port and line limit."}}
+    port = _get_instance_port(port)
+    reference_port = _get_instance_port(reference_port)
+    if urlparse(get_instance_url(port)).hostname != urlparse(get_instance_url(reference_port)).hostname:
+        return {"success": False, "error": {"code": "BSIM_COMPARISON_INVALID",
+            "message": "Target and reference workers must use the same HTTP host."}}
+    endpoint = f"bsim/matches/{quote(match_id, safe='')}"
+    params = {"profile": profile} if profile else {}
+    source = safe_get(port, endpoint, {**params, "max_code_lines": max_code_lines})
+    if not source.get("success"):
+        return source
+    payload = source.get("result", {})
+    selection = payload.get("selection", {})
+    match = selection.get("match", {})
+    if not match.get("reference_available"):
+        return {"success": False, "error": {"code": "BSIM_REFERENCE_UNAVAILABLE",
+            "message": "The selected match has no usable repository reference."}}
+    reference = safe_get(reference_port, "repositories/inspect-match", {
+        "profile": reference_profile, "match_id": match_id,
+        "repository_url": match.get("repository_url"),
+        "executable_md5": match.get("executable_md5"),
+        "address": match.get("address"), "function": match.get("function"),
+        "max_code_lines": max_code_lines})
+    if not reference.get("success"):
+        return reference
+    validation = safe_get(port, endpoint + "/validate", params)
+    if not validation.get("success"):
+        return validation
+    if validation.get("result", {}).get("valid") is not True:
+        return {"success": False, "error": {"code": "BSIM_MATCH_STALE",
+            "message": "The source selection is no longer valid."}}
+    try:
+        result = _core_bsim_compare_match(selection, payload.get("target", {}),
+                                           reference.get("result", {}))
+    except _CoreBSimComparisonError as exc:
+        return {"success": False, "error": {"code": exc.code, "message": str(exc)}}
+    result["reference_port"] = reference_port
+    return simplify_response({**source, "result": result})
+
+
+@mcp.tool()
+@text_output
+def bsim_prepare_apply(match_id: str, reference_profile: str, reference_port: int,
+                       profile: str = "", port: int | None = None) -> dict:
+    """Preview an exact selected BSim match's native signature and types.
+
+    Use a match_id from bsim_query, never an inferred best match. The reference
+    worker exports readonly native evidence through its approved profile; the
+    target checks selected identity, unchanged source, ABI and type conflicts.
+    No names, signatures or types change here. Review every proposal and then
+    explicitly call bsim_apply_match with the returned opaque apply_token.
+    No comments, binary code, local variables, checkout or save are transferred.
+
+    Args:
+        match_id: Exact opaque selected row ID from this target worker.
+        reference_profile: Approved repository profile on the reference worker.
+        reference_port: Reference worker HTTP port on the configured host.
+        profile: BSim profile that produced the selected match.
+        port: Target worker HTTP port.
+
+    Returns:
+        dict: Complete native before/after/type preview and opaque apply token.
+    """
+    if (type(reference_port) is not int or not 1 <= reference_port <= 65535
+            or not reference_profile):
+        return {"success": False, "error": {"code": "BSIM_APPLY_INVALID",
+            "message": "Select a repository profile and valid reference port."}}
+    # Register both workers before safe_get: unknown-port URL lookup holds a lock.
+    port = _get_instance_port(port)
+    reference_port = _get_instance_port(reference_port)
+    if urlparse(get_instance_url(port)).hostname != urlparse(get_instance_url(reference_port)).hostname:
+        return {"success": False, "error": {"code": "BSIM_APPLY_INVALID",
+            "message": "Target and reference workers must use the same HTTP host."}}
+    endpoint = f"bsim/matches/{quote(match_id, safe='')}"
+    params = {"profile": profile} if profile else {}
+    source = safe_get(port, endpoint + "/selection", params)
+    if not source.get("success"):
+        return source
+    match = source.get("result", {}).get("selection", {}).get("match", {})
+    if not match.get("reference_available"):
+        return {"success": False, "error": {"code": "BSIM_REFERENCE_UNAVAILABLE",
+            "message": "The selected match has no usable repository reference."}}
+    reference = safe_get(reference_port, "repositories/export-match", {
+        "profile": reference_profile, "match_id": match_id,
+        "repository_url": match.get("repository_url"),
+        "executable_md5": match.get("executable_md5"),
+        "address": match.get("address"), "function": match.get("function"),
+        "version": -1})
+    if not reference.get("success"):
+        return reference
+    return simplify_response(safe_post(port, endpoint + "/prepare-apply",
+        {"reference": reference["result"]}, params=params))
+
+
+@mcp.tool()
+@text_output
+def bsim_apply_match(match_id: str, apply_token: str, profile: str = "",
+                     port: int | None = None) -> dict:
+    """Explicitly apply only a reviewed native prepare-apply token.
+
+    Applies the exact prepared name/namespace, signature and referenced types in
+    one guarded native transaction. No new BSim query or best-match choice occurs.
+    The target must still be unchanged and writable. Unknown, stale or replayed
+    tokens fail safely; prepare and inspect a fresh preview instead.
+    Does not copy comments, edit code/local variables, checkout, save or check in.
+
+    Args:
+        match_id: Exact selected row used by bsim_prepare_apply.
+        apply_token: Opaque token from the reviewed preparation on this worker.
+        profile: Same BSim profile used for preparation.
+        port: Same target worker HTTP port used for preparation.
+
+    Returns:
+        dict: Native applied confirmation and concrete annotation/type summary.
+    """
+    if not isinstance(apply_token, str) or not apply_token.strip():
+        return {"success": False, "error": {"code": "BSIM_APPLY_INVALID",
+            "message": "Supply the token from a fresh prepare-apply preview."}}
+    port = _get_instance_port(port)
+    return simplify_response(safe_post(port,
+        f"bsim/matches/{quote(match_id, safe='')}/apply",
+        {"apply_token": apply_token}, params={"profile": profile} if profile else {}))
+
+
 
 @mcp.tool()
 @text_output
 def bsim_apply_names(address: str = "", name: str = "", min_similarity: float = 0.0,
-                     dry_run: bool = True, port: int | None = None) -> dict:
+                     dry_run: bool = True, port: int | None = None,
+                     profile: str = "") -> dict:
     """Name a function after the stored function it most resembles
 
     Queries the signature database for this function's best match and renames it
@@ -13275,6 +13910,7 @@ def bsim_apply_names(address: str = "", name: str = "", min_similarity: float = 
         min_similarity: The floor for applying (0 = default 0.8)
         dry_run: Report the change without making it (default True)
         port: Specific Ghidra instance port (optional)
+        profile: Optional worker-owned BSim profile ID with the query grant
 
     Returns:
         dict: from/to, whether the rename was applied (or would be), the match
@@ -13282,6 +13918,8 @@ def bsim_apply_names(address: str = "", name: str = "", min_similarity: float = 
     """
     port = _get_instance_port(port)
     params = {"dry_run": "false" if not dry_run else "true"}
+    if profile:
+        params["profile"] = profile
     if address:
         params["address"] = address
     if name:
@@ -13289,7 +13927,7 @@ def bsim_apply_names(address: str = "", name: str = "", min_similarity: float = 
     if min_similarity:
         params["min_similarity"] = min_similarity
     return simplify_response(
-        safe_post(port, "bsim/apply-names", params=params))
+        safe_post(port, "bsim/apply-names", {}, params=params))
 
 
 
@@ -13297,7 +13935,7 @@ def bsim_apply_names(address: str = "", name: str = "", min_similarity: float = 
 @text_output
 def bsim_diff_versions(other_executable: str, max_functions: int = 0,
                        min_similarity: float = 0.0,
-                       port: int | None = None) -> dict:
+                       port: int | None = None, profile: str = "") -> dict:
     """What changed between two versions, paired by BSim signature
 
     The complement of `analysis_diff`: that one compares by address and name,
@@ -13319,6 +13957,7 @@ def bsim_diff_versions(other_executable: str, max_functions: int = 0,
             cap 500)
         min_similarity: The floor for calling two functions a pair (0 = 0.8)
         port: Specific Ghidra instance port (optional)
+        profile: Optional worker-owned BSim profile ID with the query grant
 
     Returns:
         dict: one row per function compared with its class (`same`, `moved`,
@@ -13326,6 +13965,8 @@ def bsim_diff_versions(other_executable: str, max_functions: int = 0,
     """
     port = _get_instance_port(port)
     params = {"other_executable": other_executable}
+    if profile:
+        params["profile"] = profile
     if max_functions:
         params["max_functions"] = int(max_functions)
     if min_similarity:
@@ -13333,9 +13974,140 @@ def bsim_diff_versions(other_executable: str, max_functions: int = 0,
     return simplify_response(safe_get(port, "bsim/diff", params=params))
 
 
+# ================= Credential-isolated remote connections =================
+
+
+@mcp.tool()
+@text_output
+def connections_list(port: int | None = None) -> dict:
+    """List approved worker profile IDs and permission grants, never credentials.
+
+    Human operators provision profiles outside the agent session. This tool
+    cannot create profiles, read secret storage, or change approved endpoints.
+
+    Args:
+        port: Specific Ghidra worker instance port (optional)
+
+    Returns:
+        dict: Profile IDs, kinds, backends, and allowed operations
+    """
+    port = _get_instance_port(port)
+    return simplify_response(safe_get(port, "connections"))
+
+
+@mcp.tool()
+@text_output
+def repositories_status(profile: str, port: int | None = None) -> dict:
+    """Connect to a provisioned native Ghidra Server repository and report its state.
+
+    This is not a remote Ghydra HTTP instance registration. The selected worker
+    owns the endpoint, identity, credentials, and read/write policy.
+
+    Args:
+        profile: Worker-owned Ghidra repository profile ID
+        port: Specific Ghidra worker instance port (optional)
+
+    Returns:
+        dict: Native repository connectivity, permissions, and checkout workspace state
+    """
+    port = _get_instance_port(port)
+    return simplify_response(safe_get(port, "repositories", params={"profile": profile}))
+
+
+@mcp.tool()
+@text_output
+def repositories_list_files(profile: str, path: str = "/", limit: int = 100,
+                            port: int | None = None, offset: int = 0) -> dict:
+    """List a native repository folder with an explicit truncation indicator.
+
+    Args:
+        profile: Worker-owned Ghidra repository profile ID with the read grant
+        path: Absolute repository folder path
+        limit: Maximum entries to return, 1..1000
+        port: Specific Ghidra worker instance port (optional)
+        offset: Nonnegative page offset; follow Next to enumerate the folder
+
+    Returns:
+        dict: Folder entries, versions, checkout state, and whether the list is truncated
+    """
+    port = _get_instance_port(port)
+    return simplify_response(safe_get(port, "repositories/files",
+        params={"profile": profile, "path": path, "offset": offset, "limit": limit}))
+
+
+@mcp.tool()
+@text_output
+def repositories_open(profile: str, path: str, version: int = -1,
+                      port: int | None = None) -> dict:
+    """Activate a repository program without discarding the active program's changes.
+
+    Opens read-only unless an explicit native checkout and profile grants permit
+    editing. Opening or saving is not a repository check-in.
+
+    Args:
+        profile: Worker-owned Ghidra repository profile ID with the read grant
+        path: Absolute repository program path
+        version: Native version number, or -1 for the latest version
+        port: Specific Ghidra worker instance port (optional)
+
+    Returns:
+        dict: Opened program, version, and native checkout/editability state
+    """
+    port = _get_instance_port(port)
+    return simplify_response(safe_post(port, "repositories/open",
+        data={"profile": profile, "path": path, "version": version}))
+
+
+@mcp.tool()
+@text_output
+def repositories_checkout(profile: str, path: str, exclusive: bool = False,
+                          port: int | None = None) -> dict:
+    """Check out a native repository program; never force or replace a checkout.
+
+    Args:
+        profile: Worker-owned Ghidra repository profile ID with the checkout grant
+        path: Absolute repository program path
+        exclusive: Request an exclusive checkout, required for safe API check-in
+        port: Specific Ghidra worker instance port (optional)
+
+    Returns:
+        dict: Native checkout state and whether a checkout was created
+    """
+    port = _get_instance_port(port)
+    return simplify_response(safe_post(port, "repositories/checkout",
+        data={"profile": profile, "path": path, "exclusive": exclusive}))
+
+
+@mcp.tool()
+@text_output
+def repositories_checkin(profile: str, path: str, comment: str,
+                        keep_checked_out: bool = False,
+                        port: int | None = None) -> dict:
+    """Publish saved changes from an exclusive native checkout without an automatic merge.
+
+    An open program must keep its checkout. Save unsaved changes first; version
+    conflicts are returned instead of silently merging or discarding work.
+
+    Args:
+        profile: Worker-owned Ghidra repository profile ID with the checkin grant
+        path: Absolute repository program path
+        comment: Explicit version comment, never a credential
+        keep_checked_out: Keep the checkout after publishing
+        port: Specific Ghidra worker instance port (optional)
+
+    Returns:
+        dict: Published native version and remaining checkout state
+    """
+    port = _get_instance_port(port)
+    return simplify_response(safe_post(port, "repositories/checkin",
+        data={"profile": profile, "path": path, "comment": comment,
+              "keep_checked_out": keep_checked_out}))
+
+
 
 _TOOL_GROUPS = {
     "core": {"programs", "project", "projects", "instances", "ui", "doctor",
+             "connections", "repositories",
              "evidence", "session", "tasks", "tools", "mission", "cache"},
     "functions": {"functions", "analysis", "inspect", "variables", "memory",
                   "bsim"},

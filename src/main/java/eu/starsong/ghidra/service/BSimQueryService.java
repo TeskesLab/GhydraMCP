@@ -113,6 +113,42 @@ public final class BSimQueryService {
     public static Map<String, Object> query(Program program, String address,
             String name, int maxMatches, double minSimilarity,
             double minSignificance, ExecutableFilter filter) {
+        return queryInternal(program, address, name, maxMatches, minSimilarity,
+            minSignificance, filter, null);
+    }
+
+    /**
+     * Query with exact executable/architecture/compiler metadata and conjunctive executable categories.
+     *
+     * @param program the open program
+     * @param address the function address, or null when a name is used
+     * @param name the function name, or null when an address is used
+     * @param maxMatches the existing match limit, 0 for the default
+     * @param minSimilarity the existing similarity floor, 0 for the default
+     * @param minSignificance the existing significance floor, 0 for the default
+     * @param executable exact native executable name, or null when absent
+     * @param architecture exact native architecture identifier, or null when absent
+     * @param compiler exact native compiler identifier, or null when absent
+     * @param categories JSON object mapping each category name to one string value, or null
+     * @return the query report, including the actually applied {@code filters}
+     */
+    public static Map<String, Object> queryWithFilters(Program program, String address,
+            String name, int maxMatches, double minSimilarity, double minSignificance,
+            String executable, String architecture, String compiler, String categories) {
+        BSimMetadataFilter metadata;
+        try {
+            metadata = BSimMetadataFilter.parse(executable, architecture, compiler, categories);
+        } catch (IllegalArgumentException invalid) {
+            return BSimDatabase.failure(new LinkedHashMap<>(), "BSIM_FILTER_INVALID",
+                invalid.getMessage());
+        }
+        return queryInternal(program, address, name, maxMatches, minSimilarity,
+            minSignificance, null, metadata);
+    }
+
+    private static Map<String, Object> queryInternal(Program program, String address,
+            String name, int maxMatches, double minSimilarity, double minSignificance,
+            ExecutableFilter filter, BSimMetadataFilter metadata) {
         Map<String, Object> data = new LinkedHashMap<>();
         long started = System.currentTimeMillis();
         String database = BSimService.database();
@@ -147,15 +183,20 @@ public final class BSimQueryService {
                     ? "no function at " + address
                     : "no function named " + name + " in this program");
         }
-        if (function.getBody() == null || function.getBody().getNumAddresses() == 0) {
+        boolean hasBody = GhidraSwing.runRead(() -> {
+            data.put("program", program.getName());
+            data.put("function", function.getName());
+            data.put("address", function.getEntryPoint().toString());
+            data.put("source_address", BSimMatchService.qualifiedAddress(function));
+            data.put("source_modification", program.getModificationNumber());
+            return function.getBody() != null && function.getBody().getNumAddresses() != 0;
+        });
+        if (!hasBody) {
             return BSimDatabase.failure(data, "BSIM_NO_BODY",
                 "the function has no body, so no signature can be made for it");
         }
 
         data.put("database", database);
-        data.put("program", program.getName());
-        data.put("function", function.getName());
-        data.put("address", function.getEntryPoint().toString());
         data.put("min_similarity", similarity);
         data.put("min_significance", significance);
         data.put("max_matches", limit);
@@ -176,6 +217,19 @@ public final class BSimQueryService {
             if (databaseInfo == null || vectorFactory == null) {
                 return BSimDatabase.failure(data, "BSIM_INIT_FAILED",
                     "the signature database answered without its configuration");
+            }
+            data.put("available_categories", BSimMetadataFilter.availableCategories(databaseInfo));
+            Object nativeMetadata = null;
+            if (metadata != null && !metadata.isEmpty()) {
+                try {
+                    nativeMetadata = metadata.build(connection, databaseInfo);
+                } catch (IllegalArgumentException invalid) {
+                    return BSimDatabase.failure(data, "BSIM_FILTER_INVALID", invalid.getMessage());
+                } catch (Throwable unsupported) {
+                    return BSimDatabase.failure(data, "BSIM_FILTER_UNSUPPORTED",
+                        "the database cannot apply the requested metadata filters ("
+                            + BSimDatabase.describe(BSimDatabase.unwrap(unsupported)) + ")");
+                }
             }
 
             Class<?> generatorClass = Class.forName(BSimDatabase.GEN_SIGNATURES,
@@ -220,6 +274,14 @@ public final class BSimQueryService {
             queryClass.getField("signifthresh").set(query,
                 Double.valueOf(significance));
             queryClass.getField("max").set(query, Integer.valueOf(limit));
+            if (nativeMetadata != null) {
+                try {
+                    queryClass.getField("bsimFilter").set(query, nativeMetadata);
+                } catch (Throwable unsupported) {
+                    return BSimDatabase.failure(data, "BSIM_FILTER_UNSUPPORTED",
+                        "this native QueryNearest cannot accept metadata filters");
+                }
+            }
             if (filter != null && filter.isApplied()) {
                 try {
                     queryClass.getField("bsimFilter").set(query, filter.bsimFilter());
@@ -236,8 +298,7 @@ public final class BSimQueryService {
                 .invoke(query, connection);
             if (response == null) {
                 return BSimDatabase.failure(data, "BSIM_QUERY_FAILED",
-                    "the database refused the query: "
-                        + BSimDatabase.lastError(connection));
+                    "the database refused the query");
             }
 
             List<Map<String, Object>> matches = new ArrayList<>();
@@ -258,6 +319,7 @@ public final class BSimQueryService {
             }
 
             data.put("success", Boolean.TRUE);
+            data.put("filters", metadata == null ? Map.of() : metadata.predicates());
             data.put("matches", matches);
             data.put("returned", matches.size());
             // The response carries what BSim itself considered; the loop above
@@ -282,7 +344,7 @@ public final class BSimQueryService {
             return data;
         } finally {
             BSimDatabase.disposeQuietly(signatureGenerator);
-            BSimDatabase.closeQuietly(connection);
+            BSimDatabase.release(connection, database);
         }
     }
 
@@ -443,7 +505,7 @@ public final class BSimQueryService {
                 "the executable list could not be read ("
                     + BSimDatabase.describe(BSimDatabase.unwrap(unavailable)) + ")");
         } finally {
-            BSimDatabase.closeQuietly(connection);
+            BSimDatabase.release(connection, database);
         }
     }
 
@@ -545,6 +607,20 @@ public final class BSimQueryService {
                     executable = (String) BSimDatabase.call(exe, "getName");
                 }
                 path = (String) BSimDatabase.call(exe, "getPath");
+                match.put("executable_md5", BSimDatabase.call(exe, "getMd5"));
+                match.put("architecture", BSimDatabase.call(exe, "getArchitecture"));
+                match.put("compiler", BSimDatabase.call(exe, "getNameCompiler"));
+                String repositoryUrl = BSimMatchService.safeRepositoryUrl(
+                    BSimDatabase.call(exe, "getURLString"));
+                match.put("repository_url", repositoryUrl);
+                boolean referenceAvailable = repositoryUrl != null
+                    && String.valueOf(match.get("executable_md5")).matches("(?i)[0-9a-f]{32}")
+                    && !Boolean.TRUE.equals(BSimDatabase.call(exe, "isLibrary"));
+                match.put("reference_available", referenceAvailable);
+                if (!referenceAvailable) {
+                    match.put("reference_reason",
+                        "The indexed match has no usable repository URL and executable identity.");
+                }
             }
         }
         match.put("function", function);

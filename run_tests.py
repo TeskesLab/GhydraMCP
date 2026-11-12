@@ -1317,6 +1317,25 @@ def run_gateway_tests():
         return False
 
 
+def run_connection_tests():
+    """Run profile storage, native launcher authentication, and CLI failure regressions."""
+    print_header("Running Remote Connection Tests")
+    for script in ("test_connections.py", "test_headless_remote.py",
+                   "test_bsim_remote.py", "test_bsim_compare.py", "test_bsim_apply.py",
+                   "test_bsim_filters.py"):
+        try:
+            result = subprocess.run(suite_script(script), capture_output=True, text=True,
+                                    timeout=SUITE_TIMEOUT)
+            print(result.stdout, end="")
+            print(result.stderr, end="")
+            if result.returncode:
+                return False
+        except Exception as exc:
+            print(f"Remote connection suite failed: {exc}")
+            return False
+    return True
+
+
 NO_GHIDRA_SUITES = (
     "--kuna", "--x64dbg", "--surface",
     "--capabilities", "--scripts", "--compatibility", "--runner", "--docs",
@@ -1335,6 +1354,7 @@ NO_GHIDRA_SUITES = (
     "--formatters",
     "--formatter-interface",
     "--flag-names",
+    "--connections",
 )
 
 SUITES = {
@@ -1384,6 +1404,7 @@ SUITES = {
     "--flag-names": run_flag_name_tests,
     "--gateway": run_gateway_tests,
     "--gateway-contract": run_gateway_contract_tests,
+    "--connections": run_connection_tests,
 }
 
 def build_usage() -> str:

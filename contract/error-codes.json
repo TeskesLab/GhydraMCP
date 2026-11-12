@@ -12,8 +12,8 @@
     "success_field": "success"
   },
   "counts": {
-    "codes": 121,
-    "families": 38
+    "codes": 158,
+    "families": 41
   },
   "codes": [
     {
@@ -21,7 +21,7 @@
       "side": "Java",
       "http_status": "409",
       "message": "Analysis is already running",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/AnalysisResource.java:66`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/AnalysisResource.java:69`"
     },
     {
       "code": "ASSERTION_BAD_FILE",
@@ -49,140 +49,343 @@
       "side": "Java",
       "http_status": null,
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:203`"
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:273`"
+    },
+    {
+      "code": "BSIM_APPLY_BUSY",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Finish the active native transaction and prepare again",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/BSimMatchApplyService.java:149`"
+    },
+    {
+      "code": "BSIM_APPLY_INVALID",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:13831`"
+    },
+    {
+      "code": "BSIM_APPLY_TOKEN",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Unknown, expired, consumed or mismatched apply token; query and prepare a fresh preview",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/BSimMatchApplyService.java:389`"
     },
     {
       "code": "BSIM_BELOW_THRESHOLD",
       "side": "Java",
       "http_status": "400",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:213`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:305`"
+    },
+    {
+      "code": "BSIM_COMPARISON_INVALID",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:13765`"
     },
     {
       "code": "BSIM_CREATE_FAILED",
       "side": "Java",
       "http_status": "409",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:225`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:317`"
     },
     {
       "code": "BSIM_DISABLED",
       "side": "Java",
       "http_status": "503",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:165`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:257`"
+    },
+    {
+      "code": "BSIM_FILTER_INVALID",
+      "side": "Java",
+      "http_status": "400",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:245`"
+    },
+    {
+      "code": "BSIM_FILTER_UNSUPPORTED",
+      "side": "Java",
+      "http_status": "400",
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:251`"
     },
     {
       "code": "BSIM_INCOMPLETE_INGEST",
       "side": "Java",
       "http_status": "409",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:272`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:364`"
     },
     {
       "code": "BSIM_INGEST_FAILED",
       "side": "Java",
       "http_status": "500",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:261`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:353`"
     },
     {
       "code": "BSIM_INIT_FAILED",
       "side": "Java",
       "http_status": "409",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:231`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:323`"
     },
     {
       "code": "BSIM_INSERT_FAILED",
       "side": "Java",
       "http_status": "500",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:237`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:329`"
+    },
+    {
+      "code": "BSIM_MATCH_PROFILE",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Use the BSim profile that produced this match.",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/BSimMatchService.java:103`"
+    },
+    {
+      "code": "BSIM_MATCH_STALE",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Selected target function no longer exists; query and prepare again",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/BSimMatchApplyService.java:293`"
+    },
+    {
+      "code": "BSIM_MATCH_UNKNOWN",
+      "side": "Java",
+      "http_status": "404",
+      "message": "The selected match is unknown or was evicted. Query again and select a returned match ID.",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/BSimMatchService.java:101`"
     },
     {
       "code": "BSIM_NO_BODY",
       "side": "Java",
       "http_status": "400",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:189`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:281`"
     },
     {
       "code": "BSIM_NO_DATABASE",
       "side": "Java",
       "http_status": "400",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:171`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:263`"
     },
     {
       "code": "BSIM_NO_FUNCTION",
       "side": "Java",
       "http_status": "400",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:183`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:275`"
     },
     {
       "code": "BSIM_NO_MATCH",
       "side": "Java",
       "http_status": "400",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:201`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:293`"
     },
     {
       "code": "BSIM_NO_NAME",
       "side": "Java",
       "http_status": "400",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:207`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:299`"
     },
     {
       "code": "BSIM_NO_PROGRAM",
       "side": "Java",
       "http_status": "400",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:177`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:269`"
     },
     {
       "code": "BSIM_NO_TARGET",
       "side": "Java",
       "http_status": "400",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:195`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:287`"
     },
     {
       "code": "BSIM_QUERY_FAILED",
       "side": "Java",
       "http_status": "500",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:249`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:341`"
+    },
+    {
+      "code": "BSIM_REFERENCE_ADDRESS_AMBIGUOUS",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Selected reference function address is ambiguous",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:388`"
+    },
+    {
+      "code": "BSIM_REFERENCE_FUNCTION_NOT_FOUND",
+      "side": "Java",
+      "http_status": "404",
+      "message": "Selected reference function was not found at its exact address",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:366`"
+    },
+    {
+      "code": "BSIM_REFERENCE_IDENTITY_MISMATCH",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Reference executable MD5 does not match the selected match",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:269`"
+    },
+    {
+      "code": "BSIM_REFERENCE_SCOPE_MISMATCH",
+      "side": "Java",
+      "http_status": "403",
+      "message": "Selected repository URL is outside the approved profile",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:344`"
+    },
+    {
+      "code": "BSIM_REFERENCE_UNAVAILABLE",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`bridge_mcp_hydra.py:13781`"
     },
     {
       "code": "BSIM_RENAME_FAILED",
       "side": "Java",
       "http_status": "500",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:255`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:347`"
     },
     {
       "code": "BSIM_RENAME_REFUSED",
       "side": "Java",
       "http_status": "400",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:219`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:311`"
     },
     {
       "code": "BSIM_SCAN_FAILED",
       "side": "Java",
       "http_status": "500",
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:243`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/BSimResource.java:335`"
+    },
+    {
+      "code": "BSIM_SIGNATURE_ABI",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Source and target language, compiler and pointer size must match exactly",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/BSimMatchApplyService.java:92`"
+    },
+    {
+      "code": "BSIM_SIGNATURE_ARCHIVE",
+      "side": "Java",
+      "http_status": "422",
+      "message": "Native signature archive could not be exported:",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/BSimSignatureTransfer.java:94`"
+    },
+    {
+      "code": "BSIM_SIGNATURE_TOO_LARGE",
+      "side": "Java",
+      "http_status": "413",
+      "message": "Complete signature transport exceeds its bounds (524288 archive bytes, 900000 JSON bytes or 4096 dependency types); truncation is never accepted",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/BSimSignatureTransfer.java:171`"
+    },
+    {
+      "code": "BSIM_SIGNATURE_TYPE_CONFLICT",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Incompatible existing native datatype:",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/BSimMatchApplyService.java:387`"
+    },
+    {
+      "code": "CONNECTIONS_DISABLED",
+      "side": "Java",
+      "http_status": "503",
+      "message": "This instance has no worker connection profiles configured.",
+      "origin": "`src/main/java/eu/starsong/ghidra/connection/ConnectionProfiles.java:76`"
+    },
+    {
+      "code": "CONNECTION_AUTH_FAILED",
+      "side": "Java",
+      "http_status": "401",
+      "message": "The native authenticated identity does not match the selected profile.",
+      "origin": "`src/main/java/eu/starsong/ghidra/connection/WorkerAuthentication.java:95`"
+    },
+    {
+      "code": "CONNECTION_AUTH_REQUIRED",
+      "side": "Java",
+      "http_status": "409",
+      "message": "The connection profile changed; start the operation again.",
+      "origin": "`src/main/java/eu/starsong/ghidra/connection/ConnectionProfiles.java:195`"
     },
     {
       "code": "CONNECTION_ERROR",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:1069`"
+      "origin": "`bridge_mcp_hydra.py:1072`"
+    },
+    {
+      "code": "CONNECTION_FAILED",
+      "side": "Java",
+      "http_status": "503",
+      "message": "This Ghidra installation cannot construct the configured BSim client.",
+      "origin": "`src/main/java/eu/starsong/ghidra/connection/WorkerAuthentication.java:81`"
+    },
+    {
+      "code": "CONNECTION_PERMISSION_DENIED",
+      "side": "Java",
+      "http_status": "403",
+      "message": "The selected profile does not permit this operation.",
+      "origin": "`src/main/java/eu/starsong/ghidra/connection/ConnectionProfiles.java:129`"
+    },
+    {
+      "code": "CONNECTION_PROFILE_INVALID",
+      "side": "Java",
+      "http_status": "400",
+      "message": "The worker connection configuration is invalid; ask its operator to repair it.",
+      "origin": "`src/main/java/eu/starsong/ghidra/connection/ConnectionProfiles.java:333`"
+    },
+    {
+      "code": "CONNECTION_PROFILE_NOT_FOUND",
+      "side": "Java",
+      "http_status": "404",
+      "message": "The selected worker connection profile does not exist.",
+      "origin": "`src/main/java/eu/starsong/ghidra/connection/ConnectionProfiles.java:119`"
+    },
+    {
+      "code": "CONNECTION_PROFILE_REQUIRED",
+      "side": "Java",
+      "http_status": "400",
+      "message": "Select a worker connection profile.",
+      "origin": "`src/main/java/eu/starsong/ghidra/connection/ConnectionProfiles.java:78`"
+    },
+    {
+      "code": "CONNECTION_STORE_UNSAFE",
+      "side": "Java",
+      "http_status": "503",
+      "message": "Connection storage requires worker-owned private POSIX files without symlinks.",
+      "origin": "`src/main/java/eu/starsong/ghidra/connection/ConnectionProfiles.java:337`"
+    },
+    {
+      "code": "CONNECTION_TLS_FAILED",
+      "side": "Java",
+      "http_status": "503",
+      "message": "The worker could not initialize verified TLS. Check its certificate configuration.",
+      "origin": "`src/main/java/eu/starsong/ghidra/connection/WorkerTLS.java:50`"
+    },
+    {
+      "code": "CONNECTION_WORKER_RESTRICTED",
+      "side": "Java",
+      "http_status": "403",
+      "message": "Script endpoints are unavailable on credential-owning workers.",
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/ScriptResource.java:87`"
     },
     {
       "code": "DIFF_READ_FAILED",
@@ -203,14 +406,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11514`"
+      "origin": "`bridge_mcp_hydra.py:11941`"
     },
     {
       "code": "EVIDENCE_IO",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11619`"
+      "origin": "`bridge_mcp_hydra.py:12046`"
     },
     {
       "code": "EVIDENCE_NO_FILE",
@@ -231,146 +434,153 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:13134`"
+      "origin": "`bridge_mcp_hydra.py:13561`"
     },
     {
       "code": "FLEET_MISSING_TARGET",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:13141`"
+      "origin": "`bridge_mcp_hydra.py:13568`"
     },
     {
       "code": "FLEET_UNKNOWN_KIND",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:13082`"
+      "origin": "`bridge_mcp_hydra.py:13509`"
     },
     {
       "code": "FUNCTION_NOT_FOUND",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:5045`"
+      "origin": "`bridge_mcp_hydra.py:5471`"
     },
     {
       "code": "HEADLESS_ALREADY_RUNNING",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/headless.py:808`"
+      "origin": "`ghydra/headless.py:1012`"
     },
     {
       "code": "HEADLESS_BAD_PORT",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/headless.py:628`"
+      "origin": "`ghydra/headless.py:672`"
     },
     {
       "code": "HEADLESS_BAD_PROJECT_DIR",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11161`"
+      "origin": "`bridge_mcp_hydra.py:11588`"
     },
     {
       "code": "HEADLESS_DIED",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11206`"
+      "origin": "`bridge_mcp_hydra.py:11633`"
     },
     {
       "code": "HEADLESS_LAUNCH",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11169`"
+      "origin": "`bridge_mcp_hydra.py:11596`"
     },
     {
       "code": "HEADLESS_LIMITATION",
       "side": "Java",
       "http_status": null,
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:183`"
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:253`"
     },
     {
       "code": "HEADLESS_NO_FILE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11134`"
+      "origin": "`bridge_mcp_hydra.py:11561`"
     },
     {
       "code": "HEADLESS_NO_GHIDRA",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11141`"
+      "origin": "`bridge_mcp_hydra.py:11568`"
     },
     {
       "code": "HEADLESS_NO_JDK",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11147`"
+      "origin": "`bridge_mcp_hydra.py:11574`"
     },
     {
       "code": "HEADLESS_NO_LAUNCHER",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/headless.py:186`"
+      "origin": "`ghydra/headless.py:192`"
     },
     {
       "code": "HEADLESS_NO_PORT",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/headless.py:414`"
+      "origin": "`ghydra/headless.py:421`"
     },
     {
       "code": "HEADLESS_NO_RUN",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11248`"
+      "origin": "`bridge_mcp_hydra.py:11675`"
     },
     {
       "code": "HEADLESS_PORT_IN_USE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11151`"
+      "origin": "`bridge_mcp_hydra.py:11578`"
+    },
+    {
+      "code": "HEADLESS_STOP_REFUSED",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/headless.py:926`"
     },
     {
       "code": "HEADLESS_TIMEOUT",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11219`"
+      "origin": "`bridge_mcp_hydra.py:11646`"
     },
     {
       "code": "INCOMPATIBLE_GHIDRA_BUILD",
       "side": "Java",
       "http_status": null,
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:220`"
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:294`"
     },
     {
       "code": "INSTANCE_NOT_FOUND",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:5561`"
+      "origin": "`bridge_mcp_hydra.py:5987`"
     },
     {
       "code": "INTERNAL_ERROR",
       "side": "Java",
       "http_status": null,
-      "message": "Internal server error:",
+      "message": "The credential worker could not complete this request.",
       "origin": "`src/main/java/eu/starsong/ghidra/middleware/ErrorHandler.java:27`"
     },
     {
@@ -378,77 +588,77 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:6429`"
+      "origin": "`bridge_mcp_hydra.py:6855`"
     },
     {
       "code": "INVALID_DIMENSIONS",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:10426`"
+      "origin": "`bridge_mcp_hydra.py:10852`"
     },
     {
       "code": "INVALID_HEX",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:6439`"
+      "origin": "`bridge_mcp_hydra.py:6865`"
     },
     {
       "code": "INVALID_JSON",
       "side": "Java",
       "http_status": null,
-      "message": "Malformed JSON body:",
-      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:209`"
+      "message": "(computed)",
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:281`"
     },
     {
       "code": "INVALID_RESPONSE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:4888`"
+      "origin": "`bridge_mcp_hydra.py:5314`"
     },
     {
       "code": "INVALID_TARGETS",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:5924`"
+      "origin": "`bridge_mcp_hydra.py:6350`"
     },
     {
       "code": "KUNA_BAD_ARTIFACT",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:8050`"
+      "origin": "`bridge_mcp_hydra.py:8476`"
     },
     {
       "code": "KUNA_DISABLED",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:360`"
+      "origin": "`bridge_mcp_hydra.py:363`"
     },
     {
       "code": "KUNA_FAILED",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:452`"
+      "origin": "`bridge_mcp_hydra.py:455`"
     },
     {
       "code": "KUNA_IO",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:7821`"
+      "origin": "`bridge_mcp_hydra.py:8247`"
     },
     {
       "code": "KUNA_LAUNCH",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:7879`"
+      "origin": "`bridge_mcp_hydra.py:8305`"
     },
     {
       "code": "KUNA_MISSING",
@@ -462,35 +672,35 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:7983`"
+      "origin": "`bridge_mcp_hydra.py:8409`"
     },
     {
       "code": "KUNA_NO_FILE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:371`"
+      "origin": "`bridge_mcp_hydra.py:374`"
     },
     {
       "code": "KUNA_NO_FUNCTION",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:8075`"
+      "origin": "`bridge_mcp_hydra.py:8501`"
     },
     {
       "code": "KUNA_NO_INDEX",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:8026`"
+      "origin": "`bridge_mcp_hydra.py:8452`"
     },
     {
       "code": "KUNA_NO_JSON",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:442`"
+      "origin": "`bridge_mcp_hydra.py:445`"
     },
     {
       "code": "KUNA_TIMEOUT",
@@ -504,7 +714,14 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:448`"
+      "origin": "`bridge_mcp_hydra.py:451`"
+    },
+    {
+      "code": "LAUNCHER_INVALID_ARGUMENT",
+      "side": "Python",
+      "http_status": null,
+      "message": null,
+      "origin": "`ghydra/launcher.py:462`"
     },
     {
       "code": "LAUNCHER_NO_GHIDRA",
@@ -525,49 +742,49 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/launcher.py:462`"
+      "origin": "`ghydra/launcher.py:471`"
     },
     {
       "code": "MISSING_PARAMETER",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:5026`"
+      "origin": "`bridge_mcp_hydra.py:5452`"
     },
     {
       "code": "MISSION_IO",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:12721`"
+      "origin": "`bridge_mcp_hydra.py:13148`"
     },
     {
       "code": "NON_JSON_RESPONSE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:1028`"
+      "origin": "`bridge_mcp_hydra.py:1031`"
     },
     {
       "code": "NO_PROGRAM_LOADED",
       "side": "Java",
       "http_status": null,
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:166`"
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:236`"
     },
     {
       "code": "NO_PROJECT_OPEN",
       "side": "Java",
       "http_status": null,
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:171`"
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:241`"
     },
     {
       "code": "ORIGIN_NOT_ALLOWED",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:971`"
+      "origin": "`bridge_mcp_hydra.py:974`"
     },
     {
       "code": "READ_ONLY_MODE",
@@ -598,11 +815,46 @@
       "origin": "`ghydra/report.py:550`"
     },
     {
+      "code": "REPOSITORY_CLOSED",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Repository service is closed",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:531`"
+    },
+    {
+      "code": "REPOSITORY_CONFLICT",
+      "side": "Java",
+      "http_status": "409",
+      "message": "Save the active program before opening another repository program.",
+      "origin": "`src/main/java/eu/starsong/ghidra/server/ActiveProgram.java:33`"
+    },
+    {
+      "code": "REPOSITORY_NOT_FOUND",
+      "side": "Java",
+      "http_status": "404",
+      "message": "Repository file or folder was not found",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:774`"
+    },
+    {
+      "code": "REPOSITORY_READ_ONLY",
+      "side": "Java",
+      "http_status": "403",
+      "message": "Repository program is read-only",
+      "origin": "`src/main/java/eu/starsong/ghidra/server/ManagedProgramGuard.java:78`"
+    },
+    {
+      "code": "REPOSITORY_UNSUPPORTED",
+      "side": "Java",
+      "http_status": "501",
+      "message": "Required native Ghidra repository APIs are unavailable",
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:538`"
+    },
+    {
       "code": "REQUEST_TIMEOUT",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:1059`"
+      "origin": "`bridge_mcp_hydra.py:1062`"
     },
     {
       "code": "RUNBOOK_BAD_ENTRY",
@@ -616,21 +868,21 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:12187`"
+      "origin": "`bridge_mcp_hydra.py:12614`"
     },
     {
       "code": "RUNBOOK_BAD_STEPS",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:12153`"
+      "origin": "`bridge_mcp_hydra.py:12580`"
     },
     {
       "code": "RUNBOOK_IO",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:12160`"
+      "origin": "`bridge_mcp_hydra.py:12587`"
     },
     {
       "code": "SAVE_FAILED",
@@ -644,35 +896,35 @@
       "side": "Java",
       "http_status": "403",
       "message": "Script execution is disabled. Start Ghidra with -D",
-      "origin": "`src/main/java/eu/starsong/ghidra/resource/ScriptResource.java:88`"
+      "origin": "`src/main/java/eu/starsong/ghidra/resource/ScriptResource.java:95`"
     },
     {
       "code": "SESSION_ALREADY",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11738`"
+      "origin": "`bridge_mcp_hydra.py:12165`"
     },
     {
       "code": "SESSION_BAD_NAME",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`ghydra/sessions.py:149`"
+      "origin": "`ghydra/sessions.py:153`"
     },
     {
       "code": "SESSION_NOT_RUNNING",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11799`"
+      "origin": "`bridge_mcp_hydra.py:12226`"
     },
     {
       "code": "SESSION_NO_SUCH",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11811`"
+      "origin": "`bridge_mcp_hydra.py:12238`"
     },
     {
       "code": "SHUTDOWN_DISABLED",
@@ -742,56 +994,56 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:11850`"
+      "origin": "`bridge_mcp_hydra.py:12277`"
     },
     {
       "code": "TOOL_GROUP_CORE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:13562`"
+      "origin": "`bridge_mcp_hydra.py:14334`"
     },
     {
       "code": "TOOL_GROUP_UNAVAILABLE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:13422`"
+      "origin": "`bridge_mcp_hydra.py:14194`"
     },
     {
       "code": "TOOL_GROUP_UNKNOWN",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:13414`"
+      "origin": "`bridge_mcp_hydra.py:14186`"
     },
     {
       "code": "TRANSACTION_FAILED",
       "side": "Java",
       "http_status": null,
       "message": "(computed)",
-      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:196`"
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:266`"
     },
     {
       "code": "TRIAGE_ERROR",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:10727`"
+      "origin": "`bridge_mcp_hydra.py:11153`"
     },
     {
       "code": "TRIAGE_NO_FILE",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:10721`"
+      "origin": "`bridge_mcp_hydra.py:11147`"
     },
     {
       "code": "UNEXPECTED_ERROR",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:1079`"
+      "origin": "`bridge_mcp_hydra.py:1082`"
     },
     {
       "code": "UNSAVED_CHANGES",
@@ -801,11 +1053,18 @@
       "origin": "`src/main/java/eu/starsong/ghidra/resource/DevResource.java:92`"
     },
     {
+      "code": "WORKER_STOPPING",
+      "side": "Java",
+      "http_status": "503",
+      "message": "The worker is checking shutdown safety.",
+      "origin": "`src/main/java/eu/starsong/ghidra/server/GhydraServer.java:206`"
+    },
+    {
       "code": "X64DBG_BAD_ARGS",
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:9202`"
+      "origin": "`bridge_mcp_hydra.py:9628`"
     },
     {
       "code": "X64DBG_DISABLED",
@@ -819,7 +1078,7 @@
       "side": "Python",
       "http_status": null,
       "message": null,
-      "origin": "`bridge_mcp_hydra.py:9242`"
+      "origin": "`bridge_mcp_hydra.py:9668`"
     },
     {
       "code": "X64DBG_MISSING",

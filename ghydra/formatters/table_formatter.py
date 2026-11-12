@@ -1559,3 +1559,38 @@ class TableFormatter(BaseFormatter):
             return f"[red]Error [{error.code}]:[/red] {error.message}"
 
         return f"[red]Error:[/red] {str(error)}"
+
+    def format_connections(self, data: Dict[str, Any]) -> str:
+        """Show usable profile IDs and grants, never credential store entries."""
+        table = Table(title="Worker connection profiles", box=box.ROUNDED)
+        for heading in ("Profile", "Kind", "Backend", "Permissions"):
+            table.add_column(heading)
+        for row in data.get("result", []):
+            table.add_row(*(escape(str(row.get(key, ""))) for key in ("id", "kind", "backend")),
+                          escape(", ".join(row.get("permissions", []))))
+        return self._capture(table)
+
+    def format_repository(self, data: Dict[str, Any]) -> str:
+        """Keep native versions, checkout state and truncation visible."""
+        result = data.get("result", {})
+        return self._capture(Syntax(json.dumps(result, ensure_ascii=False, indent=2),
+                                    "json", background_color="default", word_wrap=True))
+
+    def format_bsim_comparison(self, data: Dict[str, Any]) -> str:
+        """Show code/signature/type differences without hiding incomplete evidence."""
+        from ..core.bsim_compare import render_comparison
+        return render_comparison(data.get("result", {}))
+
+    def format_bsim_prepare_apply(self, data: Dict[str, Any]) -> str:
+        """Keep every native proposal and the explicit apply token visible."""
+        heading = ("Dry run: no changes applied." if data.get("dry_run") else
+                   "No changes applied. Review preview, then use bsim apply-match explicitly.")
+        return heading + "\n" + json.dumps(data.get("result", {}), ensure_ascii=False, indent=2)
+
+    def format_bsim_apply_match(self, data: Dict[str, Any]) -> str:
+        """Report application only when the native result explicitly confirms it."""
+        result = data.get("result", {})
+        heading = ("Applied prepared signature and types." if
+                   isinstance(result, dict) and result.get("applied") is True else
+                   "No application confirmed.")
+        return heading + "\n" + json.dumps(result, ensure_ascii=False, indent=2)

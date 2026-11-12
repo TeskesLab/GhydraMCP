@@ -30,6 +30,7 @@ public class ScriptResource implements Resource {
 
     /** Whether script endpoints are enabled (off unless explicitly opted in). */
     public static boolean scriptsEnabled() {
+        if (eu.starsong.ghidra.connection.ConnectionProfiles.enabled()) return false;
         String prop = System.getProperty(PROPERTY);
         if (prop != null) {
             return prop.equalsIgnoreCase("true") || prop.equals("1");
@@ -81,6 +82,12 @@ public class ScriptResource implements Resource {
 
     /** Returns true (and writes a 403) when script execution is disabled. */
     private boolean forbidden(GhidraContext ctx) {
+        if (eu.starsong.ghidra.connection.ConnectionProfiles.enabled()) {
+            ctx.status(403);
+            ctx.json(Response.error(ctx.ctx(), ctx.port(), "CONNECTION_WORKER_RESTRICTED",
+                "Script endpoints are unavailable on credential-owning workers.").build());
+            return true;
+        }
         if (scriptsEnabled()) {
             return false;
         }

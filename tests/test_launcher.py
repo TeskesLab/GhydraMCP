@@ -40,7 +40,7 @@ def _installation(directory, version="12.2", java_min=21):
               encoding="utf-8") as handle:
         handle.write(f"application.version={version}\n")
         handle.write(f"application.java.min={java_min}\n")
-        handle.write("application.release.marking=PUBLIC\n")
+        handle.write("application.release.name=PUBLIC\n")
     return directory
 
 
@@ -51,7 +51,7 @@ class PropertiesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home:
             installation = _installation(home)
             self.assertEqual("12.2", launcher.ghidra_version(installation))
-            self.assertEqual("PUBLIC", launcher.release_marking(installation))
+            self.assertEqual("PUBLIC", launcher.release_name(installation))
 
     def test_the_required_jdk_is_the_minimum(self):
         with tempfile.TemporaryDirectory() as home:
@@ -85,6 +85,28 @@ class PropertiesTests(unittest.TestCase):
 
     def test_a_missing_file_is_no_properties(self):
         self.assertEqual({}, launcher.read_properties("/no/such/file.properties"))
+
+
+class ExtensionLocationTests(unittest.TestCase):
+    def test_fresh_worker_extension_path_uses_the_native_dotted_version(self):
+        with tempfile.TemporaryDirectory() as root:
+            installation = _installation(os.path.join(root, "installation"), version="12.1.2")
+            home = os.path.join(root, "fresh-home")
+            with mock.patch.dict(os.environ, {"HOME": home, "XDG_CONFIG_HOME": os.path.join(home, "config")},
+                                 clear=True):
+                self.assertEqual(
+                    os.path.join(home, "config", "ghidra", "ghidra_12.1.2_PUBLIC", "Extensions", "Ghydra"),
+                    launcher.extension_dir(installation))
+
+    def test_known_installation_does_not_reuse_another_versions_settings(self):
+        with tempfile.TemporaryDirectory() as root:
+            installation = _installation(os.path.join(root, "installation"), version="12.1.2")
+            config = os.path.join(root, "config")
+            os.makedirs(os.path.join(config, "ghidra", "ghidra_11.4.3_PUBLIC"))
+            with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": config}, clear=True):
+                self.assertEqual(
+                    os.path.join(config, "ghidra", "ghidra_12.1.2_PUBLIC", "Extensions", "Ghydra"),
+                    launcher.extension_dir(installation))
 
 
 class JavaVersionTests(unittest.TestCase):
@@ -208,6 +230,66 @@ class PathTests(unittest.TestCase):
 
     def test_an_empty_options_string_is_no_options(self):
         self.assertEqual([], launcher._split_options(""))
+
+
+class HeadlessCommandTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = self.tmp.name
+        utility = os.path.join(self.root, "Ghidra", "Framework", "Utility", "lib")
+        os.makedirs(utility)
+        with open(os.path.join(utility, "Utility.jar"), "wb") as handle:
+            handle.write(b"synthetic")
+        patcher = mock.patch.object(launcher, "vm_args", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.dict(os.environ, {"HOME": self.root}, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def command(self, binary="", **kwargs):
+        return launcher.headless_command(
+            self.root, self.root, os.path.join(self.root, "projects"), "analysis",
+            binary, 8192, script="GhidraHeadlessServer", script_args=["port=8192"], **kwargs)
+
+    def test_empty_script_run_has_local_project_and_no_binary_operation(self):
+        command = self.command(empty=True, connections_dir="/operator/worker-store",
+                               repository_profile="opaque-profile")
+        analyzer = command.index("ghidra.app.util.headless.AnalyzeHeadless")
+        self.assertEqual([os.path.join(self.root, "projects"), "analysis",
+                          "-postScript", "GhidraHeadlessServer", "port=8192"], command[analyzer + 1:])
+        self.assertIn("-Dghydra.connections.dir=/operator/worker-store", command)
+        for obsolete in ("-import", "-process", "-connect", "-p", "-keystore", "-commit", "-readOnly"):
+            self.assertNotIn(obsolete, command)
+        self.assertFalse(any("initial-profile" in argument for argument in command))
+
+    def test_ordinary_binary_import_process_and_overwrite_remain_distinct(self):
+        binary = os.path.join(self.root, "a binary.exe")
+        imported = self.command(binary)
+        self.assertEqual(binary, imported[imported.index("-import") + 1])
+        self.assertNotIn("-process", imported)
+        overwritten = self.command(binary, overwrite=True)
+        self.assertIn("-overwrite", overwritten)
+        processed = self.command(binary, process=True)
+        self.assertEqual("a binary.exe", processed[processed.index("-process") + 1])
+        self.assertNotIn("-import", processed)
+        self.assertNotIn("-overwrite", processed)
+
+    def test_empty_run_refuses_binary_operations_or_missing_script(self):
+        for options in ({"binary": "local.bin"}, {"process": True}, {"overwrite": True}):
+            with self.subTest(options=options), self.assertRaises(LauncherError):
+                self.command(empty=True, **options)
+        with self.assertRaises(LauncherError):
+            launcher.headless_command(self.root, self.root, self.root, "empty", "", 8192, empty=True)
+
+    def test_repository_bootstrap_never_accepts_arbitrary_native_extras(self):
+        with self.assertRaises(LauncherError):
+            self.command(empty=True, repository_profile="approved", extra=["-preScript", "evil.java"])
+        with self.assertRaises(LauncherError):
+            launcher.headless_command(
+                self.root, self.root, self.root, "empty", "", 8192,
+                empty=True, repository_profile="approved", script="AnotherScript")
 
 
 if __name__ == "__main__":

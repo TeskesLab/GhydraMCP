@@ -15,6 +15,7 @@
 - [Adding New Tests](#adding-new-tests)
 - [Java Unit Tests](#java-unit-tests)
 - [Java Integration Tests (GhidraScript)](#java-integration-tests-ghidrascript)
+- [Remote connection regressions](#remote-connection-regressions)
 
 <!-- /toc -->
 
@@ -393,3 +394,35 @@ analyzeHeadless ... -postScript TestRawImage && echo PASS || echo FAIL
 
 Note this requires the plugin to be **installed** in the Ghidra you point at, because the
 scripts import classes from the extension jar.
+
+## Remote connection regressions
+
+`python run_tests.py --connections` runs synthetic private-store, credential
+rotation, permission, malformed-input, headless pipe/TLS-gate and CLI failure
+regressions. It needs no Ghidra or remote credentials.
+
+Native regression fixtures are kept in `src/test/native/java`, outside
+Maven's pure unit-test classpath. They need the complete installed Ghidra
+runtime to resolve native project interfaces, but no existing remote services:
+
+```sh
+mvn test
+python scripts/test_remote_connections.py --ghidra-home /path/to/ghidra
+```
+
+Use a compatible JDK on PATH, or pass `--java-home`. The runner uses a fresh
+home/state directory and only synthetic credentials. It checks real worker HTTP
+responses, grant enforcement, script denial, native-error redaction, native
+repository state transitions, remote-database no-create behavior, and real TLS
+handshakes for trusted, untrusted and wrong-host certificates. A private loopback
+Ghidra Server fixture uses a synthetic native user and a fresh client JVM to
+exercise the real repository connector: newly converted workspace listing,
+immutable versions, exclusive checkout, actual program mutation, local save,
+check-in, and persisted contents/checkout metadata after native project reopen.
+The fixture owns and removes its temporary home, credential store, certificate,
+repository, and bounded server/client processes; it creates no OS accounts.
+The suite reports executed/failed/skipped counts and bounds compiler/JVM execution.
+
+The GitHub Ghidra build matrix runs this native suite. Native BSim protocol
+fixtures are surrogates: these regressions do not replace operator validation
+against the actual PostgreSQL/Elasticsearch and Ghidra Server deployment.
