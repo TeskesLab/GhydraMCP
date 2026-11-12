@@ -194,6 +194,14 @@ class JSONFormatter(BaseFormatter):
         """Return native repository state and outcomes as JSON."""
         return self._format_json(data)
 
+    def format_bsim_overview(self, data: Dict[str, Any]) -> str:
+        """Return the complete bounded overview envelope."""
+        return self._format_json(data)
+
+    def format_bsim_batch_query(self, data: Dict[str, Any]) -> str:
+        """Return the complete explicit-source query envelope."""
+        return self._format_json(data)
+
     def format_bsim_comparison(self, data: Dict[str, Any]) -> str:
         """Return the complete identity-bound comparison envelope."""
         return self._format_json(data)

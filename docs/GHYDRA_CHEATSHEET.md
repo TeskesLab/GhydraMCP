@@ -36,7 +36,7 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 
 ## Every command
 
-`170` commands in `42` groups.
+`172` commands in `42` groups.
 
 | Command | What it does |
 | --- | --- |
@@ -56,9 +56,11 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 | `ghydra audit` | Show the mutations the plugin allowed, newest last. |
 | `ghydra bsim apply-match` | Apply the exact prepared signature/types in one native transaction. |
 | `ghydra bsim apply-names` | Name a function after the stored function it most resembles (R1). |
+| `ghydra bsim batch-query` | Search only the explicitly selected source entries; never bulk apply. |
 | `ghydra bsim compare-match` | Compare one selected match without applying names, signatures or types. |
 | `ghydra bsim diff` | What changed between two versions, paired by signature (R1). |
 | `ghydra bsim ingest` | Generate signatures for the open program and insert them (R1). |
+| `ghydra bsim overview` | Rank BSim matches within one address-ordered page, never globally. |
 | `ghydra bsim prepare-apply` | Preview one selected match's native signature/types without applying them. |
 | `ghydra bsim query` | Which stored functions look like this one (R1). |
 | `ghydra bsim status` | Is a BSim signature query possible, and against which database. |

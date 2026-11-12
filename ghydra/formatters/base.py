@@ -456,6 +456,16 @@ class BaseFormatter(ABC):
         pass
 
     @abstractmethod
+    def format_bsim_overview(self, data: Dict[str, Any]) -> str:
+        """Format page-local BSim candidates, explicit gaps and stamped pagination."""
+        pass
+
+    @abstractmethod
+    def format_bsim_batch_query(self, data: Dict[str, Any]) -> str:
+        """Format candidates and explicit errors for the exact selected source entries."""
+        pass
+
+    @abstractmethod
     def format_bsim_comparison(self, data: Dict[str, Any]) -> str:
         """Format a selected-match diff and its non-mutating change preview."""
         pass

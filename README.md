@@ -23,7 +23,7 @@ headless runs expose the same API without a window.
 Optional local integrations connect the
 [x64dbg MCP server](https://github.com/duty1g/x64dbg-mcp-server) and
 [Kuna](https://github.com/Noelo-Lab/kuna). The bridge exposes
-**143 tools in 38 namespaces**, grouped into workflow profiles; see the
+**145 tools in 38 namespaces**, grouped into workflow profiles; see the
 [generated catalogue](docs/GHYDRA_TOOLS.md), not a second list here.
 
 **Prefer the CLI** for terminal, scripting, and shell-capable assistants. The

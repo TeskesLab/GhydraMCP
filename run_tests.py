@@ -1322,7 +1322,7 @@ def run_connection_tests():
     print_header("Running Remote Connection Tests")
     for script in ("test_connections.py", "test_headless_remote.py",
                    "test_bsim_remote.py", "test_bsim_compare.py", "test_bsim_apply.py",
-                   "test_bsim_filters.py"):
+                   "test_bsim_filters.py", "test_bsim_batch.py"):
         try:
             result = subprocess.run(suite_script(script), capture_output=True, text=True,
                                     timeout=SUITE_TIMEOUT)

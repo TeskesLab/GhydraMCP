@@ -71,6 +71,8 @@ public final class CapabilityService {
         features.put("bsim", bsim);
         features.put("bsim_ingest", bsim && ingest);
         features.put("bsim_query", bsim && query);
+        features.put("bsim_overview", bsim && query);
+        features.put("bsim_batch_query", bsim && query);
         features.put("bsim_apply_names", bsim && query);
         features.put("connections", eu.starsong.ghidra.connection.ConnectionProfiles.enabled());
         features.put("native_repositories", eu.starsong.ghidra.connection.ConnectionProfiles.enabled());

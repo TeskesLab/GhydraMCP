@@ -7,6 +7,7 @@ evidence is unknown, never equality, and every preview is merely a proposal.
 from __future__ import annotations
 
 from copy import deepcopy
+from difflib import SequenceMatcher
 from difflib import unified_diff
 import re
 import json
@@ -257,6 +258,140 @@ def _bsim_unified_diff(before: str, after: str) -> str:
                    for line in lines)
 
 
+_BSIM_INSTRUCTION_LIMIT = 1000
+
+
+def _bsim_instructions(snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    """Detach bounded native listing evidence, never trusting a completeness flag."""
+    evidence = snapshot.get("instructions")
+    result = {"rows": [], "complete": False, "reasons": [], "error": None,
+              "limit": _BSIM_INSTRUCTION_LIMIT, "body_bytes": None, "decoded_bytes": None}
+    reasons = result["reasons"]
+    if not isinstance(evidence, dict):
+        reasons.append("missing_instructions" if evidence is None else "malformed_instructions")
+        return result
+    if (type(evidence.get("complete")) is not bool
+            or type(evidence.get("limit")) is not int or evidence["limit"] != _BSIM_INSTRUCTION_LIMIT):
+        reasons.append("malformed_instruction_metadata")
+    elif evidence["complete"] is not True:
+        reasons.append("truncated_or_incomplete_instructions")
+    error = evidence.get("error")
+    if "error" not in evidence or (error is not None and
+                                  (not isinstance(error, str) or len(error) > 4096)):
+        reasons.append("malformed_instruction_error")
+    elif error is not None:
+        result["error"] = error
+        reasons.append("native_instruction_error")
+    for field in ("body_bytes", "decoded_bytes"):
+        value = evidence.get(field)
+        if type(value) is not int or not 0 <= value <= 2 ** 63 - 1:
+            reasons.append("malformed_" + field)
+        else:
+            result[field] = value
+    rows = evidence.get("rows")
+    if not isinstance(rows, list):
+        reasons.append("malformed_instruction_rows")
+        return result
+    if len(rows) > _BSIM_INSTRUCTION_LIMIT:
+        reasons.append("instruction_row_limit")
+    # Only the bounded prefix is inspected, including malformed rows. Unknown
+    # fields are not copied: even adversarial DTOs cannot expand detached output.
+    for index, row in enumerate(rows[:_BSIM_INSTRUCTION_LIMIT]):
+        if not isinstance(row, dict):
+            reasons.append(f"malformed_instruction_row[{index}]")
+            continue
+        address, mnemonic = row.get("address"), row.get("mnemonic")
+        operands, operand_types = row.get("operands"), row.get("operand_types")
+        encoded, length = row.get("bytes"), row.get("length")
+        if not (
+            isinstance(address, str) and 0 < len(address) <= 512
+            and re.fullmatch(r"[^\r\n]+::(?:0[xX])?[0-9a-fA-F]+", address) is not None
+            and isinstance(mnemonic, str) and 0 < len(mnemonic) <= 256
+            and isinstance(operands, list) and len(operands) <= 64
+            and isinstance(operand_types, list) and len(operands) == len(operand_types)
+            and all(isinstance(text, str) and len(text) <= 4096 for text in operands)
+            and all(type(value) is int and -(2 ** 31) <= value < 2 ** 31 for value in operand_types)
+            and type(length) is int and 0 < length <= 4096
+            and isinstance(encoded, str) and len(encoded) == length * 2
+            and re.fullmatch(r"[0-9A-F]+", encoded) is not None
+        ):
+            reasons.append(f"malformed_instruction_row[{index}]")
+            continue
+        if len(address) + len(mnemonic) + len(encoded) + sum(map(len, operands)) > 16384:
+            reasons.append(f"malformed_instruction_row[{index}]")
+            continue
+        result["rows"].append({"address": address, "mnemonic": mnemonic,
+                               "operands": list(operands), "operand_types": list(operand_types),
+                               "bytes": encoded, "length": length})
+    decoded = sum(row["length"] for row in result["rows"])
+    if result["decoded_bytes"] is not None and result["decoded_bytes"] != decoded:
+        reasons.append("decoded_byte_count_mismatch")
+    if (result["body_bytes"] is not None and result["decoded_bytes"] is not None
+            and result["body_bytes"] != result["decoded_bytes"]):
+        reasons.append("undecoded_or_invalid_body_bytes")
+    if not result["rows"]:
+        reasons.append("no_decoded_instructions")
+    result["complete"] = not reasons
+    return result
+
+
+def _bsim_compare_instructions(source: Dict[str, Any], reference: Dict[str, Any],
+                               language_a: Any, language_b: Any) -> Dict[str, Any]:
+    """Bounded listing sequence alignment, not native correlation or semantics."""
+    rows = []
+    summary = {"equal": 0, "changed": 0, "inserted": 0, "deleted": 0, "unknown": 0,
+               "source_rows": len(source["rows"]), "reference_rows": len(reference["rows"])}
+    comparable = isinstance(language_a, str) and bool(language_a) and language_a == language_b
+    reason = (None if comparable else "language_mismatch"
+              if isinstance(language_a, str) and isinstance(language_b, str) and language_a != language_b
+              else "missing_language")
+
+    def append(first: Any, second: Any) -> None:
+        unobserved = None
+        if first is None:
+            status = "inserted" if source["complete"] else "unknown"
+            if status == "unknown":
+                unobserved = "source"
+        elif second is None:
+            status = "deleted" if reference["complete"] else "unknown"
+            if status == "unknown":
+                unobserved = "reference"
+        else:
+            status = ("equal" if all(first[field] == second[field] for field in
+                                    ("mnemonic", "operands", "operand_types", "bytes", "length"))
+                      else "changed")
+        row = {"status": status, "source": first, "reference": second}
+        if unobserved is not None:
+            row["unobserved"] = unobserved
+        rows.append(row)
+        summary[status] += 1
+
+    # Missing evidence cannot establish absence, even when a nonempty prefix
+    # aligned. Preserve unmatched rows as unknown if the other capture is partial.
+    if comparable:
+        key = lambda row: (row["mnemonic"], tuple(row["operand_types"]))
+        matcher = SequenceMatcher(None, [key(row) for row in source["rows"]],
+                                  [key(row) for row in reference["rows"]], autojunk=False)
+        for operation, a_start, a_end, b_start, b_end in matcher.get_opcodes():
+            first, second = source["rows"][a_start:a_end], reference["rows"][b_start:b_end]
+            paired = min(len(first), len(second)) if operation in ("equal", "replace") else 0
+            for index in range(paired):
+                append(first[index], second[index])
+            for row in first[paired:]:
+                append(row, None)
+            for row in second[paired:]:
+                append(None, row)
+    complete = comparable and source["complete"] and reference["complete"]
+    different = any(summary[status] for status in ("changed", "inserted", "deleted"))
+    result = dict(_bsim_status(complete, different), kind="native_instruction_sequence",
+                  rows=rows, summary=summary, reason=reason,
+                  source_complete=source["complete"], reference_complete=reference["complete"],
+                  reasons={"source": list(source["reasons"]), "reference": list(reference["reasons"])})
+    if reason == "language_mismatch":
+        result["status"] = "not_comparable"
+    return result
+
+
 def compare_match(selection: object, target: object,
                   reference: object) -> Dict[str, Any]:
     """Compare selected native evidence; never read, apply, import, or mutate it.
@@ -312,6 +447,9 @@ def compare_match(selection: object, target: object,
                 source_complete=code_a["complete"], reference_complete=code_b["complete"],
                 unified_diff=(_bsim_unified_diff(code_a["text"], code_b["text"])
                               if code_a["text"] is not None and code_b["text"] is not None else None))
+    instructions_a, instructions_b = _bsim_instructions(target), _bsim_instructions(inspected)
+    instructions = _bsim_compare_instructions(
+        instructions_a, instructions_b, target["program"].get("language"), inspected["program"].get("language"))
 
     function_a, function_b = target["function"], inspected["function"]
     types_a = target.get("types")
@@ -422,13 +560,17 @@ def compare_match(selection: object, target: object,
                            differences=type_differences, conflicts=conflicts,
                            cycles={"source": inventory_a["cycles"], "reference": inventory_b["cycles"]})
     evidence = {"source": {"code": {key: value for key, value in code_a.items() if key != "text"},
+                            "instructions": {key: value for key, value in instructions_a.items() if key != "rows"},
                             "types": inventory_a, "missing_signature": sorted(set(missing_signature["source"]))},
                 "reference": {"code": {key: value for key, value in code_b.items() if key != "text"},
+                               "instructions": {key: value for key, value in instructions_b.items() if key != "rows"},
                                "types": inventory_b, "missing_signature": sorted(set(missing_signature["reference"]))}}
-    complete = code_complete and signature_complete and types_complete
+    complete = code_complete and signature_complete and types_complete and instructions["complete"]
     if not complete:
         warnings.append("Comparison evidence is incomplete; absence of differences is not equality")
     warnings.append("Preview only: no changes were applied; textual C diff is not native CodeDiffPlugin analysis")
+    warnings.append("Native instruction listing sequence alignment is not CodeDiffPlugin correlation "
+                    "or proof of semantic equivalence; raw relocated operands/bytes remain differences")
     preview = [dict(change, kind="signature", complete=signature_complete) for change in signature_changes]
     preview.extend(dict(change, kind="type", change_kind=change["kind"], complete=types_complete)
                    for change in type_differences)
@@ -442,7 +584,8 @@ def compare_match(selection: object, target: object,
     reference_identity.update({key: deepcopy(reference.get(key)) for key in ("profile", "path", "version")})
     return {"match_id": match_id, "selected_match": deepcopy(selected), "identity_verified": True,
             "complete": complete, "source": identity(target), "target_reference": reference_identity,
-            "comparison": {"code": code, "signature": signature, "types": type_comparison, "evidence": evidence},
+            "comparison": {"code": code, "instructions": instructions, "signature": signature,
+                           "types": type_comparison, "evidence": evidence},
             "preview": preview, "warnings": warnings, "applied": False}
 
 
@@ -457,6 +600,7 @@ def render_comparison(result: Dict[str, Any]) -> str:
         "No changes applied. Proposed changes only; no claim of safe applicability.",
     ]
     for label, section in (("Code (textual unified C)", "code"),
+                           ("Instructions (native listing sequence)", "instructions"),
                            ("Signature", "signature"), ("Referenced types", "types")):
         lines.append(f"{label}: {comparison[section]['status']}")
     reference = result.get("target_reference", {})
@@ -478,6 +622,32 @@ def render_comparison(result: Dict[str, Any]) -> str:
                      for conflict in conflicts)
     lines.append("Warnings:")
     lines.extend("  - " + warning for warning in result.get("warnings", []))
+    instructions = comparison["instructions"]
+    lines.append("Native instruction listing sequence alignment (current target -> reference):")
+    lines.append("  Complete: " + ("yes" if instructions["complete"] else "NO"))
+    lines.append("  Summary: " + json.dumps(instructions["summary"], sort_keys=True))
+    if instructions.get("reason"):
+        lines.append("  Reason: " + instructions["reason"])
+    for side in ("source", "reference"):
+        evidence = comparison["evidence"][side]["instructions"]
+        if evidence["reasons"]:
+            lines.append(f"  {side} reasons: " + ", ".join(evidence["reasons"]))
+        if evidence["error"] is not None:
+            lines.append(f"  {side} native error: " + json.dumps(evidence["error"], ensure_ascii=False))
+
+    def listing(row: Any) -> str:
+        if row is None:
+            return "(none)"
+        return (row["address"] + " [" + row["bytes"] + "] " + row["mnemonic"] + " "
+                + json.dumps(row["operands"], ensure_ascii=False) + " operand_types="
+                + json.dumps(row["operand_types"]) + " length=" + str(row["length"]))
+
+    for row in instructions["rows"]:
+        source_text = "(unobserved)" if row.get("unobserved") == "source" else listing(row["source"])
+        reference_text = "(unobserved)" if row.get("unobserved") == "reference" else listing(row["reference"])
+        lines.append(f"  [{row['status']}] " + source_text + " -> " + reference_text)
+    if not instructions["rows"]:
+        lines.append("  No aligned rows: instruction evidence unavailable or not comparable")
     lines.append("Textual unified C diff (not native CodeDiffPlugin analysis):")
     diff = comparison["code"].get("unified_diff")
     if diff:

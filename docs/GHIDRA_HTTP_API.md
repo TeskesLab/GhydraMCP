@@ -1151,6 +1151,39 @@ userinfo/query/fragment; unusable identities cannot be resolved automatically.
 Selections bind the source program/function/modification and originating profile.
 The newest 256 rows survive only in that worker process.
 
+#### `GET /bsim/overview` and `GET /bsim/batch-query`
+
+Both require the profile's `query` grant and never apply annotations. They share
+one native database/generator/query context for their source functions, with the
+same thresholds and exact metadata filters as `/bsim/query`.
+
+Overview takes `offset=0`, `max_functions=50` (1..100) and `max_matches=1` (1..10).
+Batch requires `addresses`, JSON text containing 1..100 unique exact entry-point
+address strings, and defaults to `max_matches=3`. Batch text is capped at 16384
+characters; source-count × max-matches must be at most 200 in either mode.
+The server allows up to 512 KiB for the combined HTTP request line and headers
+to carry URL-encoded batch/filter text; JSON and source limits remain unchanged.
+Any reverse proxy must also allow the encoded request size.
+Both accept optional `expected_program` (the returned opaque `source_program_id`)
+and `expected_modification`. They validate the exact in-memory Program instance
+and source stamp, not its name or path; mismatches return `BSIM_MATCH_STALE`.
+Overview Next carries both guards. Offset queries without guards are fresh,
+unbound searches; a nonzero offset with `expected_modification` but no
+`expected_program` is refused as `BSIM_BATCH_INVALID`, as are invalid batch/bounds.
+
+Results include `mode`, `program`, `source_program_id`, `source_modification`, `filters`,
+`available_categories`, thresholds, `scanned`, `searched`, `complete` and
+per-source `results`: qualified `source_address`, function FQN, source stamp, success,
+status (`matched`, `no_match`, `skipped`, `error`), candidate `matches`, returned
+count and completeness, with an explicit reason/code where applicable. Candidate
+rows have the existing reusable match IDs, bound independently to each source.
+Overview also returns `offset`, `max_functions`, `next_offset` and `has_more`;
+its next link carries both guards and query scope. Ranking is page-local by best
+similarity/significance, not an unseen whole-program ranking. Missing signatures,
+errors, skips, pagination and truncated candidates cannot prove global absence.
+An omitted native source group is an incomplete per-source `error` with code
+`BSIM_QUERY_UNVERIFIED`, not evidence of `no_match`.
+
 #### Selected-match comparison
 
 - `GET /bsim/matches/{match_id}?profile=ID&max_code_lines=1000` returns
@@ -1171,10 +1204,19 @@ parameters, return type, calling convention, variadic flag, comment, a recursive
 type graph, code completeness and a modification stamp. Type graphs stop at
 256 nodes/depth16/4096 shape entries; code limits are 1..10000 lines per function.
 Missing/truncated evidence is explicitly incomplete. Decompilation stays off EDT.
+Snapshots also include `instructions`: native decoded `rows` (qualified address,
+mnemonic, operand strings/types, raw hex bytes and length), `complete`, `error`,
+`limit=1000`, `body_bytes` and `decoded_bytes`. The listing is detached under the
+same program modification stamp; undefined bytes, partial decoding or the cap
+make it incomplete. Capture remains available when C decompilation fails.
+
 `bsim_compare_match` / `ghydra bsim compare-match` compose these read-only GETs
-and the shared pure comparator into textual C/signature/type differences and
-unapplied annotation previews. This does not perform native CodeDiffPlugin
-instruction alignment or signature/type transfer.
+into `comparison.instructions` address-paired sequence alignment plus textual
+C/signature/type differences and unapplied previews. Instruction rows are
+equal/changed/inserted/deleted; raw operands/bytes are never normalized away.
+Cross-language listings are `not_comparable`; missing/truncated listings cannot
+establish equality. This is not native CodeDiffPlugin correlation or a semantic
+equivalence proof. Application remains a separate prepare/apply flow.
 
 #### Explicit selected-match signature/type application
 

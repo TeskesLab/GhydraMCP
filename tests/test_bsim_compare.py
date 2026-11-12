@@ -8,6 +8,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ghydra.core.bsim_compare import BSimComparisonError, compare_match, render_comparison
 
 
+def instruction(address, mnemonic, operands=None, operand_types=None, encoded="90"):
+    return {"address": address, "mnemonic": mnemonic, "operands": list(operands or []),
+            "operand_types": list(operand_types or []), "bytes": encoded, "length": len(encoded) // 2}
+
+
+def native_instructions(rows, **overrides):
+    decoded = sum(row["length"] for row in rows)
+    return dict({"rows": rows, "complete": True, "error": None, "limit": 1000,
+                 "body_bytes": decoded, "decoded_bytes": decoded}, **overrides)
+
+
 def fixture():
     target = {
         "program": {"name": "target", "md5": "a" * 32, "language": "x86:LE:64:default",
@@ -18,11 +29,16 @@ def fixture():
         "types": {"int": {"kind": "integer", "name": "int", "path": "/int", "length": 4}},
         "types_complete": True, "code": {"text": "int f(int count) {\n  return count;\n}\n",
                                         "complete": True, "error": None},
+        "instructions": native_instructions([
+            instruction("ram::0x1000", "MOV", ["EAX", "EDI"], [512, 512], "89F8"),
+            instruction("ram::0x1002", "RET", encoded="C3")]),
         "modification": 10,
     }
     reference_snapshot = deepcopy(target)
     reference_snapshot["program"].update(name="reference", md5="b" * 32, path="/reference", version=7)
     reference_snapshot["function"]["address"] = "ram::0x2000"
+    reference_snapshot["instructions"]["rows"][0]["address"] = "ram::0x2000"
+    reference_snapshot["instructions"]["rows"][1]["address"] = "ram::0x2002"
     reference_snapshot["modification"] = 20
     selection = {"match_id": "selected-1", "profile": "corpus", "target": {
         "md5": "a" * 32, "address": "ram::0x1000", "modification": 10},
@@ -60,7 +76,7 @@ class BSimComparisonTests(unittest.TestCase):
         self.assertEqual("target", result["source"]["program"]["name"])
         self.assertEqual("reference", result["target_reference"]["program"]["name"])
         self.assertEqual(7, result["target_reference"]["version"])
-        for section in ("code", "signature", "types"):
+        for section in ("code", "instructions", "signature", "types"):
             self.assertEqual("equal", result["comparison"][section]["status"])
             self.assertIs(True, result["comparison"][section]["equal"])
 
@@ -350,6 +366,293 @@ class BSimComparisonTests(unittest.TestCase):
         self.assertEqual(first, compare_match(*deepcopy(args)))
 
 
+class BSimInstructionComparisonTests(unittest.TestCase):
+    def test_rebased_addresses_are_paired_without_normalizing_evidence_or_claiming_semantics(self):
+        result = compare_match(*fixture())
+        section = result["comparison"]["instructions"]
+        self.assertEqual("native_instruction_sequence", section["kind"])
+        self.assertEqual("equal", section["status"])
+        self.assertTrue(section["complete"])
+        self.assertEqual(2, section["summary"]["equal"])
+        self.assertEqual("ram::0x1000", section["rows"][0]["source"]["address"])
+        self.assertEqual("ram::0x2000", section["rows"][0]["reference"]["address"])
+        self.assertTrue(any("semantic equivalence" in warning for warning in result["warnings"]))
+        self.assertEqual([], result["preview"])
+
+    def test_insertions_and_deletions_preserve_direction_and_surrounding_pairs(self):
+        for added_to in ("source", "reference"):
+            with self.subTest(added_to=added_to):
+                selection, target, reference = fixture()
+                snapshot = target if added_to == "source" else reference["snapshot"]
+                rows = snapshot["instructions"]["rows"]
+                rows.insert(1, instruction("ram::0x1800", "NOP"))
+                snapshot["instructions"] = native_instructions(rows)
+                section = compare_match(selection, target, reference)["comparison"]["instructions"]
+                change = "deleted" if added_to == "source" else "inserted"
+                self.assertEqual(["equal", change, "equal"], [row["status"] for row in section["rows"]])
+                self.assertEqual("different", section["status"])
+                self.assertTrue(section["observed_differences"])
+                row = section["rows"][1]
+                self.assertEqual("NOP", row[added_to]["mnemonic"])
+                self.assertIsNone(row["reference" if added_to == "source" else "source"])
+                self.assertEqual(1, section["summary"][change])
+                self.assertEqual(2, section["summary"]["equal"])
+
+    def test_replace_blocks_pair_in_order_and_keep_leftovers(self):
+        selection, target, reference = fixture()
+        reference["snapshot"]["instructions"] = native_instructions([
+            instruction("ram::0x2000", "ADD", ["EAX", "EDI"], [512, 512], "01F8"),
+            instruction("ram::0x2002", "INC", ["EAX"], [512], "FFC0"),
+            instruction("ram::0x2004", "RET", encoded="C3")])
+        section = compare_match(selection, target, reference)["comparison"]["instructions"]
+        self.assertEqual(["changed", "inserted", "equal"], [row["status"] for row in section["rows"]])
+        self.assertEqual("MOV", section["rows"][0]["source"]["mnemonic"])
+        self.assertEqual("ADD", section["rows"][0]["reference"]["mnemonic"])
+        self.assertEqual(1, section["summary"]["changed"])
+
+    def test_constants_registers_branch_targets_bytes_types_and_lengths_remain_changes(self):
+        pairs = [
+            (instruction("ram::0x1000", "MOV", ["EAX", "0x1"], [512, 16384], "B801000000"),
+             instruction("ram::0x2000", "MOV", ["EAX", "0x2"], [512, 16384], "B802000000")),
+            (instruction("ram::0x1000", "MOV", ["EAX", "EDI"], [512, 512], "89F8"),
+             instruction("ram::0x2000", "MOV", ["ECX", "EDI"], [512, 512], "89F9")),
+            (instruction("ram::0x1000", "JMP", ["ram::0x1010"], [16384], "EB0E"),
+             instruction("ram::0x2000", "JMP", ["ram::0x2010"], [16384], "EB0E")),
+            (instruction("ram::0x1000", "NOP", encoded="90"),
+             instruction("ram::0x2000", "NOP", encoded="91")),
+            (instruction("ram::0x1000", "MOV", ["EAX"], [512], "89F8"),
+             instruction("ram::0x2000", "MOV", ["EAX"], [16384], "89F8")),
+            (instruction("ram::0x1000", "NOP", encoded="90"),
+             instruction("ram::0x2000", "NOP", encoded="6690")),
+            (instruction("ram::0x1000", "mov", ["EAX"], [512], "89F8"),
+             instruction("ram::0x2000", "MOV", ["EAX"], [512], "89F8")),
+        ]
+        for before, after in pairs:
+            with self.subTest(before=before, after=after):
+                selection, target, reference = fixture()
+                target["instructions"] = native_instructions([before])
+                reference["snapshot"]["instructions"] = native_instructions([after])
+                section = compare_match(selection, target, reference)["comparison"]["instructions"]
+                self.assertEqual("different", section["status"])
+                self.assertEqual(["changed"], [row["status"] for row in section["rows"]])
+                self.assertEqual(before, section["rows"][0]["source"])
+                self.assertEqual(after, section["rows"][0]["reference"])
+
+    def test_repeated_mnemonics_are_not_discarded_as_popular_alignment_tokens(self):
+        selection, target, reference = fixture()
+        source = [instruction(f"ram::0x{0x1000 + index:x}", "NOP") for index in range(250)]
+        other = [instruction(f"ram::0x{0x2000 + index:x}", "NOP") for index in range(251)]
+        other[240] = instruction("ram::0x20f0", "INT3", encoded="CC")
+        target["instructions"] = native_instructions(source)
+        reference["snapshot"]["instructions"] = native_instructions(other)
+        section = compare_match(selection, target, reference)["comparison"]["instructions"]
+        self.assertEqual(250, section["summary"]["equal"])
+        self.assertEqual(1, section["summary"]["inserted"])
+        self.assertEqual(0, section["summary"]["changed"])
+        self.assertEqual(0, section["summary"]["deleted"])
+        self.assertEqual("INT3", section["rows"][240]["reference"]["mnemonic"])
+
+    def test_language_mismatch_refuses_alignment_but_preserves_other_comparisons(self):
+        selection, target, reference = fixture()
+        reference["snapshot"]["program"]["language"] = "ARM:LE:32:v7"
+        reference["snapshot"]["code"]["text"] = "different C"
+        result = compare_match(selection, target, reference)
+        section = result["comparison"]["instructions"]
+        self.assertTrue(result["identity_verified"])
+        self.assertFalse(result["complete"])
+        self.assertEqual("not_comparable", section["status"])
+        self.assertEqual("language_mismatch", section["reason"])
+        self.assertFalse(section["complete"])
+        self.assertIsNone(section["equal"])
+        self.assertFalse(section["observed_differences"])
+        self.assertEqual([], section["rows"])
+        self.assertEqual("different", result["comparison"]["code"]["status"])
+
+    def test_missing_language_is_incomplete_not_a_meaningful_alignment(self):
+        for side in ("source", "reference"):
+            with self.subTest(side=side):
+                selection, target, reference = fixture()
+                snapshot = target if side == "source" else reference["snapshot"]
+                snapshot["program"].pop("language")
+                section = compare_match(selection, target, reference)["comparison"]["instructions"]
+                self.assertEqual("incomplete", section["status"])
+                self.assertEqual("missing_language", section["reason"])
+                self.assertEqual([], section["rows"])
+
+    def test_missing_malformed_and_empty_evidence_never_claims_equality(self):
+        mutations = [
+            lambda s: s.pop("instructions"),
+            lambda s: s.update(instructions=[]),
+            lambda s: s["instructions"].update(rows=None),
+            lambda s: s["instructions"].update(complete=False),
+            lambda s: s["instructions"].pop("complete"),
+            lambda s: s["instructions"].update(limit=1001),
+            lambda s: s["instructions"].update(body_bytes=True),
+            lambda s: s["instructions"].update(decoded_bytes=1),
+            lambda s: s["instructions"].update(body_bytes=20),
+            lambda s: s["instructions"].update(rows=[], body_bytes=0, decoded_bytes=0),
+            lambda s: s["instructions"].pop("error"),
+            lambda s: s["instructions"].update(error={"unsupported": True}),
+            lambda s: s["instructions"].update(error="x" * 4097),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                selection, target, reference = fixture()
+                mutate(reference["snapshot"])
+                result = compare_match(selection, target, reference)
+                section = result["comparison"]["instructions"]
+                self.assertFalse(result["complete"])
+                self.assertEqual("incomplete", section["status"])
+                self.assertIsNone(section["equal"])
+                self.assertTrue(section["reasons"]["reference"])
+                self.assertFalse(section["reference_complete"])
+
+    def test_malformed_or_oversized_rows_are_bounded_and_explained(self):
+        mutations = [
+            lambda r: r.update(address="not-an-address"),
+            lambda r: r.update(address="1000"),
+            lambda r: r.update(mnemonic=""),
+            lambda r: r.update(mnemonic="M" * 257),
+            lambda r: r.update(operands=["x" * 4097], operand_types=[512]),
+            lambda r: r.update(operands=["x"] * 65, operand_types=[512] * 65),
+            lambda r: r.update(operand_types=[True, 512]),
+            lambda r: r.update(operand_types=[]),
+            lambda r: r.update(bytes="89f8"),
+            lambda r: r.update(bytes="89"),
+            lambda r: r.update(length=True),
+            lambda r: r.update(length=5000, bytes="90" * 5000),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                selection, target, reference = fixture()
+                mutate(reference["snapshot"]["instructions"]["rows"][0])
+                section = compare_match(selection, target, reference)["comparison"]["instructions"]
+                self.assertEqual("incomplete", section["status"])
+                self.assertIn("malformed_instruction_row[0]", section["reasons"]["reference"])
+                self.assertEqual(1, section["summary"]["reference_rows"])
+                self.assertFalse(any(row["reference"] and row["reference"]["mnemonic"] == "MOV"
+                                     for row in section["rows"]))
+
+    def test_native_truncation_and_errors_preserve_observed_raw_differences(self):
+        selection, target, reference = fixture()
+        listing = reference["snapshot"]["instructions"]
+        listing.update(complete=False, error="undefined bytes in function body", body_bytes=30)
+        listing["rows"][0]["operands"][0] = "ECX"
+        result = compare_match(selection, target, reference)
+        section = result["comparison"]["instructions"]
+        self.assertEqual("incomplete", section["status"])
+        self.assertTrue(section["observed_differences"])
+        self.assertEqual(1, section["summary"]["changed"])
+        self.assertIn("native_instruction_error", section["reasons"]["reference"])
+        evidence = result["comparison"]["evidence"]["reference"]["instructions"]
+        self.assertEqual("undefined bytes in function body", evidence["error"])
+        self.assertEqual(30, evidence["body_bytes"])
+        self.assertEqual(3, evidence["decoded_bytes"])
+        self.assertIsNone(section["equal"])
+
+    def test_oversized_sequences_are_never_fully_aligned_or_equal(self):
+        selection, target, reference = fixture()
+        for snapshot, base in ((target, 0x1000), (reference["snapshot"], 0x2000)):
+            snapshot["instructions"] = native_instructions([
+                instruction(f"ram::0x{base + index:x}", "NOP") for index in range(1001)])
+        section = compare_match(selection, target, reference)["comparison"]["instructions"]
+        self.assertEqual("incomplete", section["status"])
+        self.assertIsNone(section["equal"])
+        self.assertEqual(1000, len(section["rows"]))
+        for side in ("source", "reference"):
+            self.assertIn("instruction_row_limit", section["reasons"][side])
+            self.assertEqual(1000, section["summary"][side + "_rows"])
+
+    def test_native_operand_types_are_opaque_signed_flags(self):
+        selection, target, reference = fixture()
+        flags = [-(2 ** 31), -1]
+        for snapshot in (target, reference["snapshot"]):
+            snapshot["instructions"]["rows"][0]["operand_types"] = list(flags)
+        section = compare_match(selection, target, reference)["comparison"]["instructions"]
+        self.assertEqual("equal", section["status"])
+        self.assertTrue(section["complete"])
+        self.assertEqual(flags, section["rows"][0]["source"]["operand_types"])
+        reference["snapshot"]["instructions"]["rows"][0]["operand_types"][1] = -2
+        section = compare_match(selection, target, reference)["comparison"]["instructions"]
+        self.assertEqual("different", section["status"])
+        self.assertEqual("changed", section["rows"][0]["status"])
+
+    def test_equal_available_rows_never_override_native_gap_or_cap_incompleteness(self):
+        for error in ("undefined body bytes", "instruction limit reached"):
+            with self.subTest(error=error):
+                selection, target, reference = fixture()
+                reference["snapshot"]["instructions"].update(complete=False, error=error)
+                result = compare_match(selection, target, reference)
+                section = result["comparison"]["instructions"]
+                self.assertFalse(result["complete"])
+                self.assertEqual("incomplete", section["status"])
+                self.assertFalse(section["complete"])
+                self.assertIsNone(section["equal"])
+                self.assertFalse(section["observed_differences"])
+                self.assertEqual(2, section["summary"]["equal"])
+                self.assertEqual(error, result["comparison"]["evidence"]["reference"]["instructions"]["error"])
+
+    def test_one_sided_identical_prefix_keeps_unobserved_suffix_unknown(self):
+        for side in ("source", "reference"):
+            for error in (None, "instruction limit reached", "memory read failed"):
+                for retained in (0, 1):
+                    with self.subTest(side=side, error=error, retained=retained):
+                        selection, target, reference = fixture()
+                        snapshot = target if side == "source" else reference["snapshot"]
+                        rows = snapshot["instructions"]["rows"][:retained]
+                        snapshot["instructions"] = native_instructions(
+                            rows, complete=False, error=error, body_bytes=3)
+                        result = compare_match(selection, target, reference)
+                        section = result["comparison"]["instructions"]
+                        self.assertEqual("incomplete", section["status"])
+                        self.assertFalse(section["observed_differences"])
+                        self.assertIsNone(section["equal"])
+                        self.assertEqual(retained, section["summary"]["equal"])
+                        self.assertEqual(2 - retained, section["summary"]["unknown"])
+                        self.assertEqual(0, section["summary"]["inserted"])
+                        self.assertEqual(0, section["summary"]["deleted"])
+                        for index, row in enumerate(section["rows"][retained:], retained):
+                            self.assertEqual("unknown", row["status"])
+                            self.assertEqual(side, row["unobserved"])
+                            self.assertIsNone(row[side])
+                            self.assertEqual("MOV" if index == 0 else "RET",
+                                             row["reference" if side == "source" else "source"]["mnemonic"])
+                        text = render_comparison(result)
+                        self.assertIn("[unknown]", text)
+                        self.assertIn("(unobserved)", text)
+
+    def test_internal_unmatched_rows_are_unknown_against_incomplete_capture(self):
+        selection, target, reference = fixture()
+        target["instructions"]["rows"].insert(1, instruction("ram::0x1001", "NOP"))
+        target["instructions"] = native_instructions(target["instructions"]["rows"])
+        reference["snapshot"]["instructions"].update(complete=False, error="undecoded body bytes")
+        section = compare_match(selection, target, reference)["comparison"]["instructions"]
+        self.assertEqual(["equal", "unknown", "equal"], [row["status"] for row in section["rows"]])
+        self.assertFalse(section["observed_differences"])
+
+    def test_input_rows_are_not_mutated_or_shared_with_result_rows(self):
+        args = fixture()
+        args[2]["snapshot"]["instructions"]["rows"][0]["operands"][0] = "ECX"
+        before = deepcopy(args)
+        result = compare_match(*args)
+        self.assertEqual(before, args)
+        rows = result["comparison"]["instructions"]["rows"]
+        rows[0]["source"]["operands"].append("changed")
+        rows[0]["reference"]["operand_types"].append(123)
+        rows[1]["reference"]["bytes"] = "90"
+        self.assertEqual(before, args)
+
+    def test_native_evidence_remains_available_without_decompiled_c(self):
+        selection, target, reference = fixture()
+        target.pop("code")
+        reference["snapshot"].pop("code")
+        result = compare_match(selection, target, reference)
+        self.assertFalse(result["complete"])
+        self.assertEqual("incomplete", result["comparison"]["code"]["status"])
+        self.assertEqual("equal", result["comparison"]["instructions"]["status"])
+        self.assertTrue(result["comparison"]["instructions"]["complete"])
+
+
 class BSimComparisonRenderingTests(unittest.TestCase):
     def test_shared_renderer_shows_actual_diff_once_and_no_code_proposal(self):
         selection, target, reference = fixture()
@@ -381,6 +684,36 @@ class BSimComparisonRenderingTests(unittest.TestCase):
         self.assertIn('"length": 8', text)
         self.assertIn("Unresolved type conflicts:", text)
         self.assertIn("Warnings:", text)
+
+    def test_native_rendering_shows_paired_raw_evidence_summary_and_honest_limits(self):
+        selection, target, reference = fixture()
+        reference["snapshot"]["instructions"]["rows"][0]["operands"][0] = "ECX"
+        text = render_comparison(compare_match(selection, target, reference))
+        self.assertIn("Instructions (native listing sequence): different", text)
+        self.assertIn("ram::0x1000 [89F8] MOV", text)
+        self.assertIn('["EAX", "EDI"]', text)
+        self.assertIn("ram::0x2000 [89F8] MOV", text)
+        self.assertIn('["ECX", "EDI"]', text)
+        self.assertIn("[changed]", text)
+        self.assertIn("[equal]", text)
+        self.assertIn('"changed": 1', text)
+        self.assertIn("Complete: yes", text)
+        self.assertIn("not CodeDiffPlugin correlation", text)
+        self.assertIn("proof of semantic equivalence", text)
+
+    def test_native_rendering_explains_incompleteness_and_language_refusal(self):
+        selection, target, reference = fixture()
+        reference["snapshot"]["instructions"].update(complete=False, error="missing decoding")
+        text = render_comparison(compare_match(selection, target, reference))
+        self.assertIn("Instructions (native listing sequence): incomplete", text)
+        self.assertIn("Complete: NO", text)
+        self.assertIn("reference reasons:", text)
+        self.assertIn("missing decoding", text)
+        reference["snapshot"]["program"]["language"] = "other-language"
+        text = render_comparison(compare_match(selection, target, reference))
+        self.assertIn("not_comparable", text)
+        self.assertIn("Reason: language_mismatch", text)
+        self.assertIn("No aligned rows", text)
 
     def test_incomplete_evidence_is_prominent_not_an_empty_success(self):
         selection, target, reference = fixture()

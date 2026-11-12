@@ -23,6 +23,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Server-side BSim executable, architecture, compiler and category filters in
   MCP and CLI, applied before the match limit with explicit search-scope evidence
   and fail-closed validation.
+- Address-paired native instruction comparison for selected BSim matches, with
+  raw bytes/operands, insertion/deletion/change evidence, bounded capture and
+  explicit incomplete or cross-language results through MCP and CLI.
+- Bounded BSim program overview and explicit multi-function batch queries,
+  with reusable selected-match IDs, page-local ranking, source-stamp checks,
+  metadata filters and explicit partial/skip/error reporting; no automatic apply.
 
 ### Changed
 
@@ -37,6 +43,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Bounded BSim batch/filter queries now fit the HTTP parser after URL encoding,
+  including maximum-length JSON and Unicode filters; query limits are unchanged.
+- Partial native instruction captures retain unmatched rows as unknown/unobserved
+  instead of claiming insertions/deletions or observed differences.
+- BSim overview continuation validates an opaque Program-instance ID as well as
+  its modification stamp; MCP/CLI Next preserves both guards.
+- Missing native BSim result groups report an unverified search, not a successful
+  no-match; candidate and overview ranking use full scores before display rounding.
+- Deeply nested batch-address JSON is refused as `BSIM_BATCH_INVALID` before HTTP.
 - BSim MCP ingestion and naming now send an explicit POST payload instead of
   failing before the request reaches the worker.
 - Explicitly empty MCP BSim filters are refused before HTTP instead of silently

@@ -25,33 +25,63 @@ public final class BSimMatchService {
     public void register(Program program, Map<String, Object> query) {
         if (!Boolean.TRUE.equals(query.get("success"))) return;
         if (!(query.get("matches") instanceof List<?> rows) || rows.isEmpty()) return;
-        if (!(query.get("source_modification") instanceof Number modification)
-                || !(query.get("source_address") instanceof String address)) throw stale();
+        registerRows(program, query, List.of(query), false);
+    }
+
+    /** Register one bounded response atomically, preserving every row's qualified source. */
+    public void registerMulti(Program program, Map<String, Object> query) {
+        if (!(query.get("results") instanceof List<?> raw)) throw stale();
+        List<Map<String, Object>> sources = new java.util.ArrayList<>();
+        for (Object value : raw) {
+            if (!(value instanceof Map<?, ?> source)) throw stale();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> typed = (Map<String, Object>) source;
+            sources.add(typed);
+        }
+        registerRows(program, query, sources, true);
+    }
+
+    private void registerRows(Program program, Map<String, Object> query,
+            List<Map<String, Object>> sources, boolean bounded) {
+        // Profile context is request-thread-local, not available on the EDT.
+        String profile = profile();
+        if (!(query.get("source_modification") instanceof Number modification)) {
+            if (!bounded && !query.containsKey("matches")) return;
+            throw stale();
+        }
         GhidraSwing.runRead(() -> {
             if (program == null || program.isClosed()
                     || program.getModificationNumber() != modification.longValue()) throw stale();
-            return null;
-        });
-        String profile = profile();
-        synchronized (selections) {
-            for (Object row : rows) {
-                if (!(row instanceof Map<?, ?> raw)) continue;
-                Map<String, Object> match = new LinkedHashMap<>();
-                raw.forEach((key, value) -> match.put(String.valueOf(key), value));
-                String id = UUID.randomUUID().toString();
-                match.put("match_id", id);
-                selections.put(id, new Selection(new WeakReference<>(program),
-                    modification.longValue(), address, profile,
-                    Collections.unmodifiableMap(match)));
-                // The response row is the exact selected candidate held by this registry.
-                @SuppressWarnings("unchecked")
-                Map<String, Object> responseRow = (Map<String, Object>) raw;
-                responseRow.put("match_id", id);
-                while (selections.size() > CAPACITY) {
-                    selections.remove(selections.keySet().iterator().next());
+            Map<String, Selection> pending = new LinkedHashMap<>();
+            Map<Map<String, Object>, String> ids = new java.util.IdentityHashMap<>();
+            for (Map<String, Object> source : sources) {
+                if (!(source.get("matches") instanceof List<?> rows) || rows.isEmpty()) continue;
+                if (!Boolean.TRUE.equals(source.get("success"))
+                        || !(source.get("source_address") instanceof String address)
+                        || !(source.get("source_modification") instanceof Number stamp)
+                        || stamp.longValue() != modification.longValue()) throw stale();
+                for (Object row : rows) {
+                    if (!(row instanceof Map<?, ?> raw)) throw stale();
+                    Map<String, Object> match = new LinkedHashMap<>();
+                    raw.forEach((key, value) -> match.put(String.valueOf(key), value));
+                    String id = UUID.randomUUID().toString();
+                    match.put("match_id", id);
+                    pending.put(id, new Selection(new WeakReference<>(program),
+                        modification.longValue(), address, profile, Collections.unmodifiableMap(match)));
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> responseRow = (Map<String, Object>) raw;
+                    ids.put(responseRow, id);
                 }
             }
-        }
+            if (bounded && pending.size() > BSimMultiQueryService.MAX_CANDIDATES) throw new ConnectionException(
+                "BSIM_BATCH_INVALID", 400, "One response cannot register more than 200 candidates");
+            synchronized (selections) {
+                selections.putAll(pending);
+                ids.forEach((row, id) -> row.put("match_id", id));
+                while (selections.size() > CAPACITY) selections.remove(selections.keySet().iterator().next());
+            }
+            return null;
+        });
     }
 
     public Map<String, Object> inspect(Program program, String id, int maxCodeLines) {

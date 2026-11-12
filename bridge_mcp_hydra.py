@@ -28,7 +28,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from difflib import unified_diff
+from difflib import SequenceMatcher, unified_diff
 from threading import Lock
 from typing import Annotated, Dict, List, Optional, Union, Any
 from urllib.parse import quote, unquote, unquote_plus, urlencode, urlparse
@@ -1821,7 +1821,7 @@ def _core_mission_dossier(goal, mission_id, program, hints, budget, failed, skip
 # <<< end generated from ghydra/core/mission.py
 
 
-# >>> generated from ghydra/core/bsim_compare.py (941dd59023e4405e) — edit the core, then run scripts/gen_core.py
+# >>> generated from ghydra/core/bsim_compare.py (1fb581be77ed7508) — edit the core, then run scripts/gen_core.py
 class _CoreBSimComparisonError(ValueError):
     """A malformed comparison or a broken selected-match identity binding."""
 
@@ -2023,6 +2023,105 @@ def _bsim_unified_diff(before, after):
     lines = unified_diff(before.splitlines(keepends=True), after.splitlines(keepends=True), fromfile='target.c', tofile='reference.c')
     return ''.join((line if line.endswith('\n') else line + '\n\\ No newline at end of file\n' for line in lines))
 
+_BSIM_INSTRUCTION_LIMIT = 1000
+
+def _bsim_instructions(snapshot):
+    """Detach bounded native listing evidence, never trusting a completeness flag."""
+    evidence = snapshot.get('instructions')
+    result = {'rows': [], 'complete': False, 'reasons': [], 'error': None, 'limit': _BSIM_INSTRUCTION_LIMIT, 'body_bytes': None, 'decoded_bytes': None}
+    reasons = result['reasons']
+    if not isinstance(evidence, dict):
+        reasons.append('missing_instructions' if evidence is None else 'malformed_instructions')
+        return result
+    if type(evidence.get('complete')) is not bool or type(evidence.get('limit')) is not int or evidence['limit'] != _BSIM_INSTRUCTION_LIMIT:
+        reasons.append('malformed_instruction_metadata')
+    elif evidence['complete'] is not True:
+        reasons.append('truncated_or_incomplete_instructions')
+    error = evidence.get('error')
+    if 'error' not in evidence or (error is not None and (not isinstance(error, str) or len(error) > 4096)):
+        reasons.append('malformed_instruction_error')
+    elif error is not None:
+        result['error'] = error
+        reasons.append('native_instruction_error')
+    for field in ('body_bytes', 'decoded_bytes'):
+        value = evidence.get(field)
+        if type(value) is not int or not 0 <= value <= 2 ** 63 - 1:
+            reasons.append('malformed_' + field)
+        else:
+            result[field] = value
+    rows = evidence.get('rows')
+    if not isinstance(rows, list):
+        reasons.append('malformed_instruction_rows')
+        return result
+    if len(rows) > _BSIM_INSTRUCTION_LIMIT:
+        reasons.append('instruction_row_limit')
+    for index, row in enumerate(rows[:_BSIM_INSTRUCTION_LIMIT]):
+        if not isinstance(row, dict):
+            reasons.append(f'malformed_instruction_row[{index}]')
+            continue
+        address, mnemonic = (row.get('address'), row.get('mnemonic'))
+        operands, operand_types = (row.get('operands'), row.get('operand_types'))
+        encoded, length = (row.get('bytes'), row.get('length'))
+        if not (isinstance(address, str) and 0 < len(address) <= 512 and (re.fullmatch('[^\\r\\n]+::(?:0[xX])?[0-9a-fA-F]+', address) is not None) and isinstance(mnemonic, str) and (0 < len(mnemonic) <= 256) and isinstance(operands, list) and (len(operands) <= 64) and isinstance(operand_types, list) and (len(operands) == len(operand_types)) and all((isinstance(text, str) and len(text) <= 4096 for text in operands)) and all((type(value) is int and -2 ** 31 <= value < 2 ** 31 for value in operand_types)) and (type(length) is int) and (0 < length <= 4096) and isinstance(encoded, str) and (len(encoded) == length * 2) and (re.fullmatch('[0-9A-F]+', encoded) is not None)):
+            reasons.append(f'malformed_instruction_row[{index}]')
+            continue
+        if len(address) + len(mnemonic) + len(encoded) + sum(map(len, operands)) > 16384:
+            reasons.append(f'malformed_instruction_row[{index}]')
+            continue
+        result['rows'].append({'address': address, 'mnemonic': mnemonic, 'operands': list(operands), 'operand_types': list(operand_types), 'bytes': encoded, 'length': length})
+    decoded = sum((row['length'] for row in result['rows']))
+    if result['decoded_bytes'] is not None and result['decoded_bytes'] != decoded:
+        reasons.append('decoded_byte_count_mismatch')
+    if result['body_bytes'] is not None and result['decoded_bytes'] is not None and (result['body_bytes'] != result['decoded_bytes']):
+        reasons.append('undecoded_or_invalid_body_bytes')
+    if not result['rows']:
+        reasons.append('no_decoded_instructions')
+    result['complete'] = not reasons
+    return result
+
+def _bsim_compare_instructions(source, reference, language_a, language_b):
+    """Bounded listing sequence alignment, not native correlation or semantics."""
+    rows = []
+    summary = {'equal': 0, 'changed': 0, 'inserted': 0, 'deleted': 0, 'unknown': 0, 'source_rows': len(source['rows']), 'reference_rows': len(reference['rows'])}
+    comparable = isinstance(language_a, str) and bool(language_a) and (language_a == language_b)
+    reason = None if comparable else 'language_mismatch' if isinstance(language_a, str) and isinstance(language_b, str) and (language_a != language_b) else 'missing_language'
+
+    def append(first, second):
+        unobserved = None
+        if first is None:
+            status = 'inserted' if source['complete'] else 'unknown'
+            if status == 'unknown':
+                unobserved = 'source'
+        elif second is None:
+            status = 'deleted' if reference['complete'] else 'unknown'
+            if status == 'unknown':
+                unobserved = 'reference'
+        else:
+            status = 'equal' if all((first[field] == second[field] for field in ('mnemonic', 'operands', 'operand_types', 'bytes', 'length'))) else 'changed'
+        row = {'status': status, 'source': first, 'reference': second}
+        if unobserved is not None:
+            row['unobserved'] = unobserved
+        rows.append(row)
+        summary[status] += 1
+    if comparable:
+        key = lambda row: (row['mnemonic'], tuple(row['operand_types']))
+        matcher = SequenceMatcher(None, [key(row) for row in source['rows']], [key(row) for row in reference['rows']], autojunk=False)
+        for operation, a_start, a_end, b_start, b_end in matcher.get_opcodes():
+            first, second = (source['rows'][a_start:a_end], reference['rows'][b_start:b_end])
+            paired = min(len(first), len(second)) if operation in ('equal', 'replace') else 0
+            for index in range(paired):
+                append(first[index], second[index])
+            for row in first[paired:]:
+                append(row, None)
+            for row in second[paired:]:
+                append(None, row)
+    complete = comparable and source['complete'] and reference['complete']
+    different = any((summary[status] for status in ('changed', 'inserted', 'deleted')))
+    result = dict(_bsim_status(complete, different), kind='native_instruction_sequence', rows=rows, summary=summary, reason=reason, source_complete=source['complete'], reference_complete=reference['complete'], reasons={'source': list(source['reasons']), 'reference': list(reference['reasons'])})
+    if reason == 'language_mismatch':
+        result['status'] = 'not_comparable'
+    return result
+
 def _core_bsim_compare_match(selection, target, reference):
     """Compare selected native evidence; never read, apply, import, or mutate it.
 
@@ -2058,6 +2157,8 @@ def _core_bsim_compare_match(selection, target, reference):
     code_complete = code_a['complete'] and code_b['complete']
     code_different = code_a['text'] is not None and code_b['text'] is not None and (code_a['text'] != code_b['text'])
     code = dict(_bsim_status(code_complete, code_different), kind='textual_unified_c', source_complete=code_a['complete'], reference_complete=code_b['complete'], unified_diff=_bsim_unified_diff(code_a['text'], code_b['text']) if code_a['text'] is not None and code_b['text'] is not None else None)
+    instructions_a, instructions_b = (_bsim_instructions(target), _bsim_instructions(inspected))
+    instructions = _bsim_compare_instructions(instructions_a, instructions_b, target['program'].get('language'), inspected['program'].get('language'))
     function_a, function_b = (target['function'], inspected['function'])
     types_a = target.get('types')
     if not isinstance(types_a, dict):
@@ -2144,11 +2245,12 @@ def _core_bsim_compare_match(selection, target, reference):
     signature_complete = types_complete and (not any(missing_signature.values()))
     signature = dict(_bsim_status(signature_complete, bool(signature_changes)), changes=signature_changes)
     type_comparison = dict(_bsim_status(types_complete, bool(type_differences or conflicts)), differences=type_differences, conflicts=conflicts, cycles={'source': inventory_a['cycles'], 'reference': inventory_b['cycles']})
-    evidence = {'source': {'code': {key: value for key, value in code_a.items() if key != 'text'}, 'types': inventory_a, 'missing_signature': sorted(set(missing_signature['source']))}, 'reference': {'code': {key: value for key, value in code_b.items() if key != 'text'}, 'types': inventory_b, 'missing_signature': sorted(set(missing_signature['reference']))}}
-    complete = code_complete and signature_complete and types_complete
+    evidence = {'source': {'code': {key: value for key, value in code_a.items() if key != 'text'}, 'instructions': {key: value for key, value in instructions_a.items() if key != 'rows'}, 'types': inventory_a, 'missing_signature': sorted(set(missing_signature['source']))}, 'reference': {'code': {key: value for key, value in code_b.items() if key != 'text'}, 'instructions': {key: value for key, value in instructions_b.items() if key != 'rows'}, 'types': inventory_b, 'missing_signature': sorted(set(missing_signature['reference']))}}
+    complete = code_complete and signature_complete and types_complete and instructions['complete']
     if not complete:
         warnings.append('Comparison evidence is incomplete; absence of differences is not equality')
     warnings.append('Preview only: no changes were applied; textual C diff is not native CodeDiffPlugin analysis')
+    warnings.append('Native instruction listing sequence alignment is not CodeDiffPlugin correlation or proof of semantic equivalence; raw relocated operands/bytes remain differences')
     preview = [dict(change, kind='signature', complete=signature_complete) for change in signature_changes]
     preview.extend((dict(change, kind='type', change_kind=change['kind'], complete=types_complete) for change in type_differences))
 
@@ -2156,13 +2258,13 @@ def _core_bsim_compare_match(selection, target, reference):
         return {'program': deepcopy(snapshot['program']), 'function': {key: deepcopy(snapshot['function'].get(key)) for key in ('name', 'address')}, 'modification': snapshot.get('modification')}
     reference_identity = identity(inspected)
     reference_identity.update({key: deepcopy(reference.get(key)) for key in ('profile', 'path', 'version')})
-    return {'match_id': match_id, 'selected_match': deepcopy(selected), 'identity_verified': True, 'complete': complete, 'source': identity(target), 'target_reference': reference_identity, 'comparison': {'code': code, 'signature': signature, 'types': type_comparison, 'evidence': evidence}, 'preview': preview, 'warnings': warnings, 'applied': False}
+    return {'match_id': match_id, 'selected_match': deepcopy(selected), 'identity_verified': True, 'complete': complete, 'source': identity(target), 'target_reference': reference_identity, 'comparison': {'code': code, 'instructions': instructions, 'signature': signature, 'types': type_comparison, 'evidence': evidence}, 'preview': preview, 'warnings': warnings, 'applied': False}
 
 def _core_bsim_render_comparison(result):
     """Render the shared human surface without I/O or snapshot duplication."""
     comparison = result['comparison']
     lines = [f"BSim selected match: {result['match_id']}", 'Identity verified: ' + ('yes' if result.get('identity_verified') is True else 'NO'), 'Evidence: ' + ('COMPLETE' if result.get('complete') is True else 'INCOMPLETE - absence of differences is not equality'), 'No changes applied. Proposed changes only; no claim of safe applicability.']
-    for label, section in (('Code (textual unified C)', 'code'), ('Signature', 'signature'), ('Referenced types', 'types')):
+    for label, section in (('Code (textual unified C)', 'code'), ('Instructions (native listing sequence)', 'instructions'), ('Signature', 'signature'), ('Referenced types', 'types')):
         lines.append(f"{label}: {comparison[section]['status']}")
     reference = result.get('target_reference', {})
     lines.append('Reference: ' + json.dumps({field: reference.get(field) for field in ('profile', 'path', 'version')}, sort_keys=True, ensure_ascii=False))
@@ -2180,6 +2282,29 @@ def _core_bsim_render_comparison(result):
         lines.extend(('  ' + json.dumps(conflict, sort_keys=True, ensure_ascii=False) for conflict in conflicts))
     lines.append('Warnings:')
     lines.extend(('  - ' + warning for warning in result.get('warnings', [])))
+    instructions = comparison['instructions']
+    lines.append('Native instruction listing sequence alignment (current target -> reference):')
+    lines.append('  Complete: ' + ('yes' if instructions['complete'] else 'NO'))
+    lines.append('  Summary: ' + json.dumps(instructions['summary'], sort_keys=True))
+    if instructions.get('reason'):
+        lines.append('  Reason: ' + instructions['reason'])
+    for side in ('source', 'reference'):
+        evidence = comparison['evidence'][side]['instructions']
+        if evidence['reasons']:
+            lines.append(f'  {side} reasons: ' + ', '.join(evidence['reasons']))
+        if evidence['error'] is not None:
+            lines.append(f'  {side} native error: ' + json.dumps(evidence['error'], ensure_ascii=False))
+
+    def listing(row):
+        if row is None:
+            return '(none)'
+        return row['address'] + ' [' + row['bytes'] + '] ' + row['mnemonic'] + ' ' + json.dumps(row['operands'], ensure_ascii=False) + ' operand_types=' + json.dumps(row['operand_types']) + ' length=' + str(row['length'])
+    for row in instructions['rows']:
+        source_text = '(unobserved)' if row.get('unobserved') == 'source' else listing(row['source'])
+        reference_text = '(unobserved)' if row.get('unobserved') == 'reference' else listing(row['reference'])
+        lines.append(f"  [{row['status']}] " + source_text + ' -> ' + reference_text)
+    if not instructions['rows']:
+        lines.append('  No aligned rows: instruction evidence unavailable or not comparable')
     lines.append('Textual unified C diff (not native CodeDiffPlugin analysis):')
     diff = comparison['code'].get('unified_diff')
     if diff:
@@ -4504,6 +4629,57 @@ def format_bsim_query(response: dict, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def _format_bsim_multi(response: dict) -> str:
+    if not response.get("success", False):
+        return format_error(response)
+    result = response.get("result", response)
+    overview = result.get("mode") == "overview"
+    lines = [f"BSim {result.get('mode')}: {result.get('program')}",
+             f"  source program ID: {result.get('source_program_id')}",
+             f"  source modification: {result.get('source_modification')}",
+             f"  scope: {'address-ordered page; ranking is page-local, not global' if overview else 'explicit source entries only'}",
+             f"  scanned: {result.get('scanned', 0)}; searched: {result.get('searched', 0)}",
+             f"  thresholds: similarity >= {result.get('min_similarity')}, significance >= {result.get('min_significance')}",
+             f"  candidate limit: {result.get('max_matches')} per source",
+             "  filters (AND, exact metadata): "
+             + json.dumps(result.get("filters", {}), ensure_ascii=False, sort_keys=True),
+             "  available categories: "
+             + json.dumps(result.get("available_categories", []), ensure_ascii=False)]
+    for row in result.get("results", []):
+        lines.append(f"  {row.get('source_address')} {row.get('function')}: {row.get('status')}")
+        for match in row.get("matches", []):
+            lines.append(f"    {match.get('similarity')} similarity, significance {match.get('significance')}: "
+                         f"{match.get('function')} @ {match.get('address')} in {match.get('executable')}")
+            lines.append(f"      match_id: {match.get('match_id')}"
+                         + ("" if match.get("reference_available") else " (reference unavailable)"))
+        if row.get("code") or row.get("reason"):
+            lines.append(f"    {row.get('code') or ''}: {row.get('reason') or ''}")
+        if row.get("complete") is not True:
+            lines.append("    incomplete: skipped/failed search, missing signature or bounded candidates; not whole-corpus absence")
+    lines.append("  complete: " + ("yes" if result.get("complete") is True else
+                 "no — more pages, skipped/failed sources or bounded candidates remain"))
+    if overview:
+        lines.append(f"  page offset: {result.get('offset')}; max functions: {result.get('max_functions')}; "
+                     f"next offset: {result.get('next_offset')}; has more: {result.get('has_more')}")
+        if result.get("has_more"):
+            lines.append(f"  Continue with offset={result.get('next_offset')}, "
+                         f"expected_program={json.dumps(result.get('source_program_id'))}, "
+                         f"expected_modification={result.get('source_modification')}; retain the same scope and limits.")
+    if result.get("reason"):
+        lines.append(f"  {result['reason']}")
+    return "\n".join(lines)
+
+
+def format_bsim_overview(response: dict, **kwargs) -> str:
+    """Page-local ranking, candidate identities and stamped pagination."""
+    return _format_bsim_multi(response)
+
+
+def format_bsim_batch_query(response: dict, **kwargs) -> str:
+    """Explicit-source results without hiding skipped, failed or bounded evidence."""
+    return _format_bsim_multi(response)
+
+
 def format_bsim_comparison(response: dict, **kwargs) -> str:
     """Show the selected match's code diff and non-mutating change preview."""
     if not response.get("success", False):
@@ -4730,6 +4906,8 @@ FORMATTERS = {
     "bsim_status": format_bsim_status,
     "bsim_ingest": format_bsim_ingest,
     "bsim_query": format_bsim_query,
+    "bsim_overview": format_bsim_overview,
+    "bsim_batch_query": format_bsim_batch_query,
     "bsim_compare_match": format_bsim_comparison,
     "bsim_prepare_apply": format_bsim_prepare_apply,
     "bsim_apply_match": format_bsim_apply_match,
@@ -4789,7 +4967,7 @@ def _render_tool_output(response, name: str, kwargs: dict):
     # suggestion is a call the agent can make as it reads. A link that
     # does not map to a registered tool is left out — a wrong suggestion
     # is worse than none.
-    suggestions = _suggested_calls(response)
+    suggestions = _suggested_calls(response, port=kwargs.get("port"))
     if suggestions:
         text += "\nNext: " + " | ".join(suggestions)
     return text
@@ -4798,7 +4976,7 @@ def _render_tool_output(response, name: str, kwargs: dict):
 _ADDRESSISH = re.compile(r"^(0x[0-9a-fA-F]+|[0-9a-fA-F]{4,})$")
 
 
-def _suggested_calls(response: dict, limit: int = 4) -> list[str]:
+def _suggested_calls(response: dict, limit: int = 4, *, port: int | None = None) -> list[str]:
     """Translate the envelope's _links into registered bridge calls.
 
     Two shapes reach here: the raw envelope (``_links`` = rel -> {href,
@@ -4847,12 +5025,20 @@ def _suggested_calls(response: dict, limit: int = 4) -> list[str]:
             args.append(f'{arg_name}="{values[-1]}"')
         for pair in query.split("&"):
             key, sep, value = pair.partition("=")
-            if sep and key in ("offset", "limit"):
-                args.append(f"{key}={value}")
+            if sep and (key in ("offset", "limit") or
+                        tool == "bsim_overview" and key in (
+                            "max_functions", "max_matches", "expected_modification",
+                            "min_similarity", "min_significance")):
+                args.append(f"{key}={unquote_plus(value)}")
             elif sep and key == "profile" and (tool.startswith("bsim_") or tool.startswith("repositories_")):
                 args.append(f"profile={json.dumps(unquote_plus(value))}")
             elif sep and key == "path" and tool == "repositories_list_files":
                 args.append(f"path={json.dumps(unquote_plus(value))}")
+            elif sep and tool == "bsim_overview" and key in (
+                    "expected_program", "executable", "architecture", "compiler", "categories"):
+                args.append(f"{key}={json.dumps(unquote_plus(value), ensure_ascii=False)}")
+        if tool == "bsim_overview" and port is not None:
+            args.append(f"port={port}")
         if tool.startswith("repositories_") and not any(arg.startswith("profile=") for arg in args):
             continue
         suggestions.append(f"{tool}({', '.join(args)})" if args else f"{tool}()")
@@ -13646,6 +13832,36 @@ class _BSimQueryMetadata(FuncMetadata):
         return data
 
 
+def _bsim_filter_params(executable, architecture, compiler, categories):
+    """Validate exact filters before HTTP, including duplicate JSON keys."""
+    params = {}
+    for key, value in (("executable", executable), ("architecture", architecture),
+                       ("compiler", compiler)):
+        if value is not None:
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{key} must be a nonblank exact metadata string")
+            params[key] = value
+    if categories is not None:
+        if not isinstance(categories, str):
+            raise ValueError("categories must be JSON text")
+
+        def unique_categories(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate category name: {key}")
+                result[key] = value
+            return result
+
+        parsed = json.loads(categories, object_pairs_hook=unique_categories)
+        if not isinstance(parsed, dict) or any(
+                not key.strip() or not isinstance(value, str) or not value.strip()
+                for key, value in parsed.items()):
+            raise ValueError("categories must be an object of nonempty string names and values")
+        params["categories"] = json.dumps(parsed, ensure_ascii=False)
+    return params
+
+
 @mcp.tool()
 @text_output
 def bsim_query(address: str = "", name: str = "", min_similarity: float = 0.0,
@@ -13685,32 +13901,8 @@ def bsim_query(address: str = "", name: str = "", min_similarity: float = 0.0,
         dict: the function asked about, the thresholds used, and the matches
               with similarity, significance, function, address and executable
     """
-    params = {}
     try:
-        for key, value in (("executable", executable), ("architecture", architecture),
-                           ("compiler", compiler)):
-            if value is None:
-                continue
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{key} must be a nonblank exact metadata string")
-            params[key] = value
-        if categories is not None and not isinstance(categories, str):
-            raise ValueError("categories must be JSON text")
-        if categories is not None:
-            def unique_categories(pairs):
-                result = {}
-                for key, value in pairs:
-                    if key in result:
-                        raise ValueError(f"duplicate category name: {key}")
-                    result[key] = value
-                return result
-
-            parsed = json.loads(categories, object_pairs_hook=unique_categories)
-            if not isinstance(parsed, dict) or any(
-                    not key.strip() or not isinstance(value, str) or not value.strip()
-                    for key, value in parsed.items()):
-                raise ValueError("categories must be an object of nonempty string names and values")
-            params["categories"] = json.dumps(parsed, ensure_ascii=False)
+        params = _bsim_filter_params(executable, architecture, compiler, categories)
     except ValueError as exc:
         return {"success": False, "error": {"code": "BSIM_FILTER_INVALID",
                 "message": str(exc)}}
@@ -13735,6 +13927,141 @@ _bsim_query_tool.fn_metadata = _BSimQueryMetadata(
     arg_model=_bsim_query_tool.fn_metadata.arg_model)
 
 
+def _bsim_multi_params(max_matches, min_similarity, min_significance,
+                       expected_modification, expected_program, executable, architecture, compiler, categories):
+    if type(max_matches) is not int or not 1 <= max_matches <= 10:
+        raise ValueError("max_matches must be an integer in 1..10")
+    if (not math.isfinite(min_similarity) or not 0 <= min_similarity <= 1
+            or not math.isfinite(min_significance) or min_significance < 0):
+        raise ValueError("similarity must be in 0..1 and significance finite and nonnegative")
+    if expected_modification is not None and type(expected_modification) is not int:
+        raise ValueError("expected_modification must be an integer")
+    if expected_program is not None and (not isinstance(expected_program, str) or not expected_program.strip()):
+        raise ValueError("expected_program must be a nonblank opaque program ID")
+    params = _bsim_filter_params(executable, architecture, compiler, categories)
+    params.update(max_matches=max_matches, min_similarity=min_similarity,
+                  min_significance=min_significance)
+    if expected_modification is not None:
+        params["expected_modification"] = expected_modification
+    if expected_program is not None:
+        params["expected_program"] = expected_program
+    return params
+
+
+@mcp.tool()
+@text_output
+def bsim_overview(offset: int = 0, max_functions: int = 50, max_matches: int = 1,
+                  min_similarity: float = 0.7, min_significance: float = 0.0,
+                  expected_modification: int | None = None, expected_program: str | None = None,
+                  port: int | None = None,
+                  profile: str = "", executable: str | None = None,
+                  architecture: str | None = None, compiler: str | None = None,
+                  categories: str | None = None) -> dict:
+    """Search an address-ordered page of source functions; rank only within that page.
+
+    Bounded candidates include existing selected-match IDs, never automatic apply.
+    Follow next_offset with source_program_id as expected_program and
+    source_modification as expected_modification to avoid mixing instances/states.
+    Skips, failures and truncation are explicitly incomplete.
+    Metadata predicates are exact AND filters applied before the candidate limit.
+
+    Args:
+        offset: Address-ordered source page offset, nonnegative.
+        max_functions: Source entries in this page, 1..100; includes skips.
+        max_matches: Candidates per source, 1..10; product with page size <=200.
+        min_similarity: Similarity floor, 0..1.
+        min_significance: Nonnegative significance floor.
+        expected_modification: Source stamp from the preceding page, if any.
+        expected_program: Opaque source_program_id from the preceding page, if any.
+        port: Target Ghidra instance port.
+        profile: Worker-owned BSim query profile ID.
+        executable: Exact executable metadata string, or null to omit.
+        architecture: Exact architecture metadata string, or null to omit.
+        compiler: Exact compiler metadata string, or null to omit.
+        categories: JSON text object of unique nonblank category names and string values.
+
+    Returns:
+        dict: Page-local ranked candidates, source errors/skips, scope and next offset.
+    """
+    try:
+        if type(offset) is not int or offset < 0:
+            raise ValueError("offset must be a nonnegative integer")
+        if type(max_functions) is not int or not 1 <= max_functions <= 100:
+            raise ValueError("max_functions must be an integer in 1..100")
+        params = _bsim_multi_params(max_matches, min_similarity, min_significance,
+            expected_modification, expected_program, executable, architecture, compiler, categories)
+        if max_functions * max_matches > 200:
+            raise ValueError("max_functions * max_matches must not exceed 200")
+    except (TypeError, ValueError) as exc:
+        return {"success": False, "error": {"code": "BSIM_BATCH_INVALID", "message": str(exc)}}
+    params.update(offset=offset, max_functions=max_functions)
+    if profile:
+        params["profile"] = profile
+    return simplify_response(safe_get(_get_instance_port(port), "bsim/overview", params=params))
+
+
+@mcp.tool()
+@text_output
+def bsim_batch_query(addresses: str, max_matches: int = 3,
+                     min_similarity: float = 0.7, min_significance: float = 0.0,
+                     expected_modification: int | None = None, expected_program: str | None = None,
+                     port: int | None = None,
+                     profile: str = "", executable: str | None = None,
+                     architecture: str | None = None, compiler: str | None = None,
+                     categories: str | None = None) -> dict:
+    """Search an explicit bounded set of exact function-entry addresses.
+
+    Missing entries are per-source errors, never no-match claims. Candidates use
+    the existing compare/prepare/apply IDs; this operation never applies changes.
+    Qualified address spaces are accepted and preserved. Duplicate resolved
+    functions are rejected by the worker, including alternate address spellings.
+
+    Args:
+        addresses: JSON text array of 1..100 unique nonblank exact entry addresses;
+            maximum 16384 characters, e.g. ["ram:00401000","overlay:00401000"].
+        max_matches: Candidates per source, 1..10; address count * limit <=200.
+        min_similarity: Similarity floor, 0..1.
+        min_significance: Nonnegative significance floor.
+        expected_modification: Source stamp to validate, if any.
+        expected_program: Opaque source_program_id to validate the exact instance, if any.
+        port: Target Ghidra instance port.
+        profile: Worker-owned BSim query profile ID.
+        executable: Exact executable metadata string, or null to omit.
+        architecture: Exact architecture metadata string, or null to omit.
+        compiler: Exact compiler metadata string, or null to omit.
+        categories: JSON text object of unique nonblank category names and string values.
+
+    Returns:
+        dict: Per-source selected candidates, explicit errors and bounded completeness.
+    """
+    try:
+        if not isinstance(addresses, str) or len(addresses) > 16384:
+            raise ValueError("addresses must be JSON text of at most 16384 characters")
+        entries = json.loads(addresses)
+        if not isinstance(entries, list) or not 1 <= len(entries) <= 100:
+            raise ValueError("addresses must be an array with 1..100 entries")
+        if any(not isinstance(entry, str) or not re.fullmatch(
+                r"(?:[^\s]+:)?(?:0[xX])?[0-9a-fA-F]+", entry) for entry in entries):
+            raise ValueError("addresses must contain nonblank exact hexadecimal entry addresses")
+        if len(set(entries)) != len(entries):
+            raise ValueError("addresses must be unique")
+        params = _bsim_multi_params(max_matches, min_similarity, min_significance,
+            expected_modification, expected_program, executable, architecture, compiler, categories)
+        if len(entries) * max_matches > 200:
+            raise ValueError("address count * max_matches must not exceed 200")
+    except (TypeError, ValueError, RecursionError) as exc:
+        return {"success": False, "error": {"code": "BSIM_BATCH_INVALID", "message": str(exc)}}
+    params["addresses"] = addresses
+    if profile:
+        params["profile"] = profile
+    return simplify_response(safe_get(_get_instance_port(port), "bsim/batch-query", params=params))
+
+
+for _bsim_tool_name in ("bsim_overview", "bsim_batch_query"):
+    _bsim_tool = mcp._tool_manager._tools[_bsim_tool_name]
+    _bsim_tool.fn_metadata = _BSimQueryMetadata(arg_model=_bsim_tool.fn_metadata.arg_model)
+
+
 @mcp.tool()
 @text_output
 def bsim_compare_match(match_id: str, reference_profile: str, reference_port: int,
@@ -13742,14 +14069,16 @@ def bsim_compare_match(match_id: str, reference_profile: str, reference_port: in
                        port: int | None = None) -> dict:
     """Compare an exact BSim match with a verified read-only repository reference.
 
-    Select a match_id from bsim_query on the target worker. The reference worker
+    Select a match_id from bsim_query, bsim_overview or bsim_batch_query on the target worker. The reference worker
     uses its own approved Ghidra Server profile and keeps its current program.
-    Returns a textual C diff, structured signature/type differences and an exact
-    change preview. Nothing is renamed, imported, saved or checked out.
-    Missing/truncated evidence is incomplete, never proof of equivalence.
+    Returns address-paired native instruction alignment, a textual C diff,
+    structured signature/type differences and an exact change preview. Nothing
+    is renamed, imported, saved or checked out. Instruction capture is capped at
+    1000 rows; missing decoding/truncation is incomplete. Listing sequence
+    alignment is not CodeDiffPlugin or proof of equivalent behavior.
 
     Args:
-        match_id: Exact opaque ID returned by bsim_query on this target worker.
+        match_id: Exact opaque candidate ID returned by a BSim query on this target worker.
         reference_profile: Approved repository profile on the reference worker.
         reference_port: Reference worker HTTP port on the configured host.
         profile: BSim profile that produced the selected match, if configured.
@@ -13809,7 +14138,7 @@ def bsim_prepare_apply(match_id: str, reference_profile: str, reference_port: in
                        profile: str = "", port: int | None = None) -> dict:
     """Preview an exact selected BSim match's native signature and types.
 
-    Use a match_id from bsim_query, never an inferred best match. The reference
+    Use a match_id from a BSim query/overview/batch, never an inferred best match. The reference
     worker exports readonly native evidence through its approved profile; the
     target checks selected identity, unchanged source, ABI and type conflicts.
     No names, signatures or types change here. Review every proposal and then

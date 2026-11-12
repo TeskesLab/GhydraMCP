@@ -1,6 +1,9 @@
 """`ghydra bsim` — signature queries against local or worker-profile databases."""
 
 import json
+import math
+import re
+import shlex
 
 import click
 
@@ -21,6 +24,29 @@ def _profile_params(ctx):
 _profile_option = click.option(
     '--profile', default=None, expose_value=False, callback=_select_profile,
     help='Worker-provisioned BSim profile ID (never a URL or credential)')
+
+
+def _query_filters(executable, architecture, compiler, categories):
+    """Use the same exact metadata and duplicate-category rules for all queries."""
+    params = {}
+    for key, value in (('executable', executable), ('architecture', architecture),
+                       ('compiler', compiler)):
+        if value is not None:
+            if not value.strip():
+                raise click.BadParameter('must be a nonblank exact metadata value',
+                                         param_hint=f'--{key}')
+            params[key] = value
+    category_values = {}
+    for predicate in categories:
+        category, separator, value = predicate.partition('=')
+        if not separator or not category.strip() or not value.strip():
+            raise click.BadParameter('expected nonblank NAME=VALUE', param_hint='--category')
+        if category in category_values:
+            raise click.BadParameter(f'duplicate category name: {category}', param_hint='--category')
+        category_values[category] = value
+    if category_values:
+        params['categories'] = json.dumps(category_values, ensure_ascii=False)
+    return params
 
 
 @click.group('bsim')
@@ -167,23 +193,7 @@ def query_cmd(ctx: click.Context, address, name, min_similarity, min_significanc
         click.echo("give one of --address or --name", err=True)
         ctx.exit(2)
     params = _profile_params(ctx)
-    for key, value in (('executable', executable), ('architecture', architecture),
-                       ('compiler', compiler)):
-        if value is not None:
-            if not value.strip():
-                raise click.BadParameter('must be a nonblank exact metadata value',
-                                         param_hint=f'--{key}')
-            params[key] = value
-    category_values = {}
-    for predicate in categories:
-        category, separator, value = predicate.partition('=')
-        if not separator or not category.strip() or not value.strip():
-            raise click.BadParameter('expected nonblank NAME=VALUE', param_hint='--category')
-        if category in category_values:
-            raise click.BadParameter(f'duplicate category name: {category}', param_hint='--category')
-        category_values[category] = value
-    if category_values:
-        params['categories'] = json.dumps(category_values, ensure_ascii=False)
+    params.update(_query_filters(executable, architecture, compiler, categories))
     if address:
         params['address'] = address
     if name:
@@ -231,6 +241,105 @@ def query_cmd(ctx: click.Context, address, name, min_similarity, min_significanc
                    + ("" if match.get('reference_available') else " (reference unavailable)"))
     if result.get('reason'):
         click.echo(f"  {result['reason']}")
+
+
+def _multi_query_options(command):
+    for option in (
+            click.option('--max-matches', type=click.IntRange(1, 10), default=None,
+                         help='Candidates per source (overview 1, batch 3; product <=200)'),
+            click.option('--min-similarity', type=click.FloatRange(0, 1), default=0.7),
+            click.option('--min-significance', type=click.FloatRange(min=0), default=0.0),
+            click.option('--expected-modification', type=int, default=None,
+                         help='Source modification stamp from the preceding result'),
+            click.option('--expected-program', default=None,
+                         help='Opaque source_program_id from the preceding result'),
+            click.option('--executable', default=None, help='Exact native executable metadata (AND)'),
+            click.option('--architecture', default=None, help='Exact native architecture metadata (AND)'),
+            click.option('--compiler', default=None, help='Exact native compiler metadata (AND)'),
+            click.option('--category', 'categories', multiple=True, metavar='NAME=VALUE',
+                         help='Exact category predicate; repeat for AND (unique nonblank names)'),
+            _profile_option):
+        command = option(command)
+    return command
+
+
+def _multi_query(ctx: click.Context, mode, count, max_matches, min_similarity, min_significance,
+                 expected_modification, expected_program, executable, architecture, compiler, categories, **selection):
+    if count * max_matches > 200:
+        raise click.ClickException('BSIM_BATCH_INVALID: source count * max_matches must not exceed 200')
+    if not math.isfinite(min_similarity) or not math.isfinite(min_significance):
+        raise click.ClickException('BSIM_BATCH_INVALID: thresholds must be finite')
+    if expected_program is not None and not expected_program.strip():
+        raise click.ClickException('BSIM_BATCH_INVALID: expected_program must be a nonblank opaque program ID')
+    try:
+        params = {**_profile_params(ctx),
+                  **_query_filters(executable, architecture, compiler, categories), **selection,
+                  'max_matches': max_matches, 'min_similarity': min_similarity,
+                  'min_significance': min_significance}
+    except click.BadParameter as exc:
+        raise click.ClickException(f'BSIM_BATCH_INVALID: {exc.format_message()}') from None
+    if expected_modification is not None:
+        params['expected_modification'] = expected_modification
+    if expected_program is not None:
+        params['expected_program'] = expected_program
+    formatter = ctx.obj['formatter']
+    try:
+        response = ctx.obj['client'].get(f'bsim/{mode}', params=params)
+    except GhidraError as exc:
+        click.echo(formatter.format_error(exc), err=True)
+        ctx.exit(1)
+    if mode == 'overview':
+        result = response.get('result', {})
+        if result.get('has_more') and not ctx.obj.get('output_json'):
+            next_params = {**params, 'offset': result['next_offset'],
+                           'expected_modification': result['source_modification'],
+                           'expected_program': result['source_program_id']}
+            command = ['ghydra', '--host', ctx.obj['client'].host,
+                       '--port', str(ctx.obj['client'].port), 'bsim', 'overview']
+            for key, value in next_params.items():
+                if key == 'categories':
+                    for name, category_value in json.loads(value).items():
+                        command += ['--category', f'{name}={category_value}']
+                else:
+                    command += ['--' + key.replace('_', '-'), str(value)]
+            response = {**response, '_next_command': shlex.join(command)}
+        click.echo(formatter.format_bsim_overview(response))
+    else:
+        click.echo(formatter.format_bsim_batch_query(response))
+
+
+@bsim.command('overview')
+@click.option('--offset', type=click.IntRange(min=0), default=0,
+              help='Address-ordered source page offset')
+@click.option('--max-functions', type=click.IntRange(1, 100), default=50,
+              help='Source entries in this page, including skipped functions')
+@_multi_query_options
+@click.pass_context
+def overview_cmd(ctx: click.Context, offset, max_functions, max_matches, **options):
+    """Rank BSim matches within one address-ordered page, never globally.
+
+    Follow Next with the source instance ID and stamp. No annotations are applied.
+    """
+    _multi_query(ctx, 'overview', max_functions, 1 if max_matches is None else max_matches,
+                 offset=offset, max_functions=max_functions, **options)
+
+
+@bsim.command('batch-query')
+@click.option('--address', 'addresses', multiple=True, required=True,
+              help='Exact function-entry address; repeat for each source (qualified spaces accepted)')
+@_multi_query_options
+@click.pass_context
+def batch_query_cmd(ctx: click.Context, addresses, max_matches, **options):
+    """Search only the explicitly selected source entries; never bulk apply."""
+    if (not 1 <= len(addresses) <= 100 or len(set(addresses)) != len(addresses)
+            or any(not re.fullmatch(r'(?:[^\s]+:)?(?:0[xX])?[0-9a-fA-F]+', address)
+                   for address in addresses)):
+        raise click.ClickException('BSIM_BATCH_INVALID: give 1..100 unique exact hexadecimal entry addresses')
+    text = json.dumps(addresses, ensure_ascii=False)
+    if len(text) > 16384:
+        raise click.ClickException('BSIM_BATCH_INVALID: addresses JSON exceeds 16384 characters')
+    _multi_query(ctx, 'batch-query', len(addresses), 3 if max_matches is None else max_matches,
+                 addresses=text, **options)
 
 
 @bsim.command('apply-names')
@@ -383,14 +492,18 @@ def diff_cmd(ctx: click.Context, other_executable, max_functions, min_similarity
 def compare_match_cmd(ctx: click.Context, match_id, reference_profile, reference_port, max_code_lines):
     """Compare one selected match without applying names, signatures or types.
 
+    Includes address-paired native instructions (up to 1000 per function), textual
+    C and structured signatures/types. Missing decoding/truncation is incomplete;
+    listing sequence alignment is not a proof of equivalent behavior.
+
     Args:
-        match_id: Opaque match ID returned by bsim query on the target worker.
+        match_id: Opaque candidate ID from bsim query, overview or batch-query on the target worker.
         reference_profile: Approved repository profile ID.
         reference_port: Reference worker port on the same configured host.
         max_code_lines: Maximum decompiled lines per function, 1..10000.
 
     Returns:
-        A code/signature/type report and a non-mutating change preview.
+        An instruction/code/signature/type report and a non-mutating change preview.
     """
     from ..bsim import compare_selected_match
 

@@ -1292,6 +1292,8 @@ The same question exists on the bridge as `fleet_query(kind, ports, target)`.\n
 ghydra bsim status        # is a signature query possible, and against which DB
 ghydra bsim ingest        # generate signatures for the open program and insert them
 ghydra bsim query         # which stored functions look like this one
+ghydra bsim overview      # bounded address page, ranked within that page
+ghydra bsim batch-query   # explicit sources, repeated --address ENTRY
 ghydra bsim apply-names   # name a function after its best match (dry run by default)
 ghydra bsim diff          # what changed between two versions, paired by signature
 ghydra --json bsim status
@@ -1301,6 +1303,21 @@ ghydra --port 8192 bsim prepare-apply MATCH_ID --profile corpus \
   --reference-profile repository-reader --reference-port 8193
 ghydra --port 8192 bsim apply-match MATCH_ID --profile corpus --apply-token TOKEN
 ```
+
+```bash
+ghydra --json bsim overview --profile corpus --max-functions 50 --max-matches 1
+ghydra --json bsim batch-query --profile corpus \
+  --address 'ram::0x1000' --address 'ram::0x2000' --max-matches 3
+```
+
+Follow overview `next_offset` with `--expected-program SOURCE_PROGRAM_ID`,
+`--expected-modification SOURCE_MODIFICATION` and the same filters. Next includes
+both guards. The opaque ID identifies the exact open Program instance, not its
+name/path; reopening or switching programs and source changes refuse continuation.
+Ranking is page-local; skips, failures, pagination and candidate caps remain incomplete.
+Each candidate's match ID targets its own source function for compare/prepare/apply.
+Neither command applies changes. Bounds are 100 sources, 1..10 matches per source
+and at most 200 candidate slots per request. See [BSim](GHYDRA_BSIM.md) for scope.
 
 `bsim query` accepts exact server-side `--executable`, `--architecture` and
 `--compiler` filters, plus repeatable `--category NAME=VALUE`. Predicates combine
@@ -1323,6 +1340,14 @@ to an unfiltered query.
 > Signature/type changes require the separate explicit prepare/apply commands.
 > Review the prepared preview before using its token. Conflicts and stale tokens
 > are refused; failed writes roll back. No save or repository publication occurs.
+
+`compare-match` also shows paired native instruction addresses, raw bytes and
+operands, with insertions/deletions/changes. Unmatched rows against an incomplete
+capture remain unknown/unobserved, not observed differences. Capture is capped at
+1000 instructions per function independently of `--max-code-lines`. Gaps or
+truncation are incomplete; different languages are not comparable. This listing
+alignment is not proof of
+equivalent behavior or the UI's native CodeDiffPlugin correlation.
 
 ### The digital twin (R2)
 

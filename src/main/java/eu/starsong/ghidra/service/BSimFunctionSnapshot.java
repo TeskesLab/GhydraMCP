@@ -5,20 +5,28 @@ import eu.starsong.ghidra.util.DecompilerCache;
 import eu.starsong.ghidra.util.GhidraSwing;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.data.*;
 import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.Instruction;
+import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Parameter;
 import ghidra.program.model.listing.Program;
+import ghidra.program.model.mem.MemoryAccessException;
 
 import javax.swing.SwingUtilities;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /** Detached comparison evidence. No transaction, activation, save, or type import occurs. */
 public final class BSimFunctionSnapshot {
+    private static final int INSTRUCTION_LIMIT = 1000;
+    private static final HexFormat INSTRUCTION_HEX = HexFormat.of().withUpperCase();
+
     private BSimFunctionSnapshot() {}
 
     public static Map<String, Object> capture(Program program, Function function, int maxCodeLines) {
@@ -90,13 +98,92 @@ public final class BSimFunctionSnapshot {
         }
         f.put("parameters", parameters);
         f.put("comment", function.getComment());
+        Map<String, Object> instructions = instructions(program, function);
         if (stamp != program.getModificationNumber()) throw changed();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("program", p);
         result.put("function", f);
         result.put("types", graph.descriptors);
         result.put("types_complete", graph.complete);
+        result.put("instructions", instructions);
         result.put("modification", stamp);
+        return result;
+    }
+
+    /** Listing traversal and detached row construction share describe's EDT/stamp boundary. */
+    private static Map<String, Object> instructions(Program program, Function function) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        long bodyBytes = 0;
+        long decodedBytes = 0;
+        String error = null;
+        try {
+            AddressSetView body = function.getBody();
+            bodyBytes = body.getNumAddresses();
+            InstructionIterator iterator = program.getListing().getInstructions(body, true);
+            while (iterator.hasNext()) {
+                // One lookahead only; never walk the remainder of an oversized function.
+                if (rows.size() == INSTRUCTION_LIMIT) {
+                    error = "Native instruction count exceeds limit";
+                    break;
+                }
+                Instruction instruction = iterator.next();
+                Address start = instruction.getMinAddress();
+                int length = instruction.getLength();
+                if (length < 1 || instruction.getParsedLength() != length) {
+                    error = "Native instruction length override or unsupported decoding";
+                    break;
+                }
+                if (!body.contains(start, instruction.getMaxAddress())) {
+                    error = "Native instruction crosses function body";
+                    break;
+                }
+                // Read memory directly, not the CodeUnit byte cache: a native memory failure
+                // must not become apparently complete evidence from previously cached bytes.
+                byte[] bytes = new byte[length];
+                if (program.getMemory().getBytes(start, bytes) != length) {
+                    error = "Native instruction memory could not be read completely";
+                    break;
+                }
+                String mnemonic = instruction.getMnemonicString();
+                List<String> operands = new ArrayList<>();
+                List<Integer> operandTypes = new ArrayList<>();
+                for (int operand = 0; operand < instruction.getNumOperands(); operand++) {
+                    String text = instruction.getDefaultOperandRepresentation(operand);
+                    if (text == null) throw new IllegalStateException("Missing native operand");
+                    operands.add(text);
+                    operandTypes.add(instruction.getOperandType(operand));
+                }
+                if (mnemonic == null || mnemonic.isBlank()) {
+                    error = "Native instruction mnemonic is unavailable";
+                    break;
+                }
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("address", qualifiedAddress(start));
+                row.put("mnemonic", mnemonic);
+                row.put("operands", operands);
+                row.put("operand_types", operandTypes);
+                row.put("bytes", INSTRUCTION_HEX.formatHex(bytes));
+                row.put("length", length);
+                rows.add(row);
+                decodedBytes += length;
+            }
+            // Native listing instructions do not overlap, so equal covered byte counts prove
+            // full coverage even for disjoint bodies, without iterating body bytes or ranges.
+            if (error == null && (rows.isEmpty() || decodedBytes != bodyBytes)) {
+                error = "Function body contains undefined or missing native instructions";
+            }
+        } catch (MemoryAccessException e) {
+            error = "Native instruction memory could not be read";
+        } catch (RuntimeException | LinkageError e) {
+            error = "Native instruction evidence is unavailable";
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("rows", rows);
+        result.put("complete", error == null);
+        result.put("error", error);
+        result.put("limit", INSTRUCTION_LIMIT);
+        result.put("body_bytes", bodyBytes);
+        result.put("decoded_bytes", decodedBytes);
         return result;
     }
 

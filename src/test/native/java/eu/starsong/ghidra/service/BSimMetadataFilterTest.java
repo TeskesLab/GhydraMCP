@@ -43,9 +43,9 @@ public class BSimMetadataFilterTest {
     public static void main(String[] arguments) throws Exception {
         Application.initializeApplication(new GhidraApplicationLayout(new File(arguments[0])),
             new HeadlessGhidraApplicationConfiguration());
-        var result = JUnitCore.runClasses(BSimMetadataFilterTest.class);
+        var result = JUnitCore.runClasses(BSimMetadataFilterTest.class, BSimMultiQueryTest.class);
         for (var failure : result.getFailures()) failure.getException().printStackTrace();
-        System.out.println("Native BSim metadata filters: " + result.getRunCount()
+        System.out.println("Native BSim metadata and multi-query protocols: " + result.getRunCount()
             + " executed, " + result.getFailureCount() + " failed");
         System.exit(result.wasSuccessful() ? 0 : 1);
     }

@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import shlex
 import sys
 from typing import Any, Dict
 
@@ -1575,6 +1576,56 @@ class TableFormatter(BaseFormatter):
         result = data.get("result", {})
         return self._capture(Syntax(json.dumps(result, ensure_ascii=False, indent=2),
                                     "json", background_color="default", word_wrap=True))
+
+    def _format_bsim_multi(self, data: Dict[str, Any]) -> str:
+        result = data.get("result", data)
+        overview = result.get("mode") == "overview"
+        lines = [f"BSim {result.get('mode')}: {result.get('program')}",
+                 f"  source program ID: {result.get('source_program_id')}",
+                 f"  source modification: {result.get('source_modification')}",
+                 f"  scope: {'address-ordered page; ranking is page-local, not global' if overview else 'explicit source entries only'}",
+                 f"  scanned: {result.get('scanned', 0)}; searched: {result.get('searched', 0)}",
+                 f"  thresholds: similarity >= {result.get('min_similarity')}, significance >= {result.get('min_significance')}",
+                 f"  candidate limit: {result.get('max_matches')} per source",
+                 "  filters (AND, exact metadata): "
+                 + json.dumps(result.get("filters", {}), ensure_ascii=False, sort_keys=True),
+                 "  available categories: "
+                 + json.dumps(result.get("available_categories", []), ensure_ascii=False)]
+        for row in result.get("results", []):
+            lines.append(f"  {row.get('source_address')} {row.get('function')}: {row.get('status')}")
+            for match in row.get("matches", []):
+                lines.append(f"    {match.get('similarity')} similarity, significance {match.get('significance')}: "
+                             f"{match.get('function')} @ {match.get('address')} in {match.get('executable')}")
+                lines.append(f"      match_id: {match.get('match_id')}"
+                             + ("" if match.get("reference_available") else " (reference unavailable)"))
+            if row.get("code") or row.get("reason"):
+                lines.append(f"    {row.get('code') or ''}: {row.get('reason') or ''}")
+            if row.get("complete") is not True:
+                lines.append("    incomplete: skipped/failed search, missing signature or bounded candidates; not whole-corpus absence")
+        lines.append("  complete: " + ("yes" if result.get("complete") is True else
+                     "no — more pages, skipped/failed sources or bounded candidates remain"))
+        if overview:
+            lines.append(f"  page offset: {result.get('offset')}; max functions: {result.get('max_functions')}; "
+                         f"next offset: {result.get('next_offset')}; has more: {result.get('has_more')}")
+            if result.get("has_more"):
+                command = data.get("_next_command") or (
+                    f"ghydra bsim overview --offset {result.get('next_offset')} "
+                    f"--max-functions {result.get('max_functions')} --max-matches {result.get('max_matches')} "
+                    f"--expected-program {shlex.quote(result.get('source_program_id', ''))} "
+                    f"--expected-modification {result.get('source_modification')}")
+                lines.append(f"Next: {command}")
+                lines.append("  Retain the same instance, profile, thresholds and exact filters.")
+        if result.get("reason"):
+            lines.append(f"  {result['reason']}")
+        return "\n".join(lines)
+
+    def format_bsim_overview(self, data: Dict[str, Any]) -> str:
+        """Show page-local ranking and actionable stamped continuation."""
+        return self._format_bsim_multi(data)
+
+    def format_bsim_batch_query(self, data: Dict[str, Any]) -> str:
+        """Show every selected source, candidate ID and incomplete/error reason."""
+        return self._format_bsim_multi(data)
 
     def format_bsim_comparison(self, data: Dict[str, Any]) -> str:
         """Show code/signature/type differences without hiding incomplete evidence."""

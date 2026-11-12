@@ -53,15 +53,27 @@ ghydra --json functions list | jq '.result[0]'
   match limit; invalid/unsupported filters fail closed. Retain `result.filters`
   when reporting no matches: a filtered absence is not a corpus-wide absence.
   MCP `bsim_query` takes categories as JSON text, not a nested object.
+- For broad triage, use `bsim overview --max-functions 50 --max-matches 1`;
+  follow `next_offset` with both `--expected-program SOURCE_PROGRAM_ID` and
+  `--expected-modification SOURCE_MODIFICATION`. The opaque ID binds the exact
+  open Program instance, not a filename/path; Next carries both guards.
+  Ranking is page-local. For selected functions, use `bsim batch-query` with
+  repeated `--address` (MCP `bsim_batch_query` takes JSON text `addresses`).
+  Both share the query filters and return source-bound match IDs. At most 100
+  sources and 200 candidate slots per request; skips/errors/caps are incomplete,
+  never no-match evidence. No overview/batch operation applies changes.
 - Select the exact query row's `match_id`, then run
   `ghydra --port TARGET bsim compare-match MATCH_ID --profile CORPUS --reference-profile REPO --reference-port REFERENCE`.
   Both workers share the configured HTTP host; separate workers can keep separate
   credential stores. The temporary reference is read-only, URL/profile-bound and
   MD5/address-verified. Neither worker's active selection changes.
-- Review the textual C diff, signature/type conflicts and exact annotation preview.
-  Nothing is applied. Missing/truncated evidence is incomplete, not equality;
-  raise `--max-code-lines` if necessary. IDs expire on restart/eviction and become
-  stale after target edits or selection changes; query again rather than guessing.
+- Review paired native instruction addresses/bytes/operands, the textual C diff,
+  signature/type conflicts and exact annotation preview. Nothing is applied.
+  Instruction capture is capped at 1000 rows; `--max-code-lines` changes only C.
+  Missing decoding, gaps or truncation are incomplete, never equality. Unmatched
+  rows against an incomplete capture are unknown/unobserved, not differences. Different
+  languages are not comparable; constants/registers/branch targets stay visible.
+  IDs expire on restart/eviction or target edits; query again rather than guessing.
 - To apply a selected signature/types, explicitly call
   `ghydra --port TARGET bsim prepare-apply MATCH_ID --profile CORPUS --reference-profile REPO --reference-port REFERENCE`.
   Review its preview, then explicitly call
@@ -72,7 +84,7 @@ ghydra --json functions list | jq '.result[0]'
   changing stored versions. `Program.isChangeable()` is not permission; mutations
   and analysis return `403 REPOSITORY_READ_ONLY`. Protection lasts until native close.
 - BSim version diff is a function-matching summary; selected-match comparison is
-  textual C plus structured signatures/types, not native CodeDiffPlugin alignment.
+  native-listing sequence alignment, textual C and types, not CodeDiffPlugin correlation.
   `apply-names` re-queries a best match; it does not apply the selected preview.
   Signature/type transfer requires the separate explicit prepare/apply workflow;
   unsolicited changes, comment transfer and bulk acceptance are not supported.

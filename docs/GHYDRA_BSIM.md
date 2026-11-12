@@ -212,6 +212,53 @@ Values must have no surrounding whitespace or control characters. At most
 32 category predicates are accepted, within 16384 JSON characters; category names are
 limited to 256 characters and individual values to 4096 characters.
 
+### Program overview and batch queries
+
+```bash
+ghydra --port 8192 --json bsim overview --profile corpus-reader \
+  --max-functions 50 --max-matches 1
+ghydra --port 8192 --json bsim batch-query --profile corpus-reader \
+  --address 'ram::0x1000' --address 'ram::0x2000' --max-matches 3
+```
+
+```python
+bsim_overview(profile="corpus-reader", max_functions=50, max_matches=1, port=8192)
+bsim_batch_query(addresses='["ram::0x1000","ram::0x2000"]',
+                 profile="corpus-reader", max_matches=3, port=8192)
+```
+
+Overview selects an address-ordered page, then ranks its sources by best
+similarity, significance and source address. Ranking is **within that page**,
+not global until every page has been searched. Follow `next_offset` with the
+same filters and both returned guards: `source_program_id` as `--expected-program`
+and `source_modification` as `--expected-modification` (MCP: `expected_program` and
+`expected_modification`). The opaque ID identifies the exact open Program instance,
+not its filename/path; reopening or switching to an otherwise identical program
+cannot resume the old search. HTTP/MCP/CLI Next carries both guards. A changed
+source refuses continuation with `BSIM_MATCH_STALE`; start again.
+
+Batch accepts exact function-entry addresses: MCP `addresses` is JSON text,
+while the CLI repeats `--address`. Each source has its own status, scores,
+candidate rows and match IDs bound to that source function. Select an exact
+candidate ID for the existing compare → prepare → explicitly apply workflow.
+Neither overview nor batch applies annotations.
+If a native response omits a source group, that source is an incomplete
+`error` with `BSIM_QUERY_UNVERIFIED`, never a confirmed `no_match`.
+
+One request shares native signature generation and the database query, rather
+than making one HTTP/decompiler setup per function. Overview defaults to 50
+sources; both modes accept at most 100. `max_matches` is 1..10 (overview default 1,
+batch default 3), and source-count × match-limit must not exceed 200. Oversized
+requests are refused, not silently reduced. Batch JSON is limited to 16384
+characters; duplicate sources are refused.
+
+The same executable/architecture/compiler/category filters apply before native
+candidate limits. `scanned` and `searched` are distinct: skipped thunks/externals,
+missing signatures, unknown sources and per-source errors are explicit, not
+no-match claims. `has_more`, candidate truncation or any skipped/failed source
+keeps `complete=false`. A bounded page cannot establish corpus-wide absence.
+
+
 
 ---
 
@@ -331,9 +378,10 @@ database, every function answered `not_found` rather than an invented pair.
    with its ID, the approved repository profile and the reference worker port.
    Both workers use the configured HTTP host; they may be the same worker when
    it has both profiles. Neither worker's active program changes.
-3. Review the textual unified C diff, signature changes and recursive type
-   descriptions/conflicts. The preview contains exact before/after annotations,
-   not a command to apply them. `applied` is always `false`.
+3. Review the address-paired native instructions, textual unified C diff,
+   signature changes and recursive type descriptions/conflicts. The preview
+   contains exact before/after annotations, not a command to apply them.
+   `applied` is always `false`.
 4. To apply the chosen signature and its dependency types, explicitly prepare
    it with `bsim_prepare_apply` (CLI: `bsim prepare-apply`). Review that operation's
    exact preview and retain its opaque `apply_token`.
@@ -367,17 +415,26 @@ indexed fully-qualified name must select a single function; unresolved ambiguity
 is refused instead of preferring the default space.
 
 `--max-code-lines` / `max_code_lines` defaults to 1000 per function (1..10000).
-Truncated/unavailable decompilation or bounded/incomplete type evidence sets
-`complete=false`; no differences then does **not** establish equality.
-Architecture, compiler and pointer-size differences produce warnings.
-This is textual C comparison, not the UI's instruction alignment or native
-CodeDiffPlugin analysis.
+Instruction capture is separately capped at 1000 decoded instructions per
+function and is not increased by that option. The comparison pairs qualified
+addresses using mnemonic/operand-type sequence alignment, retaining raw bytes
+and operands; immediate, register and branch-target differences remain visible.
+Unmatched instructions appear as insertions/deletions only when the other capture
+is complete. Otherwise rows retain their raw evidence with `status="unknown"` and
+`unobserved="source"` or `"reference"`; these do not count as observed differences.
+
+Undefined body bytes, partial decoding, capture limits, unavailable instructions,
+truncated C or incomplete types set `complete=false`; no differences then does
+**not** establish equality. Different languages are `not_comparable` for
+instruction alignment; compiler and pointer-size differences still warn.
+This is bounded alignment of native listings, **not** the UI's CodeDiffPlugin
+correlator or proof of semantic equivalence. Relocations can remain differences.
 
 `bsim_diff_versions` remains a bounded function-matching summary: `same` means a
 matched function at the same address, not identical code. `bsim_apply_names`
 still re-queries the best qualifying match and changes a name only; it does not
 consume a selected-match preview. Unsolicited changes, comment transfer,
-instruction-level comparison and bulk acceptance remain outside this workflow.
+native CodeDiffPlugin correlation and bulk acceptance remain outside this workflow.
 
 ### Explicit signature and type application
 
@@ -421,6 +478,8 @@ apply; the operator must separately authorize any repository checkout/publicatio
 | `GET /bsim/status` | `bsim_status` | `ghydra bsim status` |
 | `POST /bsim/ingest` | `bsim_ingest` | `ghydra bsim ingest` |
 | `GET /bsim/query` | `bsim_query` | `ghydra bsim query` |
+| `GET /bsim/overview` | `bsim_overview` | `ghydra bsim overview` |
+| `GET /bsim/batch-query` | `bsim_batch_query` | `ghydra bsim batch-query` |
 | `POST /bsim/apply-names` | `bsim_apply_names` | `ghydra bsim apply-names` |
 | `GET /bsim/diff` | `bsim_diff_versions` | `ghydra bsim diff` |
 | composed selected-match/reference inspection | `bsim_compare_match` | `ghydra bsim compare-match` |

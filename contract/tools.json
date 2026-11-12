@@ -11,9 +11,9 @@
     "takes_instance": "the tool names a Ghidra instance through its port"
   },
   "counts": {
-    "tools": 143,
+    "tools": 145,
     "namespaces": 38,
-    "with_formatter": 143,
+    "with_formatter": 145,
     "with_reserved_parameter": 0
   },
   "tools": [
@@ -195,6 +195,28 @@
       "has_formatter": true
     },
     {
+      "name": "bsim_batch_query",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "addresses",
+        "architecture",
+        "categories",
+        "compiler",
+        "executable",
+        "expected_modification",
+        "expected_program",
+        "max_matches",
+        "min_significance",
+        "min_similarity",
+        "port",
+        "profile"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
       "name": "bsim_compare_match",
       "namespace": "bsim",
       "group": "functions",
@@ -234,6 +256,29 @@
         "port",
         "profile",
         "track_call_graph"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "bsim_overview",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "architecture",
+        "categories",
+        "compiler",
+        "executable",
+        "expected_modification",
+        "expected_program",
+        "max_functions",
+        "max_matches",
+        "min_significance",
+        "min_similarity",
+        "offset",
+        "port",
+        "profile"
       ],
       "reserved_parameters": [],
       "takes_instance": true,

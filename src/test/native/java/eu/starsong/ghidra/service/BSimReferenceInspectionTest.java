@@ -62,6 +62,10 @@ public class BSimReferenceInspectionTest {
         boolean workspaceClosed;
 
         Fixture() throws Exception {
+            this(new byte[] { (byte) 0xb8, 42, 0, 0, 0, (byte) 0xc3 }, null, 0);
+        }
+
+        Fixture(byte[] bytes, long[][] bodyRanges, long... disassemblyOffsets) throws Exception {
             program = GhidraSwing.runRead(() -> {
                 var language = DefaultLanguageService.getLanguageService().getLanguage(new LanguageID("x86:LE:64:default"));
                 ProgramDB db = new ProgramDB("reference", language, language.getDefaultCompilerSpec(), owner);
@@ -69,15 +73,20 @@ public class BSimReferenceInspectionTest {
                 try {
                     db.setExecutableMD5(MD5);
                     Address start = db.getAddressFactory().getDefaultAddressSpace().getAddress(0x1000);
-                    byte[] bytes = { (byte) 0xb8, 42, 0, 0, 0, (byte) 0xc3 }; // mov eax,42; ret
+                    AddressSet body = new AddressSet();
+                    if (bodyRanges == null) body.add(start, start.add(bytes.length - 1));
+                    else for (long[] range : bodyRanges) body.add(start.add(range[0]), start.add(range[1]));
                     var block = db.getMemory().createInitializedBlock("text", start,
                         new ByteArrayInputStream(bytes), bytes.length, TaskMonitor.DUMMY, false);
                     block.setExecute(true);
-                    DisassembleCommand disassemble = new DisassembleCommand(start, null, true);
-                    disassemble.enableCodeAnalysis(false);
-                    assertTrue(disassemble.applyTo(db, TaskMonitor.DUMMY));
+                    for (long offset : disassemblyOffsets) {
+                        DisassembleCommand disassemble = new DisassembleCommand(start.add(offset),
+                            new AddressSet(start, start.add(bytes.length - 1)), true);
+                        disassemble.enableCodeAnalysis(false);
+                        assertTrue(disassemble.applyTo(db, TaskMonitor.DUMMY));
+                    }
                     Function created = db.getFunctionManager().createFunction("current_name", start,
-                        new AddressSet(start, start.add(bytes.length - 1)), SourceType.USER_DEFINED);
+                        body, SourceType.USER_DEFINED);
                     created.setReturnType(IntegerDataType.dataType, SourceType.USER_DEFINED);
                     created.setComment("Current reference annotation");
                 } finally { db.endTransaction(tx, true); }
@@ -266,6 +275,246 @@ public class BSimReferenceInspectionTest {
             assertNotNull(truncated.get("error"));
             assertNotNull(truncated.get("text"));
         }
+    }
+
+    @Test public void nativeInstructionsRetainImmediateRegisterAndBranchEvidence() throws Exception {
+        // mov eax,42; mov ecx,42; mov eax,43; jnz +2; jnz +1; ret; ret
+        byte[] bytes = { (byte) 0xb8, 42, 0, 0, 0, (byte) 0xb9, 42, 0, 0, 0,
+            (byte) 0xb8, 43, 0, 0, 0, 0x75, 2, 0x75, 1, (byte) 0xc3, (byte) 0xc3 };
+        try (Fixture fixture = new Fixture(bytes, null, 0)) {
+            Map<?, ?> evidence = instructionEvidence(fixture);
+            assertEquals(evidence.toString(), true, evidence.get("complete"));
+            assertNull(evidence.get("error"));
+            assertEquals(1000, evidence.get("limit"));
+            assertEquals((long) bytes.length, evidence.get("body_bytes"));
+            assertEquals((long) bytes.length, evidence.get("decoded_bytes"));
+            List<?> rows = (List<?>) evidence.get("rows");
+            assertEquals(7, rows.size());
+            Map<?, ?> immediate = (Map<?, ?>) rows.get(0);
+            Map<?, ?> register = (Map<?, ?>) rows.get(1);
+            Map<?, ?> otherImmediate = (Map<?, ?>) rows.get(2);
+            assertEquals("ram::0x1000", immediate.get("address"));
+            assertEquals("B82A000000", immediate.get("bytes"));
+            assertEquals(5, immediate.get("length"));
+            assertEquals(immediate.get("mnemonic"), register.get("mnemonic"));
+            assertEquals(immediate.get("operand_types"), register.get("operand_types"));
+            assertNotEquals(immediate.get("operands"), register.get("operands"));
+            assertNotEquals(immediate.get("bytes"), register.get("bytes"));
+            assertEquals(immediate.get("mnemonic"), otherImmediate.get("mnemonic"));
+            assertEquals(immediate.get("operand_types"), otherImmediate.get("operand_types"));
+            assertNotEquals(immediate.get("operands"), otherImmediate.get("operands"));
+            assertEquals("B82B000000", otherImmediate.get("bytes"));
+            Map<?, ?> branch = (Map<?, ?>) rows.get(3);
+            Map<?, ?> otherBranch = (Map<?, ?>) rows.get(4);
+            assertEquals(branch.get("mnemonic"), otherBranch.get("mnemonic"));
+            assertEquals(branch.get("operand_types"), otherBranch.get("operand_types"));
+            assertNotEquals(branch.get("operands"), otherBranch.get("operands"));
+            assertEquals("7502", branch.get("bytes"));
+            assertEquals("7501", otherBranch.get("bytes"));
+        }
+    }
+
+    @Test public void nativeInstructionEvidenceRejectsPartialAndUndisassembledBodies() throws Exception {
+        byte[] bytes = { (byte) 0xb8, 42, 0, 0, 0, (byte) 0xc3, (byte) 0x90 };
+        try (Fixture fixture = new Fixture(bytes, null, 0)) {
+            Map<?, ?> evidence = instructionEvidence(fixture);
+            assertEquals(false, evidence.get("complete"));
+            assertNotNull(evidence.get("error"));
+            assertEquals(7L, evidence.get("body_bytes"));
+            assertEquals(6L, evidence.get("decoded_bytes"));
+            assertEquals(2, ((List<?>) evidence.get("rows")).size());
+        }
+        try (Fixture fixture = new Fixture(bytes, null)) {
+            Map<?, ?> evidence = instructionEvidence(fixture);
+            assertEquals(false, evidence.get("complete"));
+            assertNotNull(evidence.get("error"));
+            assertEquals(7L, evidence.get("body_bytes"));
+            assertEquals(0L, evidence.get("decoded_bytes"));
+            assertTrue(((List<?>) evidence.get("rows")).isEmpty());
+        }
+    }
+
+    @Test public void nativeInstructionEvidenceRejectsCrossingAndUndecodedBodyGaps() throws Exception {
+        byte[] bytes = { (byte) 0xb8, 42, 0, 0, 0, (byte) 0xc3 };
+        try (Fixture fixture = new Fixture(bytes, new long[][] { { 0, 3 } }, 0)) {
+            Map<?, ?> evidence = instructionEvidence(fixture);
+            assertEquals(false, evidence.get("complete"));
+            assertTrue(((String) evidence.get("error")).contains("crosses"));
+            assertEquals(4L, evidence.get("body_bytes"));
+            assertEquals(0L, evidence.get("decoded_bytes"));
+            assertTrue(((List<?>) evidence.get("rows")).isEmpty());
+        }
+        try (Fixture fixture = new Fixture(new byte[] { (byte) 0xc3, (byte) 0x90, (byte) 0xc3 },
+                null, 0, 2)) {
+            Map<?, ?> evidence = instructionEvidence(fixture);
+            assertEquals(false, evidence.get("complete"));
+            assertNotNull(evidence.get("error"));
+            assertEquals(3L, evidence.get("body_bytes"));
+            assertEquals(2L, evidence.get("decoded_bytes"));
+        }
+    }
+
+    @Test public void nativeInstructionMemoryReadFailuresCannotUseCachedListingBytes() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            // Prime genuine CodeUnit bytes; the snapshot must still read current native memory.
+            GhidraSwing.runRead(() -> {
+                assertEquals(5, fixture.program.getListing().getInstructionAt(
+                    fixture.function.getEntryPoint()).getBytes().length);
+                return null;
+            });
+            for (boolean shortRead : new boolean[] { false, true }) {
+                ghidra.program.model.mem.Memory memory = proxy(ghidra.program.model.mem.Memory.class,
+                    (p, method, args) -> {
+                        if (method.getName().equals("getBytes")) {
+                            assertTrue(SwingUtilities.isEventDispatchThread());
+                            if (shortRead) return 0;
+                            throw new ghidra.program.model.mem.MemoryAccessException("native fixture failure");
+                        }
+                        return method.invoke(fixture.program.getMemory(), args);
+                    });
+                Program program = proxy(Program.class, (p, method, args) -> {
+                    if (method.getName().equals("getMemory") && SwingUtilities.isEventDispatchThread()) {
+                        return memory;
+                    }
+                    return method.invoke(fixture.program, args);
+                });
+                Function function = proxy(Function.class, (p, method, args) -> {
+                    if (method.getName().equals("getProgram")) return program;
+                    return method.invoke(fixture.function, args);
+                });
+                Map<?, ?> evidence = (Map<?, ?>) BSimFunctionSnapshot.capture(program, function, 1000)
+                    .get("instructions");
+                assertEquals(false, evidence.get("complete"));
+                assertTrue(((String) evidence.get("error")).contains("memory"));
+                assertEquals(0L, evidence.get("decoded_bytes"));
+                assertTrue(((List<?>) evidence.get("rows")).isEmpty());
+                assertEquals(List.of(fixture.owner), fixture.program.getConsumerList());
+            }
+        }
+    }
+
+    @Test public void nativeInstructionEvidenceSurvivesUnavailableOffEdtDecompiler() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            List<String> calls = new ArrayList<>();
+            Program program = proxy(Program.class, (p, method, args) -> {
+                // DecompilerCache.ensureDecompiler calls DecompileOptions.grabFromProgram,
+                // whose first native program read is getCompilerSpec (verified Ghidra 12.1.2).
+                if (method.getName().equals("getCompilerSpec") && !SwingUtilities.isEventDispatchThread()) {
+                    assertFalse(SwingUtilities.isEventDispatchThread());
+                    calls.add("decompile");
+                    throw new UnsupportedOperationException("native fixture decompiler unavailable");
+                }
+                return method.invoke(fixture.program, args);
+            });
+            Function function = proxy(Function.class, (p, method, args) -> {
+                if (method.getName().equals("getProgram")) return program;
+                return method.invoke(fixture.function, args);
+            });
+            Map<String, Object> snapshot = BSimFunctionSnapshot.capture(program, function, 1000);
+            assertFalse(calls.isEmpty());
+            Map<?, ?> evidence = (Map<?, ?>) snapshot.get("instructions");
+            assertEquals(true, evidence.get("complete"));
+            assertEquals(2, ((List<?>) evidence.get("rows")).size());
+            Map<?, ?> code = (Map<?, ?>) snapshot.get("code");
+            assertEquals(false, code.get("complete"));
+            assertNotNull(code.get("error"));
+            assertEquals(List.of(fixture.owner), fixture.program.getConsumerList());
+        }
+    }
+
+    @Test public void nativeInstructionEvidenceHonorsExactCapAndOneLookahead() throws Exception {
+        for (int count : new int[] { 1000, 1001 }) {
+            byte[] bytes = new byte[count];
+            java.util.Arrays.fill(bytes, (byte) 0x90);
+            bytes[count - 1] = (byte) 0xc3;
+            try (Fixture fixture = new Fixture(bytes, null)) {
+                GhidraSwing.runRead(() -> {
+                    int tx = fixture.program.startTransaction("explicit complete cap fixture disassembly");
+                    try {
+                        AddressSetView body = fixture.function.getBody();
+                        // Identical explicit start/restriction sets disable Ghidra's repeated-byte
+                        // truncation; an ordinary flowing NOP run intentionally stops early.
+                        DisassembleCommand disassemble = new DisassembleCommand(body, body, true);
+                        disassemble.enableCodeAnalysis(false);
+                        assertTrue(disassemble.applyTo(fixture.program, TaskMonitor.DUMMY));
+                        assertEquals(count, fixture.program.getListing().getNumInstructions());
+                    } finally { fixture.program.endTransaction(tx, true); }
+                    return null;
+                });
+                Map<?, ?> evidence = instructionEvidence(fixture);
+                assertEquals(evidence.toString(), count == 1000, evidence.get("complete"));
+                assertEquals((long) count, evidence.get("body_bytes"));
+                assertEquals(1000L, evidence.get("decoded_bytes"));
+                assertEquals(1000, ((List<?>) evidence.get("rows")).size());
+                if (count == 1000) assertNull(evidence.get("error"));
+                else assertTrue(((String) evidence.get("error")).contains("limit"));
+            }
+        }
+    }
+
+    @Test public void nativeInstructionEvidenceCoversOnlyNonContiguousFunctionBody() throws Exception {
+        byte[] bytes = { (byte) 0xc3, (byte) 0x90, (byte) 0xc3 };
+        try (Fixture fixture = new Fixture(bytes, new long[][] { { 0, 0 }, { 2, 2 } }, 0, 2)) {
+            Map<?, ?> evidence = instructionEvidence(fixture);
+            assertEquals(evidence.toString(), true, evidence.get("complete"));
+            assertEquals(2L, evidence.get("body_bytes"));
+            assertEquals(2L, evidence.get("decoded_bytes"));
+            List<?> rows = (List<?>) evidence.get("rows");
+            assertEquals(2, rows.size());
+            assertEquals("ram::0x1000", ((Map<?, ?>) rows.get(0)).get("address"));
+            assertEquals("ram::0x1002", ((Map<?, ?>) rows.get(1)).get("address"));
+        }
+    }
+
+    @Test public void nativeInstructionCaptureIsDetachedOnEdtAndLeavesSourceUnchanged() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            long stamp = fixture.program.getModificationNumber();
+            List<String> calls = new ArrayList<>();
+            Function observed = proxy(Function.class, (p, method, args) -> {
+                // Only describe's first body read is required on EDT; native decompiler
+                // callbacks may legally read the same function body off EDT afterwards.
+                if (method.getName().equals("getBody") && calls.isEmpty()) {
+                    assertTrue(SwingUtilities.isEventDispatchThread());
+                    assertEquals(stamp, fixture.program.getModificationNumber());
+                    calls.add("body");
+                }
+                return method.invoke(fixture.function, args);
+            });
+            Map<String, Object> snapshot = BSimFunctionSnapshot.capture(fixture.program, observed, 1000);
+            Map<?, ?> evidence = (Map<?, ?>) snapshot.get("instructions");
+            assertEquals(true, evidence.get("complete"));
+            assertFalse(calls.isEmpty());
+            assertEquals(stamp, fixture.program.getModificationNumber());
+            assertEquals(stamp, snapshot.get("modification"));
+            assertEquals(List.of(fixture.owner), fixture.program.getConsumerList());
+            GhidraSwing.runRead(() -> {
+                assertEquals("Current reference annotation", fixture.function.getComment());
+                assertEquals("current_name", fixture.function.getName());
+                assertEquals(2, fixture.program.getListing().getNumInstructions());
+                return null;
+            });
+            // Updating real database bytes after capture cannot change detached row values.
+            List<?> rows = (List<?>) evidence.get("rows");
+            Map<?, ?> first = (Map<?, ?>) rows.get(0);
+            Object operands = new ArrayList<>((List<?>) first.get("operands"));
+            GhidraSwing.runRead(() -> {
+                int tx = fixture.program.startTransaction("post-capture bytes");
+                try {
+                    fixture.program.getListing().clearCodeUnits(fixture.function.getEntryPoint(),
+                        fixture.function.getEntryPoint().add(5), false);
+                    fixture.program.getMemory().setByte(fixture.function.getEntryPoint().add(1), (byte) 43);
+                }
+                finally { fixture.program.endTransaction(tx, true); }
+                return null;
+            });
+            assertEquals("B82A000000", first.get("bytes"));
+            assertEquals(operands, first.get("operands"));
+        }
+    }
+
+    private static Map<?, ?> instructionEvidence(Fixture fixture) {
+        return (Map<?, ?>) BSimFunctionSnapshot.capture(fixture.program, fixture.function, 1000)
+            .get("instructions");
     }
 
     @Test public void readonlyHttpInspectionAllowsOnlyBoundFlatGetParameters() throws Exception {

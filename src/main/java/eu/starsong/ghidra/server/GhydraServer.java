@@ -90,6 +90,9 @@ public class GhydraServer {
             config.showJavalinBanner = false;
 
             config.router.contextPath = "/";
+            // Bounded batch/filter JSON can expand ninefold when UTF-8 URL-encoded.
+            // Raise the parser ceiling, not the connector's per-connection input buffer.
+            config.jetty.modifyHttpConfiguration(http -> http.setRequestHeaderSize(512 * 1024));
 
             config.jsonMapper(new GsonMapper());
         });

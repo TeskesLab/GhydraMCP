@@ -10,6 +10,9 @@ def compare_selected_match(client, match_id, reference_profile, reference_port,
                            profile=None, max_code_lines=1000):
     """Compare an exact query row; neither worker changes its active program.
 
+    Native instruction evidence accompanies C/signature/types; the shared core
+    aligns detached listings without importing programs across worker boundaries.
+
     Args:
         client: The configured target HTTP client.
         match_id: Opaque ID returned by the target worker's BSim query.
