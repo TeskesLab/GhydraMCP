@@ -37,6 +37,7 @@ public final class RepositoryService implements AutoCloseable {
     private static final TaskMonitor MONITOR = TaskMonitor.DUMMY;
     private static final Set<java.nio.file.attribute.PosixFilePermission> PRIVATE =
         PosixFilePermissions.fromString("rwx------");
+    private static final java.lang.reflect.Method FILE_LINK_PREDICATE = fileLinkPredicate();
 
     interface Access {
         <T> T call(String id, String grant, Function<Profile, T> operation);
@@ -582,12 +583,23 @@ public final class RepositoryService implements AutoCloseable {
         return current;
     }
 
-    private static DomainFile file(ProjectData data, String path) {
+    private static DomainFile file(ProjectData data, String path) throws ReflectiveOperationException {
         int split = path.lastIndexOf('/');
         DomainFolder parent = folder(data, split == 0 ? "/" : path.substring(0, split));
         DomainFile file = parent.getFile(path.substring(split + 1));
-        if (file == null || file.isLink() || !file.exists()) throw notFound();
+        if (file == null || !file.exists()) throw notFound();
+        if (FILE_LINK_PREDICATE == null) throw new NoSuchMethodException("Native repository link predicate is unavailable");
+        if ((Boolean) FILE_LINK_PREDICATE.invoke(file, (Object[]) null)) throw notFound();
         return file;
+    }
+
+    /** Ghidra 12 renamed the Ghidra 11 link predicate; resolve it once, fail closed if absent. */
+    private static java.lang.reflect.Method fileLinkPredicate() {
+        try { return DomainFile.class.getMethod("isLink"); }
+        catch (NoSuchMethodException renamed) {
+            try { return DomainFile.class.getMethod("isLinkFile"); }
+            catch (NoSuchMethodException unavailable) { return null; }
+        }
     }
 
     private static Map<String, Object> describe(DomainFile file) {

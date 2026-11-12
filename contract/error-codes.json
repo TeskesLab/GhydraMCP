@@ -231,28 +231,28 @@
       "side": "Java",
       "http_status": "409",
       "message": "Selected reference function address is ambiguous",
-      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:388`"
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:389`"
     },
     {
       "code": "BSIM_REFERENCE_FUNCTION_NOT_FOUND",
       "side": "Java",
       "http_status": "404",
       "message": "Selected reference function was not found at its exact address",
-      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:366`"
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:367`"
     },
     {
       "code": "BSIM_REFERENCE_IDENTITY_MISMATCH",
       "side": "Java",
       "http_status": "409",
       "message": "Reference executable MD5 does not match the selected match",
-      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:269`"
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:270`"
     },
     {
       "code": "BSIM_REFERENCE_SCOPE_MISMATCH",
       "side": "Java",
       "http_status": "403",
       "message": "Selected repository URL is outside the approved profile",
-      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:344`"
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:345`"
     },
     {
       "code": "BSIM_REFERENCE_UNAVAILABLE",
@@ -826,7 +826,7 @@
       "side": "Java",
       "http_status": "409",
       "message": "Repository service is closed",
-      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:531`"
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:532`"
     },
     {
       "code": "REPOSITORY_CONFLICT",
@@ -840,7 +840,7 @@
       "side": "Java",
       "http_status": "404",
       "message": "Repository file or folder was not found",
-      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:774`"
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:786`"
     },
     {
       "code": "REPOSITORY_READ_ONLY",
@@ -854,7 +854,7 @@
       "side": "Java",
       "http_status": "501",
       "message": "Required native Ghidra repository APIs are unavailable",
-      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:538`"
+      "origin": "`src/main/java/eu/starsong/ghidra/service/RepositoryService.java:539`"
     },
     {
       "code": "REQUEST_TIMEOUT",

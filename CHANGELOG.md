@@ -43,6 +43,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Restore Ghidra 11 repository support by resolving the native link predicate
+  across Ghidra 11/12 while continuing to reject linked repository targets.
 - Remove obsolete fixed-count tool/formatter tests that rejected valid catalogue
   additions in CI; retain the per-tool failure-handling and formatter checks.
 - Bounded BSim batch/filter queries now fit the HTTP parser after URL encoding,

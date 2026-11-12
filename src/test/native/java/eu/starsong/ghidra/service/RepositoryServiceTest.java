@@ -57,6 +57,7 @@ public class RepositoryServiceTest {
         boolean hijacked;
         boolean recover;
         boolean busy;
+        boolean link;
         boolean writable = true;
         boolean grantCheckout = true;
         int version = 1;
@@ -77,6 +78,7 @@ public class RepositoryServiceTest {
                 case "getDomainObjectClass" -> ghidra.program.model.listing.Program.class;
                 case "getPathname" -> "/" + name;
                 case "exists", "isVersioned" -> true;
+                case "isLink", "isLinkFile" -> link;
                 case "isCheckedOut" -> checkedOut;
                 case "isCheckedOutExclusive" -> exclusive;
                 case "isLatestVersion" -> version == latest;
@@ -423,6 +425,30 @@ public class RepositoryServiceTest {
         assertFalse(ws.closed); // Active GUI/headless consumer must keep its project alive.
         ctx.closeProgram();
         assertTrue(ws.closeLatch.await(5, java.util.concurrent.TimeUnit.SECONDS));
+    }
+
+    @Test public void repositoryLinksCannotOpenCheckoutOrPublish() throws Exception {
+        Access access = new Access(Set.of("read", "checkout", "checkin"));
+        NativeFile state = new NativeFile();
+        state.link = true;
+        NativeWorkspace ws = new NativeWorkspace(state, 1);
+        ActiveContext ctx = new ActiveContext();
+        try (RepositoryService service = new RepositoryService(access, (p, d) -> ws, "instance-test")) {
+            for (ThrowingCall call : new ThrowingCall[] {
+                    () -> service.open(ctx, "test", "/program", 1),
+                    () -> service.checkout("test", "/program", true),
+                    () -> service.checkin("test", "/program", "reviewed", true) }) {
+                try { call.run(); fail("Repository link was followed"); }
+                catch (RepositoryService.RepositoryException refused) {
+                    assertEquals("REPOSITORY_NOT_FOUND", refused.code());
+                    assertEquals(404, refused.status());
+                }
+            }
+            assertNull(ctx.selected);
+            assertEquals(0, state.openCalls);
+            assertEquals(0, state.checkoutCalls);
+            assertEquals(0, state.checkinCalls);
+        }
     }
 
     @Test public void openRefusesUnsavedActiveProgramWithoutNativeWork() throws Exception {

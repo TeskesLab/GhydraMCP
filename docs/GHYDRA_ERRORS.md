@@ -66,10 +66,10 @@ user meets.
 | `BSIM_NO_PROGRAM` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:353` |
 | `BSIM_NO_TARGET` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:371` |
 | `BSIM_QUERY_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:425` |
-| `BSIM_REFERENCE_ADDRESS_AMBIGUOUS` | Java | 409 | Selected reference function address is ambiguous | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:388` |
-| `BSIM_REFERENCE_FUNCTION_NOT_FOUND` | Java | 404 | Selected reference function was not found at its exact address | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:366` |
-| `BSIM_REFERENCE_IDENTITY_MISMATCH` | Java | 409 | Reference executable MD5 does not match the selected match | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:269` |
-| `BSIM_REFERENCE_SCOPE_MISMATCH` | Java | 403 | Selected repository URL is outside the approved profile | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:344` |
+| `BSIM_REFERENCE_ADDRESS_AMBIGUOUS` | Java | 409 | Selected reference function address is ambiguous | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:389` |
+| `BSIM_REFERENCE_FUNCTION_NOT_FOUND` | Java | 404 | Selected reference function was not found at its exact address | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:367` |
+| `BSIM_REFERENCE_IDENTITY_MISMATCH` | Java | 409 | Reference executable MD5 does not match the selected match | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:270` |
+| `BSIM_REFERENCE_SCOPE_MISMATCH` | Java | 403 | Selected repository URL is outside the approved profile | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:345` |
 | `BSIM_REFERENCE_UNAVAILABLE` | Python | — | — | `bridge_mcp_hydra.py:14110` |
 | `BSIM_RENAME_FAILED` | Java | 500 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:431` |
 | `BSIM_RENAME_REFUSED` | Java | 400 | (computed) | `src/main/java/eu/starsong/ghidra/resource/BSimResource.java:395` |
@@ -201,11 +201,11 @@ user meets.
 
 | Code | Side | Status | Says | Raised at |
 | --- | --- | --- | --- | --- |
-| `REPOSITORY_CLOSED` | Java | 409 | Repository service is closed | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:531` |
+| `REPOSITORY_CLOSED` | Java | 409 | Repository service is closed | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:532` |
 | `REPOSITORY_CONFLICT` | Java | 409 | Save the active program before opening another repository program. | `src/main/java/eu/starsong/ghidra/server/ActiveProgram.java:33` |
-| `REPOSITORY_NOT_FOUND` | Java | 404 | Repository file or folder was not found | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:774` |
+| `REPOSITORY_NOT_FOUND` | Java | 404 | Repository file or folder was not found | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:786` |
 | `REPOSITORY_READ_ONLY` | Java | 403 | Repository program is read-only | `src/main/java/eu/starsong/ghidra/server/ManagedProgramGuard.java:78` |
-| `REPOSITORY_UNSUPPORTED` | Java | 501 | Required native Ghidra repository APIs are unavailable | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:538` |
+| `REPOSITORY_UNSUPPORTED` | Java | 501 | Required native Ghidra repository APIs are unavailable | `src/main/java/eu/starsong/ghidra/service/RepositoryService.java:539` |
 
 ## RUNBOOK
 
