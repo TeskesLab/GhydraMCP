@@ -35,7 +35,7 @@ def headless():
 
 
 @headless.command('start')
-@click.argument('binary', type=click.Path(exists=False, dir_okay=False))
+@click.argument('binary', required=False, default="", type=click.Path(exists=False, dir_okay=False))
 @click.option('--port', '-p', type=int, default=DEFAULT_PORT,
               help=f"Port to serve on (default: {DEFAULT_PORT})")
 @click.option('--project-dir', default=None,
@@ -48,8 +48,14 @@ def headless():
               help="Path of the JDK (default: JAVA_HOME)")
 @click.option('--timeout', type=int, default=DEFAULT_TIMEOUT,
               help=f"Seconds to wait for the API (default: {DEFAULT_TIMEOUT})")
+@click.option('--repository-profile', default=None, help="Approved worker repository profile")
+@click.option('--program', default=None, help="One literal repository program path")
+@click.option('--connections-dir', default=None, help="Private worker profile directory (or GHYDRA_CONNECTIONS_DIR)")
+@click.option('--writable', is_flag=True, help="Explicitly allow repository writes; requires --commit")
+@click.option('--commit', default=None, help="Explicit repository check-in comment")
 @click.pass_context
-def start(ctx, binary, port, project_dir, project_name, ghidra_home, java_home, timeout):
+def start(ctx, binary, port, project_dir, project_name, ghidra_home, java_home, timeout,
+          repository_profile, program, connections_dir, writable, commit):
     """Analyse BINARY and serve the API from it.
 
     The run outlives this command: it keeps serving until it is stopped with
@@ -61,7 +67,6 @@ def start(ctx, binary, port, project_dir, project_name, ghidra_home, java_home, 
     """
     formatter = ctx.obj['formatter']
 
-    runner = None
     try:
         runner = HeadlessRunner(
             binary=binary,
@@ -70,13 +75,11 @@ def start(ctx, binary, port, project_dir, project_name, ghidra_home, java_home, 
             project_name=project_name,
             ghidra_home=ghidra_home,
             java_home=java_home,
+            repository_profile=repository_profile, program=program,
+            connections_dir=connections_dir, writable=writable, commit=commit,
         )
         instance = runner.start(timeout=timeout)
     except HeadlessError as exc:
-        # The run that was started is not left behind: the analyzer would
-        # keep the project busy and might start serving later.
-        if runner is not None:
-            runner.stop()
         rich_echo(formatter.format_error(exc), err=True)
         ctx.exit(1)
 
@@ -87,8 +90,10 @@ def start(ctx, binary, port, project_dir, project_name, ghidra_home, java_home, 
             "port": instance.port,
             "url": instance.url,
             "pid": instance.pid,
-            "program": instance.binary,
-            "project": f"{instance.project_dir}/{instance.project_name}",
+            "program": instance.program or instance.binary,
+            "project": instance.repository_profile or f"{instance.project_dir}/{instance.project_name}",
+            "repository_profile": instance.repository_profile,
+            "read_only": bool(instance.repository_profile and not instance.writable),
             "log": instance.log,
         },
     }
@@ -137,24 +142,22 @@ def stop(ctx, port, timeout):
             f"no headless run is known on port {port}"), err=True)
         ctx.exit(1)
 
-    runner = HeadlessRunner(
-        binary=instance.binary or "missing",
-        port=port,
-        project_dir=instance.project_dir,
-        project_name=instance.project_name,
-        ghidra_home=instance.ghidra_home,
-        java_home=instance.java_home,
-        host=instance.host,
-    )
-    runner.instance = instance
-    saved = runner.stop(timeout)
+    runner = HeadlessRunner.from_instance(instance)
+    try:
+        saved = runner.stop(timeout)
+    except HeadlessError as exc:
+        rich_echo(formatter.format_error(exc), err=True)
+        ctx.exit(1)
 
     payload = {
         "success": True,
         "result": {
             "message": f"The run on port {port} was stopped",
             "port": port,
-            "saved": saved,
+            "saved": instance.repository_saved if instance.repository_profile else saved,
+            "checked_in": instance.checked_in if instance.repository_profile else None,
+            "confirmation_unknown": bool(instance.repository_profile and
+                                         (instance.repository_saved is None or instance.checked_in is None)),
         },
     }
     click.echo(formatter.format_simple_result(payload))

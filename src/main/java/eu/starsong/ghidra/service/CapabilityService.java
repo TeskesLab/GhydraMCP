@@ -51,21 +51,31 @@ public final class CapabilityService {
         features.put("call_path", true);
         features.put("xrefs_by_name", true);
         features.put("ui_cursor", !ctx.isHeadless());
-        // Discovered by loading the class, never from the Ghidra version: a
-        // build may ship without the BSim feature (R1).
-        features.put("bsim", eu.starsong.ghidra.service.BSimService.available());
-        // Ingest writes to the signature database: present only when the engine
-        // is there *and* a database is named (it creates the file if missing).
-        features.put("bsim_ingest", eu.starsong.ghidra.service.BSimService.available()
-            && eu.starsong.ghidra.service.BSimService.database() != null);
-        // A query needs the engine, a named database and the file on disk.
-        features.put("bsim_query", eu.starsong.ghidra.service.BSimService.available()
-            && eu.starsong.ghidra.service.BSimService.databaseExists());
-        // Applying a match writes to the program: it needs the query and a
-        // writable program, and the read-only guard blocks the route otherwise.
-        features.put("bsim_apply_names",
-            eu.starsong.ghidra.service.BSimService.available()
-            && eu.starsong.ghidra.service.BSimService.databaseExists());
+        boolean bsim = eu.starsong.ghidra.service.BSimService.available();
+        boolean query = false;
+        boolean ingest = false;
+        try {
+            var status = eu.starsong.ghidra.service.BSimService.status();
+            query = Boolean.TRUE.equals(status.get("ready"))
+                && !Boolean.FALSE.equals(status.get("database_exists"));
+            ingest = Boolean.TRUE.equals(status.get("can_ingest"));
+            for (var profile : eu.starsong.ghidra.connection.ConnectionProfiles.list()) {
+                if (!"bsim".equals(profile.get("kind"))) continue;
+                var grants = (java.util.Collection<?>) profile.get("permissions");
+                query |= grants.contains("query");
+                ingest |= grants.contains("ingest");
+            }
+        } catch (eu.starsong.ghidra.connection.ConnectionException | IllegalArgumentException invalid) {
+            // A bad optional connection must not prevent instance discovery.
+        }
+        features.put("bsim", bsim);
+        features.put("bsim_ingest", bsim && ingest);
+        features.put("bsim_query", bsim && query);
+        features.put("bsim_overview", bsim && query);
+        features.put("bsim_batch_query", bsim && query);
+        features.put("bsim_apply_names", bsim && query);
+        features.put("connections", eu.starsong.ghidra.connection.ConnectionProfiles.enabled());
+        features.put("native_repositories", eu.starsong.ghidra.connection.ConnectionProfiles.enabled());
         features.put("read_only", eu.starsong.ghidra.middleware.ReadOnlyGuard.enabled());
         features.put("audit_log", eu.starsong.ghidra.middleware.AuditTrail.enabled());
         features.put("capabilities", true);

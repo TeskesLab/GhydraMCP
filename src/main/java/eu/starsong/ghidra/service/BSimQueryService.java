@@ -1,7 +1,6 @@
 package eu.starsong.ghidra.service;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -113,6 +112,42 @@ public final class BSimQueryService {
     public static Map<String, Object> query(Program program, String address,
             String name, int maxMatches, double minSimilarity,
             double minSignificance, ExecutableFilter filter) {
+        return queryInternal(program, address, name, maxMatches, minSimilarity,
+            minSignificance, filter, null);
+    }
+
+    /**
+     * Query with exact executable/architecture/compiler metadata and conjunctive executable categories.
+     *
+     * @param program the open program
+     * @param address the function address, or null when a name is used
+     * @param name the function name, or null when an address is used
+     * @param maxMatches the existing match limit, 0 for the default
+     * @param minSimilarity the existing similarity floor, 0 for the default
+     * @param minSignificance the existing significance floor, 0 for the default
+     * @param executable exact native executable name, or null when absent
+     * @param architecture exact native architecture identifier, or null when absent
+     * @param compiler exact native compiler identifier, or null when absent
+     * @param categories JSON object mapping each category name to one string value, or null
+     * @return the query report, including the actually applied {@code filters}
+     */
+    public static Map<String, Object> queryWithFilters(Program program, String address,
+            String name, int maxMatches, double minSimilarity, double minSignificance,
+            String executable, String architecture, String compiler, String categories) {
+        BSimMetadataFilter metadata;
+        try {
+            metadata = BSimMetadataFilter.parse(executable, architecture, compiler, categories);
+        } catch (IllegalArgumentException invalid) {
+            return BSimDatabase.failure(new LinkedHashMap<>(), "BSIM_FILTER_INVALID",
+                invalid.getMessage());
+        }
+        return queryInternal(program, address, name, maxMatches, minSimilarity,
+            minSignificance, null, metadata);
+    }
+
+    private static Map<String, Object> queryInternal(Program program, String address,
+            String name, int maxMatches, double minSimilarity, double minSignificance,
+            ExecutableFilter filter, BSimMetadataFilter metadata) {
         Map<String, Object> data = new LinkedHashMap<>();
         long started = System.currentTimeMillis();
         String database = BSimService.database();
@@ -147,15 +182,20 @@ public final class BSimQueryService {
                     ? "no function at " + address
                     : "no function named " + name + " in this program");
         }
-        if (function.getBody() == null || function.getBody().getNumAddresses() == 0) {
+        boolean hasBody = GhidraSwing.runRead(() -> {
+            data.put("program", program.getName());
+            data.put("function", function.getName());
+            data.put("address", function.getEntryPoint().toString());
+            data.put("source_address", BSimMatchService.qualifiedAddress(function));
+            data.put("source_modification", program.getModificationNumber());
+            return function.getBody() != null && function.getBody().getNumAddresses() != 0;
+        });
+        if (!hasBody) {
             return BSimDatabase.failure(data, "BSIM_NO_BODY",
                 "the function has no body, so no signature can be made for it");
         }
 
         data.put("database", database);
-        data.put("program", program.getName());
-        data.put("function", function.getName());
-        data.put("address", function.getEntryPoint().toString());
         data.put("min_similarity", similarity);
         data.put("min_significance", significance);
         data.put("max_matches", limit);
@@ -166,9 +206,6 @@ public final class BSimQueryService {
             return data;
         }
         try {
-            ClassLoader loader = BSimDatabase.loader();
-            Class<?> databaseClass = Class.forName(BSimDatabase.FUNCTION_DATABASE,
-                true, loader);
             Object databaseInfo = connection.getClass().getMethod("getInfo")
                 .invoke(connection);
             Object vectorFactory = connection.getClass()
@@ -177,31 +214,22 @@ public final class BSimQueryService {
                 return BSimDatabase.failure(data, "BSIM_INIT_FAILED",
                     "the signature database answered without its configuration");
             }
-
-            Class<?> generatorClass = Class.forName(BSimDatabase.GEN_SIGNATURES,
-                true, loader);
-            signatureGenerator = generatorClass.getConstructor(boolean.class)
-                .newInstance(Boolean.valueOf(
-                    BSimDatabase.booleanField(databaseInfo, "trackcallgraph")));
-            generatorClass.getMethod("setVectorFactory",
-                    Class.forName("generic.lsh.vector.LSHVectorFactory", true, loader))
-                .invoke(signatureGenerator, vectorFactory);
-            BSimDatabase.addList(signatureGenerator, databaseInfo,
-                "addExecutableCategories", "execats");
-            BSimDatabase.addList(signatureGenerator, databaseInfo, "addFunctionTags",
-                "functionTags");
-            String dateColumn = BSimDatabase.stringField(databaseInfo, "dateColumnName");
-            if (dateColumn != null && !dateColumn.isBlank()) {
-                generatorClass.getMethod("addDateColumnName", String.class)
-                    .invoke(signatureGenerator, dateColumn);
+            data.put("available_categories", BSimMetadataFilter.availableCategories(databaseInfo));
+            Object nativeMetadata = null;
+            if (metadata != null && !metadata.isEmpty()) {
+                try {
+                    nativeMetadata = metadata.build(connection, databaseInfo);
+                } catch (IllegalArgumentException invalid) {
+                    return BSimDatabase.failure(data, "BSIM_FILTER_INVALID", invalid.getMessage());
+                } catch (Throwable unsupported) {
+                    return BSimDatabase.failure(data, "BSIM_FILTER_UNSUPPORTED",
+                        "the database cannot apply the requested metadata filters ("
+                            + BSimDatabase.describe(BSimDatabase.unwrap(unsupported)) + ")");
+                }
             }
 
-            String[] location = BSimDatabase.projectLocation(program);
-            generatorClass.getMethod("openProgram", Program.class, String.class,
-                    String.class, String.class, String.class, String.class)
-                .invoke(signatureGenerator, program, null, null, null,
-                    location[0], location[1]);
-            // One function: the one being asked about.
+            signatureGenerator = newGenerator(connection, databaseInfo, program);
+            Class<?> generatorClass = signatureGenerator.getClass();
             generatorClass.getMethod("scanFunction", Function.class)
                 .invoke(signatureGenerator, function);
 
@@ -212,32 +240,11 @@ public final class BSimQueryService {
                     "no signature could be generated for this function");
             }
 
-            Class<?> queryClass = Class.forName(
-                "ghidra.features.bsim.query.protocol.QueryNearest", true, loader);
-            Object query = queryClass.getConstructor().newInstance();
-            queryClass.getField("manage").set(query, description);
-            queryClass.getField("thresh").set(query, Double.valueOf(similarity));
-            queryClass.getField("signifthresh").set(query,
-                Double.valueOf(significance));
-            queryClass.getField("max").set(query, Integer.valueOf(limit));
-            if (filter != null && filter.isApplied()) {
-                try {
-                    queryClass.getField("bsimFilter").set(query, filter.bsimFilter());
-                } catch (Throwable missing) {
-                    // The narrowing is optional: without it the query still runs,
-                    // only with the weaker, corpus-wide limit. The reason is kept
-                    // so the caller can say what happened.
-                    filter.disable("the BSim query has no filter field ("
-                        + BSimDatabase.describe(BSimDatabase.unwrap(missing)) + ")");
-                }
-            }
-
-            Object response = queryClass.getMethod("execute", databaseClass)
-                .invoke(query, connection);
+            Object response = executeNearest(connection, description, limit, similarity,
+                significance, nativeMetadata, filter);
             if (response == null) {
                 return BSimDatabase.failure(data, "BSIM_QUERY_FAILED",
-                    "the database refused the query: "
-                        + BSimDatabase.lastError(connection));
+                    "the database refused the query");
             }
 
             List<Map<String, Object>> matches = new ArrayList<>();
@@ -258,6 +265,7 @@ public final class BSimQueryService {
             }
 
             data.put("success", Boolean.TRUE);
+            data.put("filters", metadata == null ? Map.of() : metadata.predicates());
             data.put("matches", matches);
             data.put("returned", matches.size());
             // The response carries what BSim itself considered; the loop above
@@ -282,10 +290,58 @@ public final class BSimQueryService {
             return data;
         } finally {
             BSimDatabase.disposeQuietly(signatureGenerator);
-            BSimDatabase.closeQuietly(connection);
+            BSimDatabase.release(connection, database);
         }
     }
 
+
+    /** Shared native setup for single and multi-source queries. Never called on the EDT. */
+    static Object newGenerator(Object connection, Object info, Program program) throws Exception {
+        ClassLoader loader = BSimDatabase.loader();
+        Class<?> type = Class.forName(BSimDatabase.GEN_SIGNATURES, true, loader);
+        Object generator = type.getConstructor(boolean.class)
+            .newInstance(BSimDatabase.booleanField(info, "trackcallgraph"));
+        try {
+            type.getMethod("setVectorFactory",
+                Class.forName("generic.lsh.vector.LSHVectorFactory", true, loader))
+                .invoke(generator, connection.getClass().getMethod("getLSHVectorFactory").invoke(connection));
+            BSimDatabase.addList(generator, info, "addExecutableCategories", "execats");
+            BSimDatabase.addList(generator, info, "addFunctionTags", "functionTags");
+            String date = BSimDatabase.stringField(info, "dateColumnName");
+            if (date != null && !date.isBlank()) type.getMethod("addDateColumnName", String.class).invoke(generator, date);
+            String[] location = GhidraSwing.runRead(() -> BSimDatabase.projectLocation(program));
+            type.getMethod("openProgram", Program.class, String.class, String.class,
+                String.class, String.class, String.class)
+                .invoke(generator, program, null, null, null, location[0], location[1]);
+            return generator;
+        } catch (Exception failed) {
+            BSimDatabase.disposeQuietly(generator);
+            throw failed;
+        }
+    }
+
+    /** One native QueryNearest over the complete accumulated DescriptionManager. */
+    static Object executeNearest(Object connection, Object descriptions, int limit,
+            double similarity, double significance, Object metadata, ExecutableFilter filter)
+            throws Exception {
+        ClassLoader loader = BSimDatabase.loader();
+        Class<?> type = Class.forName("ghidra.features.bsim.query.protocol.QueryNearest", true, loader);
+        Object query = type.getConstructor().newInstance();
+        type.getField("manage").set(query, descriptions);
+        type.getField("thresh").set(query, similarity);
+        type.getField("signifthresh").set(query, significance);
+        type.getField("max").set(query, limit);
+        if (metadata != null) type.getField("bsimFilter").set(query, metadata);
+        if (filter != null && filter.isApplied()) {
+            try { type.getField("bsimFilter").set(query, filter.bsimFilter()); }
+            catch (ReflectiveOperationException unsupported) {
+                filter.disable("the BSim query has no filter field ("
+                    + BSimDatabase.describe(BSimDatabase.unwrap(unsupported)) + ")");
+            }
+        }
+        return type.getMethod("execute", Class.forName(BSimDatabase.FUNCTION_DATABASE, true, loader))
+            .invoke(query, connection);
+    }
 
     // ==================================================== the executable filter
     //
@@ -443,7 +499,7 @@ public final class BSimQueryService {
                 "the executable list could not be read ("
                     + BSimDatabase.describe(BSimDatabase.unwrap(unavailable)) + ")");
         } finally {
-            BSimDatabase.closeQuietly(connection);
+            BSimDatabase.release(connection, database);
         }
     }
 
@@ -522,7 +578,11 @@ public final class BSimQueryService {
         return null;
     }
 
-    private static Map<String, Object> describeNote(Object note) {
+    static Map<String, Object> describeNote(Object note) {
+        return describeNote(note, true);
+    }
+
+    static Map<String, Object> describeNote(Object note, boolean rounded) {
         Map<String, Object> match = new LinkedHashMap<>();
         Object described = BSimDatabase.call(note, "getFunctionDescription");
         String function = null;
@@ -545,21 +605,34 @@ public final class BSimQueryService {
                     executable = (String) BSimDatabase.call(exe, "getName");
                 }
                 path = (String) BSimDatabase.call(exe, "getPath");
+                match.put("executable_md5", BSimDatabase.call(exe, "getMd5"));
+                match.put("architecture", BSimDatabase.call(exe, "getArchitecture"));
+                match.put("compiler", BSimDatabase.call(exe, "getNameCompiler"));
+                String repositoryUrl = BSimMatchService.safeRepositoryUrl(
+                    BSimDatabase.call(exe, "getURLString"));
+                match.put("repository_url", repositoryUrl);
+                boolean referenceAvailable = repositoryUrl != null
+                    && String.valueOf(match.get("executable_md5")).matches("(?i)[0-9a-f]{32}")
+                    && !Boolean.TRUE.equals(BSimDatabase.call(exe, "isLibrary"));
+                match.put("reference_available", referenceAvailable);
+                if (!referenceAvailable) {
+                    match.put("reference_reason",
+                        "The indexed match has no usable repository URL and executable identity.");
+                }
             }
         }
         match.put("function", function);
         match.put("address", address);
         match.put("executable", executable);
         match.put("path", path);
-        match.put("similarity", doubleOf(note, "getSimilarity"));
-        match.put("significance", doubleOf(note, "getSignificance"));
+        match.put("similarity", doubleOf(note, "getSimilarity", rounded));
+        match.put("significance", doubleOf(note, "getSignificance", rounded));
         return match;
     }
 
-    private static double doubleOf(Object bean, String method) {
+    private static double doubleOf(Object bean, String method, boolean rounded) {
         Object value = BSimDatabase.call(bean, method);
-        return value instanceof Number
-            ? Math.round(((Number) value).doubleValue() * 1000.0) / 1000.0
-            : 0.0;
+        double score = value instanceof Number ? ((Number) value).doubleValue() : 0.0;
+        return rounded ? Math.round(score * 1000.0) / 1000.0 : score;
     }
 }

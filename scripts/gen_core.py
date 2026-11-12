@@ -44,6 +44,7 @@ CORE_MODULES = (
     "ghydra/core/telemetry.py",
     "ghydra/core/taint.py",
     "ghydra/core/mission.py",
+    "ghydra/core/bsim_compare.py",
 )
 
 #: Per module, the public name -> the private name the bridge uses.
@@ -148,6 +149,11 @@ CORE_RENAMES = {
     "ghydra/core/hints.py": {
         "HINT_PATTERNS": "_CORE_HINT_PATTERNS",
         "parse_goal": "_core_parse_goal",
+    },
+    "ghydra/core/bsim_compare.py": {
+        "BSimComparisonError": "_CoreBSimComparisonError",
+        "compare_match": "_core_bsim_compare_match",
+        "render_comparison": "_core_bsim_render_comparison",
     },
 }
 

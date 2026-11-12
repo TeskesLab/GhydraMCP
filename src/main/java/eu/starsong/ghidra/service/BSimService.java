@@ -1,8 +1,7 @@
 package eu.starsong.ghidra.service;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import eu.starsong.ghidra.connection.ConnectionProfiles;
+import eu.starsong.ghidra.connection.Profile;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -15,11 +14,8 @@ import java.util.Map;
  * loading the class**, never assumed from the Ghidra version — the same rule the
  * capability negotiation uses for every optional feature.
  *
- * <p>The database location is configuration, not discovery: a mission needs to
- * know *which* database a query would read, and a runbook needs it to be stable.
- * It comes from {@code -Dghidra.bsim.database} or {@code GHYDRA_BSIM_DATABASE};
- * when neither is set the answer says so instead of pretending a query would
- * work.
+ * <p>Legacy configuration accepts local H2 paths. A worker profile selects a
+ * native remote backend without exposing its endpoint or mutating global config.
  */
 public final class BSimService {
 
@@ -47,74 +43,79 @@ public final class BSimService {
         }
     }
 
-    /** The configured database path, or null when none is configured. */
+    /** A safe database identity: selected profile ID, or a legacy local path. */
     public static String database() {
+        Profile profile = ConnectionProfiles.currentBsim();
+        if (profile != null) {
+            return profile.id();
+        }
         String property = System.getProperty(PROPERTY_DATABASE);
-        if (property != null && !property.isBlank()) {
-            return property.trim();
+        String configured = property != null && !property.isBlank()
+            ? property : System.getenv(ENV_DATABASE);
+        return configured == null || configured.isBlank() ? null
+            : localPath(configured.trim());
+    }
+
+    /** Legacy configuration is a local path only; native URLs require profiles. */
+    static String localPath(String value) {
+        boolean windowsDrive = value.matches("^[A-Za-z]:[\\\\/].*");
+        if (!windowsDrive && value.matches("^[A-Za-z][A-Za-z0-9+.-]*:.*")) {
+            throw new IllegalArgumentException(
+                "legacy BSim configuration accepts local paths only; use a worker profile");
         }
-        String environment = System.getenv(ENV_DATABASE);
-        if (environment != null && !environment.isBlank()) {
-            return environment.trim();
-        }
-        return null;
+        return value;
+    }
+
+    static boolean remote() {
+        Profile profile = ConnectionProfiles.currentBsim();
+        return profile != null && !"h2".equals(profile.backend());
+    }
+
+    /** Internal H2 path, never a remote endpoint. */
+    static String localDatabase(String database) {
+        Profile profile = ConnectionProfiles.currentBsim();
+        return profile == null ? localPath(database) : profile.endpoint();
     }
 
     /**
-     * Is the configured database on disk?
-     *
-     * <p>An H2 database is not the path that names it: the file is
-     * {@code <path>.mv.db} (older builds used {@code .h2.db}). Measured: a
-     * 120 KB database created by an ingest was reported as "does not exist"
-     * because only the bare path was checked — so every suffix H2 can use is
-     * checked, and the bare path too, for a path that is a file already.
+     * Whether a query may attempt to open this database. Remote existence is
+     * established by native initialize(), never by probing the worker filesystem.
      */
     public static boolean databaseExists() {
         String configured = database();
-        if (configured == null) {
-            return false;
-        }
-        for (String suffix : new String[] { ".mv.db", ".h2.db", "" }) {
-            try {
-                Path path = Paths.get(configured + suffix);
-                if (Files.exists(path)) {
-                    return true;
-                }
-            } catch (RuntimeException invalid) {
-                // A path the platform cannot express is "not there".
-            }
-        }
-        return false;
+        return configured != null
+            && (remote() || BSimDatabase.exists(localDatabase(configured)));
     }
 
-    /**
-     * The whole answer, in one payload.
-     *
-     * <p>{@code ready} is the only field a client should branch on: it is true
-     * only when the engine is present *and* a database is configured, and
-     * {@code reason} says what is missing otherwise.
-     */
+    /** Safe configuration status; remote status does not connect or expose URLs. */
     public static Map<String, Object> status() {
         Map<String, Object> data = new LinkedHashMap<>();
         boolean available = available();
         String configured = database();
-        boolean exists = available && configured != null && databaseExists();
+        Profile profile = ConnectionProfiles.currentBsim();
+        boolean remote = remote();
+        boolean exists = configured != null && databaseExists();
+        boolean query = profile == null || profile.permissions().contains("query");
+        boolean ingest = profile == null || profile.permissions().contains("ingest");
         data.put("available", available);
         data.put("database", configured);
-        data.put("database_exists", exists);
-        data.put("ready", available && configured != null);
-        // Ingest creates the database when it does not exist yet, so it needs
-        // only the engine and a name; a query needs the file on disk.
-        data.put("can_ingest", available && configured != null);
+        data.put("profile", profile == null ? null : profile.id());
+        data.put("backend", profile == null ? "h2" : profile.backend());
+        data.put("database_exists", remote ? null : exists);
+        data.put("connection_checked", false);
+        data.put("ready", available && configured != null && query);
+        data.put("can_ingest", available && configured != null && ingest);
         if (!available) {
-            data.put("reason", "this Ghidra build has no BSim query engine "
-                + "(" + BSim_MARKER + " is not on the classpath)");
+            data.put("reason", "this Ghidra build has no BSim query engine");
         } else if (configured == null) {
-            data.put("reason", "no signature database is configured; set -D"
-                + PROPERTY_DATABASE + "=<path> or " + ENV_DATABASE + "=<path>");
+            data.put("reason", "no signature database is configured; select a worker "
+                + "profile or configure a local H2 path");
+        } else if (!query) {
+            data.put("reason", "the selected profile does not grant query permission");
+        } else if (remote) {
+            data.put("reason", "remote database availability is checked when an operation opens it");
         } else if (!exists) {
-            data.put("reason", "the configured signature database does not exist: "
-                + configured);
+            data.put("reason", "the local signature database does not exist; ingest a program first");
         } else {
             data.put("reason", null);
         }

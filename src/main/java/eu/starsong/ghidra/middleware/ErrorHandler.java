@@ -21,6 +21,13 @@ public class ErrorHandler implements ExceptionHandler<Exception> {
 
     @Override
     public void handle(@NotNull Exception e, @NotNull Context ctx) {
+        if (eu.starsong.ghidra.connection.ConnectionProfiles.enabled()) {
+            Msg.warn(this, "A credential worker request failed; native exception details were withheld.");
+            ctx.status(HttpStatus.INTERNAL_SERVER_ERROR);
+            ctx.json(Response.error(ctx, port, "INTERNAL_ERROR",
+                "The credential worker could not complete this request.").build());
+            return;
+        }
         Msg.error(this, "Unhandled exception in " + ctx.path(), e);
 
         ctx.status(HttpStatus.INTERNAL_SERVER_ERROR);

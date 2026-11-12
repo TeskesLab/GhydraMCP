@@ -35,11 +35,14 @@ DOCUMENT = os.path.join(DOCS, "GHYDRA_ERRORS.md")
 JAVA_PATTERN = re.compile(
     r'Response\.error\([^,]+,[^,]+,\s*"([A-Z0-9_]+)",\s*(?:"([^"]{0,120})"|([A-Za-z_][\w.]*))')
 JAVA_STATUS = re.compile(r'ctx\.status\((\d{3})\)')
+JAVA_EXCEPTION_PATTERN = re.compile(
+    r'new (?:ConnectionException|RepositoryException)\(\s*"([A-Z0-9_]+)",\s*(\d{3}),\s*"([^"]{0,240})"')
 PYTHON_PATTERNS = (
     re.compile(r'"code":\s*"([A-Z][A-Z0-9_]+)"'),
     re.compile(r'code="([A-Z][A-Z0-9_]+)"'),
     re.compile(r'ERROR_[A-Z0-9_]*\s*=\s*"([A-Z][A-Z0-9_]+)"'),
     re.compile(r'"code"\s*:\s*"([A-Z][A-Z0-9_]+)"'),
+    re.compile(r'(?:_fail|ConnectionError)\(\s*"([A-Z][A-Z0-9_]+)"'),
 )
 
 #: Strings that look like codes and are not (values, header names, versions).
@@ -57,6 +60,7 @@ DOMAIN_PREFIXES = {
     "ANALYSIS", "ASSERTION", "BSIM", "CACHE", "DIFF", "DOCTOR", "EVIDENCE",
     "FLEET", "FUNCTION", "HEADLESS", "KUNA", "MISSION", "REPORT", "RUNBOOK",
     "SCRIPTS", "SESSION", "SNAPSHOT", "TASK", "TELEMETRY", "TOOL", "X64DBG",
+    "CONNECTION", "REPOSITORY",
 }
 
 #: Where the generic codes are shown, and what the section says.
@@ -96,6 +100,13 @@ def collect_java() -> dict:
                 "message": message.strip() or ("(computed)" if match.group(3) else ""),
                 "status": statuses[-1] if statuses else "",
                 "side": "Java",
+            })
+        for match in JAVA_EXCEPTION_PATTERN.finditer(text):
+            code, status, message = match.groups()
+            line = text.count("\n", 0, match.start()) + 1
+            codes.setdefault(code, {
+                "where": f"`{relative}:{line}`", "message": message.strip(),
+                "status": status, "side": "Java",
             })
     return codes
 

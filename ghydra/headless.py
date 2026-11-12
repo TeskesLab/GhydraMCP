@@ -32,10 +32,9 @@ import shutil
 import signal
 import socket
 import subprocess
-import sys
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
 from . import launcher as ghidra_launcher
@@ -94,6 +93,12 @@ class HeadlessInstance:
     # token says which runner made the claim.
     reserved: bool = False
     token: str = ""
+    repository_profile: str = ""
+    program: str = ""
+    writable: bool = False
+    commit: Optional[str] = None
+    repository_saved: Optional[bool] = None
+    checked_in: Optional[bool] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -126,7 +131,8 @@ def stop_file_path(port: int) -> str:
     project is left unlocked. Killing the process instead would leave the
     lock file behind, and the next run would refuse to open the project.
     """
-    return os.path.join(os.path.expanduser("~"), ".ghidra", f"headless-{int(port)}.stop")
+    directory = os.environ.get("GHYDRA_STATE_DIR") or os.path.join(os.path.expanduser("~"), ".ghidra")
+    return os.path.join(directory, f"headless-{int(port)}.stop")
 
 
 def clear_stop_flag(port: int) -> None:
@@ -366,6 +372,7 @@ def build_command(
     process: bool = False,
     overwrite: bool = False,
     extra: Optional[List[str]] = None,
+    empty: bool = False,
 ) -> List[str]:
     """The command that starts the headless run.
 
@@ -379,7 +386,7 @@ def build_command(
     command = [launcher, project_dir, project_name]
     if process:
         command += ["-process", binary_name(binary)]
-    else:
+    elif not empty:
         command += ["-import", binary]
         if overwrite:
             command += ["-overwrite"]
@@ -599,6 +606,20 @@ def process_alive(pid: int) -> bool:
     return True
 
 
+def _repository_program(program: Optional[str]) -> str:
+    """Accept one literal repository program, never a native pattern or option."""
+    text = program or ""
+    if text.startswith("/"):
+        text = text[1:]
+    parts = text.split("/")
+    if (not text or any(not p or p in (".", "..") or p.startswith("-") for p in parts)
+            or any(c in text for c in "\\*?%:#")
+            or any(ord(c) < 32 or ord(c) == 127 for c in text)):
+        raise HeadlessError("Specify one literal repository program path.",
+                            code="CONNECTION_PROFILE_INVALID")
+    return text
+
+
 class HeadlessRunner:
     """A headless run: started, waited for, and stopped again.
 
@@ -608,7 +629,7 @@ class HeadlessRunner:
 
     def __init__(
         self,
-        binary: str,
+        binary: str = "",
         port: int = DEFAULT_PORT,
         project_dir: Optional[str] = None,
         project_name: Optional[str] = None,
@@ -616,8 +637,31 @@ class HeadlessRunner:
         java_home: Optional[str] = None,
         host: str = "127.0.0.1",
         configured_java_homes: Optional[List[str]] = None,
+        repository_profile: Optional[str] = None,
+        program: Optional[str] = None,
+        connections_dir: Optional[str] = None,
+        writable: bool = False,
+        commit: Optional[str] = None,
     ) -> None:
-        self.binary = os.path.abspath(os.path.expanduser(binary))
+        self.repository_profile = repository_profile or ""
+        self.program = _repository_program(program) if self.repository_profile else ""
+        if self.repository_profile and (binary or project_dir or project_name):
+            raise HeadlessError("Repository mode cannot use a binary or local project.",
+                                code="CONNECTION_PROFILE_INVALID")
+        if not self.repository_profile and (program or writable or commit is not None):
+            raise HeadlessError("Repository options require a repository profile.",
+                                code="CONNECTION_PROFILE_REQUIRED")
+        if self.repository_profile and (writable != (commit is not None) or
+                                       (commit is not None and
+                                        (not commit.strip() or len(commit) > 4096 or
+                                         any(ord(c) < 32 for c in commit)))):
+            raise HeadlessError("Repository writes require --writable and a commit comment.",
+                                code="CONNECTION_PERMISSION_DENIED")
+        directory = connections_dir or os.environ.get("GHYDRA_CONNECTIONS_DIR", "")
+        self.connections_dir = os.path.abspath(os.path.expanduser(directory)) if directory else ""
+        self.writable = bool(writable)
+        self.commit = commit
+        self.binary = "" if self.repository_profile else os.path.abspath(os.path.expanduser(binary))
         self.port = int(port)
         if not 1 <= self.port <= 65535:
             # The port is refused here, before anything is started: the
@@ -636,11 +680,17 @@ class HeadlessRunner:
         self.requested_java_home = java_home or ""
         self.java_home = java_home or os.environ.get(ENV_JAVA_HOME, "")
         self.configured_java_homes = list(configured_java_homes or [])
-        self.project_name = project_name or default_project_name(self.binary)
-        if project_dir:
+        if self.repository_profile:
+            identity = json.dumps([self.repository_profile, self.program], separators=(",", ":"))
+            digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+            self.project_name = "repository-" + digest
+            self.project_dir = os.path.join(default_project_dir(), "repository-workers")
+        elif project_dir:
             self.project_dir = os.path.abspath(os.path.expanduser(project_dir))
         else:
             self.project_dir = default_project_dir()
+        if not self.repository_profile:
+            self.project_name = project_name or default_project_name(self.binary)
         self.process: Optional[subprocess.Popen] = None
         self.instance = HeadlessInstance(
             port=self.port,
@@ -652,6 +702,10 @@ class HeadlessRunner:
             java_home=self.java_home,
             log=log_path(self.port),
             started_at=time.time(),
+            repository_profile=self.repository_profile,
+            program=self.program,
+            writable=self.writable,
+            commit=self.commit,
         )
 
     # -- the command ---------------------------------------------------
@@ -717,13 +771,14 @@ class HeadlessRunner:
         run somewhere else, and the log of the run is the only place the
         reason for a failure is.
         """
-        process = self.program_in_project()
+        empty = bool(self.repository_profile)
+        process = not empty and self.program_in_project()
         current = process and project_is_current(
             self.project_dir, self.project_name, self.binary)
         overwrite = process and not current
         utility = os.path.join(
             self.ghidra_home, "Ghidra", "Framework", "Utility", "lib", "Utility.jar")
-        if os.path.isfile(utility):
+        if empty or os.path.isfile(utility):
             java = self.resolve_java_home()
             try:
                 return ghidra_launcher.headless_command(
@@ -737,6 +792,9 @@ class HeadlessRunner:
                     overwrite=overwrite,
                     script=SCRIPT_NAME,
                     script_args=[f"port={self.port}"],
+                    empty=empty,
+                    connections_dir=self.connections_dir or None,
+                    repository_profile=self.repository_profile or None,
                 )
             except LauncherError as exc:
                 raise HeadlessError(str(exc), code=exc.code) from None
@@ -748,7 +806,153 @@ class HeadlessRunner:
             self.port,
             process=current,
             overwrite=overwrite,
+            empty=empty,
         )
+
+    def _repository_request(self, method: str, path: str, **kwargs) -> Dict[str, Any]:
+        """Call the worker using only opaque selection data; never echo native errors."""
+        import requests
+
+        try:
+            response = getattr(requests, method)(self.instance.url + path, timeout=30, **kwargs)
+            payload = response.json()
+        except Exception:
+            raise HeadlessError("The repository worker request could not be confirmed.",
+                                code="CONNECTION_FAILED") from None
+        if not response.ok or not isinstance(payload, dict) or payload.get("success") is not True:
+            error = payload.get("error") if isinstance(payload, dict) else None
+            code = error.get("code") if isinstance(error, dict) else None
+            if not isinstance(code, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", code):
+                code = "CONNECTION_FAILED"
+            raise HeadlessError("The repository worker refused the operation.", code=code)
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise HeadlessError("The repository worker response was not confirmed.",
+                                code="CONNECTION_FAILED")
+        return result
+
+    def _repository_entry(self) -> Dict[str, Any]:
+        """Read fresh metadata for exactly the originally approved program."""
+        path = "/" + self.program
+        folder = path.rpartition("/")[0] or "/"
+        offset = 0
+        while True:
+            page = self._repository_request(
+                "get", "/repositories/files",
+                params={"profile": self.repository_profile, "path": folder,
+                        "offset": offset, "limit": 1000})
+            entries = page.get("entries")
+            if not isinstance(entries, list):
+                raise HeadlessError("The repository listing was not confirmed.", code="CONNECTION_FAILED")
+            entry = next((row for row in entries if isinstance(row, dict)
+                          and row.get("path") == path and row.get("type") == "file"), None)
+            if entry is not None:
+                return entry
+            if not page.get("has_more"):
+                raise HeadlessError("The approved repository program was not found.",
+                                    code="REPOSITORY_NOT_FOUND")
+            if not entries:
+                raise HeadlessError("The repository listing did not advance.", code="CONNECTION_FAILED")
+            offset += len(entries)
+
+    def _open_repository(self) -> None:
+        """Browse the approved folder and activate a snapshot or exclusive checkout."""
+        selection = {"profile": self.repository_profile}
+        status = self._repository_request("get", "/repositories", params=selection)
+        permissions = status.get("permissions")
+        if self.writable and (not isinstance(permissions, list)
+                              or not {"checkout", "checkin"}.issubset(permissions)):
+            raise HeadlessError("Repository writes require checkout and check-in grants.",
+                                code="CONNECTION_PERMISSION_DENIED")
+        entry = self._repository_entry()
+        path = "/" + self.program
+        if self.writable:
+            if entry.get("checked_out") is True:
+                if entry.get("exclusive") is not True:
+                    raise HeadlessError("The existing local checkout is not exclusive.",
+                                        code="REPOSITORY_CONFLICT")
+                if entry.get("version") != entry.get("latest_version"):
+                    raise HeadlessError("The existing checkout is not the latest repository version.",
+                                        code="REPOSITORY_CONFLICT")
+            else:
+                checkout = self._repository_request(
+                    "post", "/repositories/checkout",
+                    json={**selection, "path": path, "exclusive": True})
+                if checkout.get("checked_out") is not True or checkout.get("exclusive") is not True:
+                    raise HeadlessError("Exclusive checkout was not confirmed.",
+                                        code="REPOSITORY_CONFLICT")
+            version = -1
+        else:
+            version = entry.get("latest_version")
+            if type(version) is not int or version < 1:
+                raise HeadlessError("The latest repository version was not confirmed.",
+                                    code="CONNECTION_FAILED")
+        opened = self._repository_request(
+            "post", "/repositories/open", json={**selection, "path": path, "version": version})
+        if (opened.get("opened") is not True
+                or opened.get("read_only") is not (not self.writable)):
+            raise HeadlessError("The requested repository access mode was not confirmed.",
+                                code="CONNECTION_PERMISSION_DENIED")
+
+    def _save_repository(self) -> bool:
+        """Persist the active workspace; this never publishes a repository version."""
+        self.instance.repository_saved = None
+        try:
+            result = self._repository_request(
+                "post", "/program/save", params={"workspace_only": "true"})
+        except HeadlessError:
+            save_state(self.instance)
+            return False
+        value = result.get("saved")
+        self.instance.repository_saved = value if type(value) is bool else None
+        if value is True:
+            self.instance.checked_in = None
+        save_state(self.instance)
+        return value is True or (value is False and result.get("detail") == "no unsaved changes")
+
+    def _checkin_repository(self) -> None:
+        """Publish only the originally approved selection, retaining its open checkout."""
+        previously_confirmed = self.instance.checked_in is True
+        self.instance.checked_in = None
+        save_state(self.instance)
+        entry = self._repository_entry()
+        modified = entry.get("modified_since_checkout")
+        if modified is False:
+            self.instance.checked_in = previously_confirmed
+            save_state(self.instance)
+            return
+        if modified is not True:
+            raise HeadlessError("The repository checkout's saved changes were not confirmed.",
+                                code="HEADLESS_STOP_REFUSED")
+        try:
+            result = self._repository_request(
+                "post", "/repositories/checkin",
+                json={"profile": self.repository_profile, "path": "/" + self.program,
+                      "comment": self.commit, "keep_checked_out": True})
+        except HeadlessError:
+            save_state(self.instance)
+            raise
+        value = result.get("checked_in")
+        self.instance.checked_in = value if type(value) is bool else None
+        save_state(self.instance)
+        if value is not True:
+            raise HeadlessError("Repository check-in was not confirmed.",
+                                code="HEADLESS_STOP_REFUSED")
+
+    @classmethod
+    def from_instance(cls, instance: HeadlessInstance) -> "HeadlessRunner":
+        """Reattach for stop without opening a repository or loading credentials."""
+        runner = cls(binary=instance.binary, port=instance.port,
+                     project_dir=None if instance.repository_profile else instance.project_dir or None,
+                     project_name=None if instance.repository_profile else instance.project_name or None,
+                     ghidra_home=instance.ghidra_home, java_home=instance.java_home,
+                     host=instance.host, repository_profile=instance.repository_profile or None,
+                     program=instance.program or None, writable=instance.writable,
+                     commit=instance.commit)
+        runner.project_dir = instance.project_dir or runner.project_dir
+        runner.project_name = instance.project_name or runner.project_name
+        runner.instance = instance
+        return runner
 
     def environment(self) -> Dict[str, str]:
         """The environment the run gets.
@@ -777,7 +981,7 @@ class HeadlessRunner:
         The output of the run goes to a log file: the analysis is long and
         the reasons it failed are in there.
         """
-        if not os.path.isfile(self.binary):
+        if not self.repository_profile and not os.path.isfile(self.binary):
             raise HeadlessError(
                 f"no such binary: {self.binary}", code="HEADLESS_NO_FILE")
 
@@ -832,7 +1036,7 @@ class HeadlessRunner:
 
         handle = open(self.instance.log, "a", encoding="utf-8", errors="replace")
         handle.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} "
-                     f"{' '.join(command)}\n")
+                     f"{'repository worker' if self.repository_profile else ' '.join(command)}\n")
         handle.flush()
 
         kwargs: Dict[str, Any] = {
@@ -862,13 +1066,24 @@ class HeadlessRunner:
         self.instance.pid = self.process.pid
         self.instance.reserved = False
         save_state(self.instance)
-        self.wait_ready(timeout)
+        try:
+            self.wait_ready(timeout)
+            if self.repository_profile:
+                self._open_repository()
+        except HeadlessError:
+            self._abort_start = True
+            try:
+                self.stop(timeout=5)
+            finally:
+                self._abort_start = False
+            raise
         # The provenance is written when the run is serving: the binary is
         # only in the project when the import reached that point. A run that
         # failed before it - an unexecutable launcher, a project that would
         # not open - must not leave the sidecar of a binary that is not in
         # the project, or the next run would analyse the old bytes again.
-        write_provenance(self.project_dir, self.project_name, self.binary)
+        if not self.repository_profile:
+            write_provenance(self.project_dir, self.project_name, self.binary)
         return self.instance
 
     def wait_ready(self, timeout: int = DEFAULT_TIMEOUT) -> None:
@@ -900,18 +1115,21 @@ class HeadlessRunner:
         A refused or failed save is not a save: the answer is checked, and
         the caller is told the truth instead of a promise.
         """
+        if self.repository_profile:
+            return self._save_repository()
         if not api_answers(self.host, self.port):
             return False
         import requests
 
         try:
-            response = requests.post(f"http://{self.host}:{self.port}/program/save", timeout=30)
+            response = requests.post(
+                f"http://{self.host}:{self.port}/program/save",
+                timeout=30)
         except Exception as exc:
             self._note(f"the save request failed: {exc}")
             return False
         if not response.ok:
-            self._note(f"the server refused the save: {response.status_code} "
-                       f"{response.text[:200]}")
+            self._note(f"the server refused the save: {response.status_code} {response.text[:200]}")
             return False
         return True
 
@@ -926,15 +1144,15 @@ class HeadlessRunner:
     def stop(self, timeout: int = 20) -> bool:
         """Stop the run, and let it save the analysis on its way out.
 
-        The stop file is the polite way: the script returns, the analyzer
-        saves the program and closes the project. The kill is the fallback
-        for a run that does not come back.
+        The stop file asks the script to drain requests, release selections,
+        and close its project. Normal shutdown never signals the worker.
+        Only failed-start cleanup may terminate its owned child.
 
         A process that is not ours is left alone: the state of a run that
         died is stale, and the PID it carries may belong to something else
         entirely by now.
         """
-        saved = self.save()
+        saved = False
         pid = self.instance.pid or (self.process.pid if self.process else 0)
         if not pid:
             # A start that was refused before the child was launched has no
@@ -942,7 +1160,7 @@ class HeadlessRunner:
             # erasing it would leave that run untracked - so the next start
             # would walk past the guard that remembers it.
             self._clear_own_state()
-            return saved
+            return False
 
         if not process_is_ours(pid, port=self.port):
             # The run is gone, or the PID belongs to somebody else by now.
@@ -953,7 +1171,21 @@ class HeadlessRunner:
             if not process_alive(pid):
                 self._drop_stale_lock()
             self._clear_own_state()
-            return saved
+            return False
+
+        aborting = getattr(self, "_abort_start", False)
+        if not aborting:
+            saved = self.save()
+            if self.repository_profile:
+                if not saved:
+                    raise HeadlessError("The active repository workspace could not be saved; the worker remains available.",
+                                        code="HEADLESS_STOP_REFUSED")
+                if self.writable:
+                    try:
+                        self._checkin_repository()
+                    except HeadlessError:
+                        raise HeadlessError("Repository check-in was not confirmed; the worker remains available.",
+                                            code="HEADLESS_STOP_REFUSED") from None
 
         flag = stop_file_path(self.port)
         asked = time.time()
@@ -966,6 +1198,8 @@ class HeadlessRunner:
 
         if flag and self._wait_for_exit(pid, timeout):
             self._clear_own_state()
+            if self.repository_profile:
+                return self.instance.repository_saved is True
             if not saved:
                 # The API save was refused, and in a headless run that is
                 # what the analyzer does: the program is inside the
@@ -981,6 +1215,11 @@ class HeadlessRunner:
                                "the program when the script returned")
             return saved
 
+        if not getattr(self, "_abort_start", False):
+            clear_stop_flag(self.port)
+            raise HeadlessError("The worker has not finished stopping; its process and state were retained.",
+                                code="HEADLESS_STOP_REFUSED")
+
         if os.name == "nt":
             try:
                 subprocess.run(
@@ -991,7 +1230,10 @@ class HeadlessRunner:
                 pass
         else:
             try:
-                os.kill(int(pid), signal.SIGTERM)
+                if self.repository_profile and os.getpgid(int(pid)) == int(pid):
+                    os.killpg(int(pid), signal.SIGTERM)
+                else:
+                    os.kill(int(pid), signal.SIGTERM)
             except (ProcessLookupError, PermissionError, OSError):
                 pass
             deadline = time.time() + timeout
@@ -999,7 +1241,10 @@ class HeadlessRunner:
                 time.sleep(POLL_INTERVAL)
             if not self._child_exited(pid):
                 try:
-                    os.kill(int(pid), signal.SIGKILL)
+                    if self.repository_profile and os.getpgid(int(pid)) == int(pid):
+                        os.killpg(int(pid), signal.SIGKILL)
+                    else:
+                        os.kill(int(pid), signal.SIGKILL)
                 except OSError:
                     pass
         self._drop_stale_lock()
@@ -1129,4 +1374,10 @@ def status(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> Dict[str, Any]:
         "log": instance.log,
         "started_at": instance.started_at,
         "url": instance.url,
+        "repository_profile": instance.repository_profile,
+        "program": instance.program or instance.binary,
+        "read_only": bool(instance.repository_profile and not instance.writable),
+        "saved": instance.repository_saved,
+        "checked_in": instance.checked_in,
     }
+

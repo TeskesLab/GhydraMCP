@@ -20,17 +20,8 @@ public class GhidraContext {
     private final int port;
     private final Map<Integer, ?> activeInstances;
 
-    /**
-     * The program this instance serves, when it runs without a CodeBrowser.
-     *
-     * <p>Headless there is no PluginTool and so no ProgramManager to ask: the
-     * analysed program is the one the headless run imported, and it is fixed
-     * for the life of the instance.
-     */
-    private final Program fixedProgram;
-
-    /** The project this instance serves, when it runs without a CodeBrowser. */
-    private final Project fixedProject;
+    /** Shared per-server headless selection; GUI selection stays with ProgramManager. */
+    private final ActiveProgram activeProgram;
 
     public GhidraContext(Context ctx, PluginTool tool, int port, Map<Integer, ?> activeInstances) {
         this(ctx, tool, port, activeInstances, null, null);
@@ -38,12 +29,16 @@ public class GhidraContext {
 
     public GhidraContext(Context ctx, PluginTool tool, int port, Map<Integer, ?> activeInstances,
             Program program, Project project) {
+        this(ctx, tool, port, activeInstances, new ActiveProgram(program, project));
+    }
+
+    GhidraContext(Context ctx, PluginTool tool, int port, Map<Integer, ?> activeInstances,
+            ActiveProgram activeProgram) {
         this.ctx = ctx;
         this.tool = tool;
         this.port = port;
         this.activeInstances = activeInstances;
-        this.fixedProgram = program;
-        this.fixedProject = project;
+        this.activeProgram = activeProgram;
     }
 
     // -------------------------------------------------------------------------
@@ -200,11 +195,8 @@ public class GhidraContext {
      * Get the current program. Returns null if no program is loaded.
      */
     public Program program() {
-        if (fixedProgram != null) {
-            return fixedProgram;
-        }
         if (tool == null) {
-            return null;
+            return activeProgram.program();
         }
         ProgramManager pm = tool.getService(ProgramManager.class);
         if (pm == null) {
@@ -236,13 +228,34 @@ public class GhidraContext {
      * Get the current project.
      */
     public Project project() {
-        if (fixedProject != null) {
-            return fixedProject;
-        }
         if (tool == null) {
-            return null;
+            return activeProgram.project();
         }
         return tool.getProject();
+    }
+
+    public boolean hasRepositorySelection() {
+        return tool == null && activeProgram.hasSelection();
+    }
+
+    /** Activate an already-open repository program without discarding unsaved work. */
+    public void activateProgram(Program program, Project project) {
+        eu.starsong.ghidra.util.GhidraSwing.runRead(() -> {
+            if (tool == null) {
+                activeProgram.activate(program, project);
+                return null;
+            }
+            ProgramManager manager = tool.getService(ProgramManager.class);
+            if (manager == null) throw new IllegalStateException("ProgramManager is not available");
+            Program current = manager.getCurrentProgram();
+            if (current != null && current != program && current.isChanged()) {
+                throw new eu.starsong.ghidra.connection.ConnectionException(
+                    "REPOSITORY_CONFLICT", 409, "Save the active program before opening another program.");
+            }
+            manager.openProgram(program);
+            manager.setCurrentProgram(program);
+            return null;
+        });
     }
 
     /**

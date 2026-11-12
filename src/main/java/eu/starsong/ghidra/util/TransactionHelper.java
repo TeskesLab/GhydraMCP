@@ -1,8 +1,10 @@
 package eu.starsong.ghidra.util;
 
+import eu.starsong.ghidra.connection.ConnectionException;
+import eu.starsong.ghidra.server.ManagedProgramGuard;
+import eu.starsong.ghidra.service.RepositoryService.RepositoryException;
 import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
-import ghidra.util.Swing;
 
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -22,10 +24,6 @@ public class TransactionHelper {
         if (program == null) {
             throw new IllegalArgumentException("Program cannot be null for transaction");
         }
-        if (!program.isChangeable()) {
-            throw new TransactionException(
-                "Program is not changeable (read-only/locked); cannot perform: " + transactionName);
-        }
 
         AtomicReference<T> result = new AtomicReference<>();
         // Throwable, not Exception: a jar compiled against the wrong Ghidra
@@ -39,12 +37,16 @@ public class TransactionHelper {
         AtomicReference<Long> abortedTxId = new AtomicReference<>();
 
         try {
-            // Bounded so a wedged EDT can't block the calling worker thread forever.
-            // Swing.runNow runs inline when already on the EDT, so this is reentrant.
-            Swing.runNow(() -> {
+            // Native Swing.runNow otherwise bypasses the EDT in headless mode.
+            GhidraSwing.runNow(() -> {
                 int txId = -1;
                 boolean success = false;
                 try {
+                    ManagedProgramGuard.validateMutation(program);
+                    if (!program.isChangeable()) {
+                        throw new TransactionException(
+                            "Program is not changeable (read-only/locked); cannot perform: " + transactionName);
+                    }
                     txId = program.startTransaction(transactionName, abortedTxId::set);
                     if (txId < 0) {
                         throw new TransactionException("Failed to start transaction: " + transactionName);
@@ -71,11 +73,15 @@ public class TransactionHelper {
                     }
                 }
             }, EDT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (ConnectionException | RepositoryException e) {
+            throw e;
         } catch (Exception e) {
             throw new TransactionException("Swing thread execution failed", e);
         }
 
         if (exception.get() != null) {
+            if (exception.get() instanceof ConnectionException connection) throw connection;
+            if (exception.get() instanceof RepositoryException repository) throw repository;
             // Keep user-input failures (bad type name, invalid body, ...) classified as 400
             // instead of burying them in a checked TransactionException -> 500.
             if (exception.get() instanceof IllegalArgumentException iae) {
@@ -100,6 +106,7 @@ public class TransactionHelper {
         }
         return result.get();
     }
+
 
     /**
      * Thrown when a write could not be committed — most often because the program is read-only

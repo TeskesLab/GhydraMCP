@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """Tests for the error contract (I9) and the CLI entrypoint (I4).
 
-No Ghidra, no network. The Java half is a static scan: every Response.error
-call site must pass a non-empty, code-shaped string as its first literal
-argument, so no handler can ship an error an agent cannot branch on.
+Python error rendering and CLI entrypoint behavior. Native error envelopes are
+exercised over HTTP in the isolated native connection regression suite.
 
 Run with:  python tests/test_errors.py
 """
 
 import os
-import re
 import subprocess
 import sys
 import unittest
@@ -19,71 +17,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import bridge_mcp_hydra as bridge  # noqa: E402
-
-# Response.error("CODE", ...) or Response.error(ctx, port, "CODE", ...) — the
-# leading arguments are identifiers, so the FIRST string literal after the
-# paren must be the code.
-ERROR_CALL = re.compile(r"Response\.error\(")
-CODE_LITERAL = re.compile(r'"([^"]*)"')
-CODE_FROM_EXCEPTION = re.compile(r"\.errorCode\(\)\s*,")
-CODE_SHAPE = re.compile(r"^[A-Z][A-Z0-9_]*$")
-
-
-def _java_error_call_sites():
-    java_root = os.path.join(ROOT, "src", "main", "java")
-    sites = []
-    for dirpath, _dirs, files in os.walk(java_root):
-        for name in files:
-            if not name.endswith(".java"):
-                continue
-            path = os.path.join(dirpath, name)
-            with open(path, encoding="utf-8") as handle:
-                source = handle.read()
-            rel = os.path.relpath(path, ROOT)
-            for match in ERROR_CALL.finditer(source):
-                # The call's arguments start after the paren; look at the next
-                # 200 characters, which is enough for the leading ctx/port
-                # arguments and the opening quote of the code.
-                window = source[match.end():match.end() + 200]
-                sites.append((rel, source[:match.end()].count("\n") + 1, window))
-    return sites
-
-
-class JavaErrorCodeTests(unittest.TestCase):
-    def test_every_response_error_call_passes_a_code_shaped_literal(self):
-        sites = _java_error_call_sites()
-        self.assertGreater(len(sites), 10, "the scan found no call sites — "
-                                          "the regex and the code disagree")
-        problems = []
-        for rel, line, window in sites:
-            if CODE_FROM_EXCEPTION.search(window):
-                # The exception carries its own machine-readable code
-                # (e.errorCode()); the handler forwards it, which is the
-                # same contract with the code defined at the throw site.
-                continue
-            literal = CODE_LITERAL.search(window)
-            if literal is None:
-                problems.append(f"{rel}:{line}: no string literal in the call")
-                continue
-            code = literal.group(1)
-            if not code:
-                problems.append(f"{rel}:{line}: empty error code")
-            elif not CODE_SHAPE.match(code):
-                problems.append(
-                    f"{rel}:{line}: '{code}' is not CODE_SHAPED "
-                    f"(uppercase, digits, underscores)")
-        self.assertEqual([], problems,
-                          "every Response.error must carry a machine-readable "
-                          "code as its first literal:\n" + "\n".join(problems))
-
-    def test_the_known_codes_are_still_there(self):
-        text = ""
-        for rel, _line, window in _java_error_call_sites():
-            text += window
-        for code in ("SCRIPTS_DISABLED", "SHUTDOWN_DISABLED",
-                     "TRANSACTION_FAILED", "HEADLESS_LIMITATION"):
-            with self.subTest(code=code):
-                self.assertIn(code, text)
 
 
 class FormatErrorTests(unittest.TestCase):

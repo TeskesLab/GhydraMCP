@@ -1,5 +1,6 @@
 package eu.starsong.ghidra.resource;
 
+import eu.starsong.ghidra.connection.ConnectionProfiles;
 import eu.starsong.ghidra.hateoas.Response;
 import eu.starsong.ghidra.server.GhidraContext;
 import eu.starsong.ghidra.server.Resource;
@@ -7,31 +8,50 @@ import eu.starsong.ghidra.service.BSimIngestService;
 import eu.starsong.ghidra.service.BSimApplyService;
 import eu.starsong.ghidra.service.BSimDiffService;
 import eu.starsong.ghidra.service.BSimQueryService;
+import eu.starsong.ghidra.service.BSimMultiQueryService;
 import eu.starsong.ghidra.service.BSimService;
+import eu.starsong.ghidra.service.BSimMatchService;
+import eu.starsong.ghidra.service.BSimMatchApplyService;
 import io.javalin.Javalin;
 
 import java.util.function.Function;
+import java.util.function.Consumer;
 
-/**
- * What this instance can do with BSim (R1, discovery half).
- *
- * <p>One endpoint, {@code GET /bsim/status}, so a client can find out whether a
- * signature query is even possible before it asks for one: the feature may be
- * absent from the build, and the database is configuration. The answer is a
- * fact, not a guess — {@code ready} is true only when the engine is present and
- * a database is named, and {@code reason} names what is missing otherwise.
- */
+/** Profile-scoped BSim operations; credentials are resolved only by the worker. */
 public class BSimResource implements Resource {
+    private final BSimMatchService matches = new BSimMatchService();
+    private final BSimMatchApplyService explicitApply = new BSimMatchApplyService(matches);
 
     @Override
     public void register(Javalin app,
             Function<io.javalin.http.Context, GhidraContext> contextFactory) {
-        app.get("/bsim/status", ctx -> status(contextFactory.apply(ctx)));
-        app.post("/bsim/ingest", ctx -> ingest(contextFactory.apply(ctx)));
-        app.get("/bsim/query", ctx -> query(contextFactory.apply(ctx)));
+        app.get("/bsim/status", ctx -> scoped(contextFactory.apply(ctx), null, this::status));
+        app.post("/bsim/ingest", ctx -> scoped(contextFactory.apply(ctx), "ingest", this::ingest));
+        app.get("/bsim/query", ctx -> scoped(contextFactory.apply(ctx), "query", this::query));
+        app.get("/bsim/overview", ctx -> scoped(contextFactory.apply(ctx), "query", c -> multiQuery(c, true)));
+        app.get("/bsim/batch-query", ctx -> scoped(contextFactory.apply(ctx), "query", c -> multiQuery(c, false)));
         app.post("/bsim/apply-names",
-            ctx -> applyNames(contextFactory.apply(ctx)));
-        app.get("/bsim/diff", ctx -> diff(contextFactory.apply(ctx)));
+            ctx -> scoped(contextFactory.apply(ctx), "query", this::applyNames));
+        app.get("/bsim/diff", ctx -> scoped(contextFactory.apply(ctx), "query", this::diff));
+        app.get("/bsim/matches/{match_id}",
+            ctx -> scoped(contextFactory.apply(ctx), "query", this::inspectMatch));
+        app.get("/bsim/matches/{match_id}/validate",
+            ctx -> scoped(contextFactory.apply(ctx), "query", this::validateMatch));
+        app.get("/bsim/matches/{match_id}/selection",
+            ctx -> scoped(contextFactory.apply(ctx), "query", this::selection));
+        app.post("/bsim/matches/{match_id}/prepare-apply",
+            ctx -> scoped(contextFactory.apply(ctx), "query", this::prepareApply));
+        app.post("/bsim/matches/{match_id}/apply",
+            ctx -> scoped(contextFactory.apply(ctx), "query", this::applyMatch));
+    }
+
+    private void scoped(GhidraContext ctx, String permission,
+            Consumer<GhidraContext> operation) {
+        ConnectionProfiles.withProfile(ctx.ctx().queryParam("profile"), "bsim",
+            permission, selected -> {
+                operation.accept(ctx);
+                return null;
+            });
     }
 
     /**
@@ -73,20 +93,134 @@ public class BSimResource implements Resource {
      *
      * <p>A match carries BSim's similarity and significance numbers: it is a
      * lead, not an identification, and the answer says so.
+     *
+     * <p>Optional executable, architecture and compiler parameters are exact native values.
+     * categories is one JSON object of category-name/string-value predicates; all filters
+     * are ANDed inside the native query before max_matches is consumed.
      */
     private void query(GhidraContext ctx) {
+        for (String filter : java.util.List.of("executable", "architecture", "compiler", "categories")) {
+            if (ctx.ctx().queryParams(filter).size() > 1) {
+                throw new IllegalArgumentException("Only one " + filter + " filter parameter is allowed");
+            }
+        }
         double minSimilarity = parseDouble(ctx, "min_similarity",
             BSimQueryService.DEFAULT_SIMILARITY);
         double minSignificance = parseDouble(ctx, "min_significance",
             BSimQueryService.DEFAULT_SIGNIFICANCE);
         int maxMatches = parseInt(ctx, "max_matches",
             BSimQueryService.DEFAULT_MAX_MATCHES);
-        java.util.Map<String, Object> data = BSimQueryService.query(
-            ctx.program(), ctx.ctx().queryParam("address"),
+        var program = ctx.program();
+        java.util.Map<String, Object> data = BSimQueryService.queryWithFilters(
+            program, ctx.ctx().queryParam("address"),
             ctx.ctx().queryParam("name"), maxMatches, minSimilarity,
-            minSignificance);
+            minSignificance, ctx.ctx().queryParam("executable"),
+            ctx.ctx().queryParam("architecture"), ctx.ctx().queryParam("compiler"),
+            ctx.ctx().queryParam("categories"));
+        matches.register(program, data);
         respond(ctx, data, "/bsim/query");
     }
+
+    private void multiQuery(GhidraContext ctx, boolean overview) {
+        String self = overview ? "/bsim/overview" : "/bsim/batch-query";
+        java.util.Map<String, Object> data;
+        var program = ctx.program();
+        Object consumer = new Object();
+        boolean pinned = program != null && eu.starsong.ghidra.util.GhidraSwing.runUninterruptibly(
+            () -> program.addConsumer(consumer));
+        try {
+            try {
+                if (ctx.ctx().queryParamMap().values().stream().anyMatch(values -> values.size() != 1))
+                    throw new IllegalArgumentException("Only one value per query parameter is allowed");
+                int offset = strictInt(ctx, "offset", 0);
+                int count = strictInt(ctx, "max_functions", 50);
+                int limit = strictInt(ctx, "max_matches", overview ? 1 : 3);
+                double similarity = strictDouble(ctx, "min_similarity", 0.7);
+                double significance = strictDouble(ctx, "min_significance", 0);
+                String stampText = ctx.ctx().queryParam("expected_modification");
+                Long stamp = stampText == null ? null : Long.valueOf(stampText);
+                data = overview
+                    ? BSimMultiQueryService.overview(program, offset, count, limit, similarity, significance,
+                        stamp, ctx.queryParam("expected_program"), ctx.queryParam("executable"), ctx.queryParam("architecture"),
+                        ctx.queryParam("compiler"), ctx.queryParam("categories"))
+                    : BSimMultiQueryService.batch(program, ctx.queryParam("addresses"), limit,
+                        similarity, significance, stamp, ctx.queryParam("expected_program"), ctx.queryParam("executable"),
+                        ctx.queryParam("architecture"), ctx.queryParam("compiler"), ctx.queryParam("categories"));
+            } catch (IllegalArgumentException invalid) {
+                failure(ctx, self, "BSIM_BATCH_INVALID", invalid.getMessage());
+                return;
+            }
+            if (Boolean.FALSE.equals(data.get("success"))) { respond(ctx, data, self); return; }
+            matches.registerMulti(program, data);
+            eu.starsong.ghidra.util.GhidraSwing.runRead(() -> {
+                if (program == null || program.isClosed()
+                        || program.getModificationNumber() != ((Number) data.get("source_modification")).longValue())
+                    throw new eu.starsong.ghidra.connection.ConnectionException("BSIM_MATCH_STALE", 409,
+                        "Source changed before the response; restart the query");
+                respond(ctx, data, self);
+                return null;
+            });
+        } finally {
+            if (pinned) eu.starsong.ghidra.util.GhidraSwing.runUninterruptibly(() -> { program.release(consumer); return null; });
+        }
+    }
+
+    private static int strictInt(GhidraContext ctx, String name, int fallback) {
+        String text = ctx.queryParam(name);
+        return text == null ? fallback : Integer.parseInt(text);
+    }
+
+    private static double strictDouble(GhidraContext ctx, String name, double fallback) {
+        String text = ctx.queryParam(name);
+        return text == null ? fallback : Double.parseDouble(text);
+    }
+
+    private void inspectMatch(GhidraContext ctx) {
+        String id = ctx.ctx().pathParam("match_id");
+        respond(ctx, matches.inspect(ctx.program(), id,
+            parseInt(ctx, "max_code_lines", 1000)), "/bsim/matches/" + id);
+    }
+
+    private void validateMatch(GhidraContext ctx) {
+        String id = ctx.ctx().pathParam("match_id");
+        respond(ctx, matches.validate(ctx.program(), id), "/bsim/matches/" + id + "/validate");
+    }
+    private void selection(GhidraContext ctx) {
+        String id = ctx.ctx().pathParam("match_id");
+        respond(ctx, matches.selection(ctx.program(), id), "/bsim/matches/" + id + "/selection");
+    }
+
+    private static java.util.Map<?, ?> explicitBody(GhidraContext ctx, String key) {
+        if (!java.util.Set.of("profile").containsAll(ctx.ctx().queryParamMap().keySet())
+                || ctx.ctx().queryParamMap().values().stream().anyMatch(values -> values.size() != 1)) {
+            throw new IllegalArgumentException("Only one profile query parameter is allowed");
+        }
+        java.util.Map<?, ?> body = ctx.bodyAsClass(java.util.Map.class);
+        if (body == null || !body.keySet().equals(java.util.Set.of(key))) {
+            throw new IllegalArgumentException("The JSON body must contain only " + key);
+        }
+        return body;
+    }
+
+    private void prepareApply(GhidraContext ctx) {
+        Object reference = explicitBody(ctx, "reference").get("reference");
+        if (!(reference instanceof java.util.Map<?, ?> exported)) {
+            throw new IllegalArgumentException("reference must be the complete native export object");
+        }
+        String id = ctx.ctx().pathParam("match_id");
+        respond(ctx, explicitApply.prepare(ctx.program(), id, exported, ctx::program),
+            "/bsim/matches/" + id + "/prepare-apply");
+    }
+
+    private void applyMatch(GhidraContext ctx) {
+        Object token = explicitBody(ctx, "apply_token").get("apply_token");
+        if (!(token instanceof String text) || text.isBlank()) {
+            throw new IllegalArgumentException("apply_token must be a nonblank string");
+        }
+        String id = ctx.ctx().pathParam("match_id");
+        respond(ctx, explicitApply.apply(ctx.program(), id, text, ctx::program), "/bsim/matches/" + id + "/apply");
+    }
+
 
     /**
      * Name a function after the stored one it most resembles.
@@ -143,11 +277,31 @@ public class BSimResource implements Resource {
                     : String.valueOf(reason));
             return;
         }
-        ctx.json(Response.ok(ctx.ctx(), ctx.port(), data)
+        String profile = ctx.queryParam("profile");
+        String statusPath = "/bsim/status" + (profile == null || profile.isBlank() ? ""
+            : "?profile=" + java.net.URLEncoder.encode(profile, java.nio.charset.StandardCharsets.UTF_8));
+        Response response = Response.ok(ctx.ctx(), ctx.port(), data)
             .self(self)
-            .link("status", "/bsim/status")
-            .link("capabilities", "/capabilities")
-            .build());
+            .link("status", statusPath)
+            .link("capabilities", "/capabilities");
+        if ("overview".equals(data.get("mode")) && data.get("next_offset") != null) {
+            java.util.Map<String, String> parameters = new java.util.LinkedHashMap<>();
+            for (String key : java.util.List.of("profile", "executable", "architecture", "compiler", "categories")) {
+                String value = ctx.queryParam(key);
+                if (value != null) parameters.put(key, value);
+            }
+            for (String key : java.util.List.of("max_functions", "max_matches", "min_similarity", "min_significance"))
+                parameters.put(key, String.valueOf(data.get(key)));
+            parameters.put("offset", String.valueOf(data.get("next_offset")));
+            parameters.put("expected_modification", String.valueOf(data.get("source_modification")));
+            parameters.put("expected_program", String.valueOf(data.get("source_program_id")));
+            String query = parameters.entrySet().stream().map(entry ->
+                java.net.URLEncoder.encode(entry.getKey(), java.nio.charset.StandardCharsets.UTF_8) + "="
+                + java.net.URLEncoder.encode(entry.getValue(), java.nio.charset.StandardCharsets.UTF_8))
+                .collect(java.util.stream.Collectors.joining("&"));
+            response.link("next", "/bsim/overview?" + query);
+        }
+        ctx.json(response.build());
     }
 
     /**
@@ -160,6 +314,28 @@ public class BSimResource implements Resource {
      */
     private void failure(GhidraContext ctx, String self, String code, String reason) {
         switch (code) {
+            case "BSIM_BATCH_INVALID":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_BATCH_INVALID", reason)
+                    .self(self).build());
+                return;
+            case "BSIM_MATCH_STALE":
+                ctx.status(409);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_MATCH_STALE", reason)
+                    .self(self).build());
+                return;
+            case "BSIM_FILTER_INVALID":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_FILTER_INVALID", reason)
+                    .self(self)
+                    .build());
+                return;
+            case "BSIM_FILTER_UNSUPPORTED":
+                ctx.status(400);
+                ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_FILTER_UNSUPPORTED", reason)
+                    .self(self)
+                    .build());
+                return;
             case "BSIM_DISABLED":
                 ctx.status(503);
                 ctx.json(Response.error(ctx.ctx(), ctx.port(), "BSIM_DISABLED", reason)

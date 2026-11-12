@@ -1,4 +1,4 @@
-# BSim — signature similarity across a corpus (R1)
+# BSim — signature similarity across a local or remote corpus
 
 
 <!-- toc -->
@@ -10,6 +10,7 @@
 - [5. Act on it: `apply-names`](#5-act-on-it-apply-names)
 - [6. Compare two versions: `diff`](#6-compare-two-versions-diff)
 - [7. The traps (all measured, all now encoded)](#7-the-traps-all-measured-all-now-encoded)
+- [Agent workflow and current limits](#agent-workflow-and-current-limits)
 - [8. Reference](#8-reference)
 - [9. Reproducing the numbers](#9-reproducing-the-numbers)
 
@@ -20,9 +21,9 @@ lets you ask "which functions in this corpus look like this one?". That is the o
 question a decompiler cannot answer well, and it is what this integration exposes
 — on all three surfaces.
 
-Everything here was measured against **Ghidra 12.2** on a local H2 database; the
-numbers are in the sections they belong to, and the commands that produced them
-are at the end.
+Historical measurements below used **Ghidra 12.2 with local H2**; they are not
+remote performance claims. The native reflective client factory supports H2,
+PostgreSQL and Elasticsearch on Ghidra 11/12 without compile-time BSim dependencies.
 
 ---
 
@@ -30,7 +31,7 @@ are at the end.
 
 | It is | It is not |
 | --- | --- |
-| a **local H2 file** you build yourself | a server you connect to |
+| local H2 or a worker-provisioned remote BSim profile | arbitrary caller-supplied servers or credentials |
 | a **similarity** measure over compiled shapes | an identification of source code |
 | a way to pair a moved function across builds | a decompiler (use `/functions/{addr}/decompile`) |
 | a lead for an analyst | a verdict — every answer says so |
@@ -46,7 +47,7 @@ calls are reflective on purpose: that API is internal and has moved between the
 ## 2. Setup
 
 ```bash
-# point the extension at a database; it does not need to exist yet
+# local H2 only; the database does not need to exist yet
 export GHYDRA_BSIM_DATABASE=/var/tmp/signatures          # Linux/macOS
 # or: set GHYDRA_BSIM_DATABASE=C:\tmp\signatures         (Windows)
 # or: -Dghidra.bsim.database=<path> on the Ghidra JVM
@@ -54,18 +55,52 @@ export GHYDRA_BSIM_DATABASE=/var/tmp/signatures          # Linux/macOS
 ghydra bsim status        # engine? database? what is missing?
 ```
 
-`ghydra bsim status` is the first command to run and the one to trust:
+For remote PostgreSQL or Elasticsearch, an administrator provisions the profile
+and credentials under a separate worker identity; see [connections](GHYDRA_CONNECTIONS.md).
+Only profile IDs cross CLI/MCP/HTTP. Do not put a remote URL, username or password
+in `GHYDRA_BSIM_DATABASE` or `-Dghidra.bsim.database`: legacy configuration accepts
+local filesystem paths only. Credentials are never command-line arguments.
+
+```bash
+ghydra connections list
+ghydra bsim status --profile corpus
+ghydra bsim query --profile corpus --name main
+ghydra bsim diff app-1.2.exe --profile corpus
+ghydra bsim ingest --profile corpus --max-functions 500
+```
+
+Every BSim command accepts `--profile ID`; every HTTP BSim route accepts
+`?profile=ID`. Omission uses the worker manifest's `default_bsim`, or the existing
+local H2 configuration when there is no default. Selection is request-scoped and
+never rewrites global configuration. Query, apply-names and diff require the
+profile's `query` grant; ingest requires `ingest`. Status validates the profile
+without requiring either grant or opening its credentials/database.
+
+**Remote databases must already exist.** Ingest never creates a PostgreSQL or
+Elasticsearch database. It uses Ghidra's native client under worker-only,
+non-interactive authentication callbacks; authentication failures do not prompt
+the GUI or retry for another password.
+
+`ghydra bsim status` reports configuration, not a successful remote connection:
 
 ```json
 {"available": true, "database": "/var/tmp/signatures",
- "database_exists": false, "ready": true, "can_ingest": true,
- "reason": "the configured signature database does not exist: /var/tmp/signatures"}
+ "database_exists": false, "ready": false, "can_ingest": true,
+ "reason": "the local signature database does not exist; ingest a program first"}
 ```
 
-Two flags to know:
+Status fields:
 
-- **`ready`** — a *query* is possible (the file is on disk);
-- **`can_ingest`** — an *ingest* is possible (the file is created if absent).
+- **`ready`** — the engine and query permission are present, and a local H2 file
+  exists or a remote profile is selected. A remote operation still must connect.
+- **`can_ingest`** — the engine and ingest permission are present; only a local
+  H2 database is created if absent.
+- **`database_exists`** — local filesystem fact; `null` for a remote database.
+- **`connection_checked`** — `false`: status never authenticates or probes a server.
+
+For profiles, `database` and `profile` contain only the profile ID, and `backend`
+identifies the native backend. Status/results do not disclose remote endpoints,
+credential references or native exception reasons.
 
 `/capabilities` carries the same facts as features: `bsim`, `bsim_ingest`,
 `bsim_query`, `bsim_apply_names`.
@@ -142,7 +177,89 @@ BSim query: FUN_140001010 at 140001010
 - A function with **no body** answers `BSIM_NO_BODY`: there was never a signature
   to compare.
 
-Measured: 0.2 s by name, 0.8 s by address, on the database above.
+Measured without metadata filters: 0.2 s by name, 0.8 s by address, on the
+database above.
+
+### Narrow the search with metadata
+
+```bash
+ghydra --json bsim query --profile corpus-reader --name decode_packet \
+  --executable libcodec.so --architecture 'x86:LE:64:default' --compiler gcc \
+  --category Library=codec --category Version=1.0 --max-matches 5
+```
+
+```python
+bsim_query(name="decode_packet", profile="corpus-reader",
+           executable="libcodec.so", architecture="x86:LE:64:default",
+           compiler="gcc", categories='{"Library":"codec","Version":"1.0"}',
+           max_matches=5)
+```
+
+Filters match exact database metadata values and combine with **AND**. Quotes and
+SQL-like text are literal values, not query syntax. Native
+BSim applies them before the match limit, so better matches from other binaries
+do not use up the requested result slots. Filtering supports local H2 and native
+PostgreSQL BSim profiles; credentials stay on the worker. Elasticsearch and
+unknown backends refuse metadata filters rather than silently ignoring them.
+
+`categories` is JSON **text**, not a nested MCP object. Use category names from
+the query result's `available_categories` and values recorded in your corpus.
+The CLI accepts one `--category NAME=VALUE` per category; duplicate category
+names are refused. Blank/non-string values, malformed category objects, unknown
+categories and unavailable native filters fail instead of searching a broader
+corpus. `result.filters` reports the applied predicates. An empty filtered result
+is evidence only about that scope and those similarity/significance thresholds.
+Values must have no surrounding whitespace or control characters. At most
+32 category predicates are accepted, within 16384 JSON characters; category names are
+limited to 256 characters and individual values to 4096 characters.
+
+### Program overview and batch queries
+
+```bash
+ghydra --port 8192 --json bsim overview --profile corpus-reader \
+  --max-functions 50 --max-matches 1
+ghydra --port 8192 --json bsim batch-query --profile corpus-reader \
+  --address 'ram::0x1000' --address 'ram::0x2000' --max-matches 3
+```
+
+```python
+bsim_overview(profile="corpus-reader", max_functions=50, max_matches=1, port=8192)
+bsim_batch_query(addresses='["ram::0x1000","ram::0x2000"]',
+                 profile="corpus-reader", max_matches=3, port=8192)
+```
+
+Overview selects an address-ordered page, then ranks its sources by best
+similarity, significance and source address. Ranking is **within that page**,
+not global until every page has been searched. Follow `next_offset` with the
+same filters and both returned guards: `source_program_id` as `--expected-program`
+and `source_modification` as `--expected-modification` (MCP: `expected_program` and
+`expected_modification`). The opaque ID identifies the exact open Program instance,
+not its filename/path; reopening or switching to an otherwise identical program
+cannot resume the old search. HTTP/MCP/CLI Next carries both guards. A changed
+source refuses continuation with `BSIM_MATCH_STALE`; start again.
+
+Batch accepts exact function-entry addresses: MCP `addresses` is JSON text,
+while the CLI repeats `--address`. Each source has its own status, scores,
+candidate rows and match IDs bound to that source function. Select an exact
+candidate ID for the existing compare → prepare → explicitly apply workflow.
+Neither overview nor batch applies annotations.
+If a native response omits a source group, that source is an incomplete
+`error` with `BSIM_QUERY_UNVERIFIED`, never a confirmed `no_match`.
+
+One request shares native signature generation and the database query, rather
+than making one HTTP/decompiler setup per function. Overview defaults to 50
+sources; both modes accept at most 100. `max_matches` is 1..10 (overview default 1,
+batch default 3), and source-count × match-limit must not exceed 200. Oversized
+requests are refused, not silently reduced. Batch JSON is limited to 16384
+characters; duplicate sources are refused.
+
+The same executable/architecture/compiler/category filters apply before native
+candidate limits. `scanned` and `searched` are distinct: skipped thunks/externals,
+missing signatures, unknown sources and per-source errors are explicit, not
+no-match claims. `has_more`, candidate truncation or any skipped/failed source
+keeps `complete=false`. A bounded page cannot establish corpus-wide absence.
+
+
 
 ---
 
@@ -244,6 +361,114 @@ database, every function answered `not_found` rather than an invented pair.
    generator without `setVectorFactory(...)` dies with
    `NullPointerException: LSHVectorFactory.getSettings()` on a database created in
    the same call.
+6. **The decompiler must include BSim's signature module.** The installed Nix
+   runtime tested here rejected signature generation with
+   `Decompiler executable not built with signature module`, despite database
+   authentication and metadata queries succeeding. Use a matching Ghidra runtime
+   with a signature-capable decompiler; ordinary C decompilation is not proof.
+
+---
+
+## Agent workflow and current limits
+
+1. Search the target instance with `bsim_query` and an approved BSim profile.
+   Each result has a `match_id`, executable MD5, repository URL, architecture and
+   compiler metadata. `reference_available=false` means the row cannot be resolved
+   automatically; BSim vectors alone do not contain reference code.
+2. Select the exact row, not just the highest score. Call `bsim_compare_match`
+   with its ID, the approved repository profile and the reference worker port.
+   Both workers use the configured HTTP host; they may be the same worker when
+   it has both profiles. Neither worker's active program changes.
+3. Review the address-paired native instructions, textual unified C diff,
+   signature changes and recursive type descriptions/conflicts. The preview
+   contains exact before/after annotations, not a command to apply them.
+   `applied` is always `false`.
+4. To apply the chosen signature and its dependency types, explicitly prepare
+   it with `bsim_prepare_apply` (CLI: `bsim prepare-apply`). Review that operation's
+   exact preview and retain its opaque `apply_token`.
+5. Only an explicit `bsim_apply_match` call (CLI: `bsim apply-match`) with that
+   token changes the target. Querying, comparing and preparing never apply changes.
+
+```bash
+ghydra --port 8192 --json bsim query --profile corpus-reader --name target_function
+ghydra --port 8192 bsim compare-match MATCH_ID --profile corpus-reader \
+  --reference-profile ghidra-reader --reference-port 8193
+ghydra --port 8192 bsim prepare-apply MATCH_ID --profile corpus-reader \
+  --reference-profile ghidra-reader --reference-port 8193
+ghydra --port 8192 bsim apply-match MATCH_ID --profile corpus-reader \
+  --apply-token APPLY_TOKEN
+```
+
+```python
+bsim_compare_match(match_id="MATCH_ID", profile="corpus-reader",
+                   reference_profile="ghidra-reader", reference_port=8193, port=8192)
+```
+
+The selected row binds the target program, exact function address and modification
+stamp. IDs last only for that worker process; the newest 256 rows are retained.
+Source changes, another active target or an evicted ID require a new search.
+The reference is opened temporarily read-only at a concrete stored version.
+Its URL must match the approved repository binding, and its executable MD5 and
+exact function address must match the selected row. Comparison does not import
+signatures/types or rename anything; application is a separate explicit operation.
+When an unqualified stored offset occurs in multiple address spaces, the exact
+indexed fully-qualified name must select a single function; unresolved ambiguity
+is refused instead of preferring the default space.
+
+`--max-code-lines` / `max_code_lines` defaults to 1000 per function (1..10000).
+Instruction capture is separately capped at 1000 decoded instructions per
+function and is not increased by that option. The comparison pairs qualified
+addresses using mnemonic/operand-type sequence alignment, retaining raw bytes
+and operands; immediate, register and branch-target differences remain visible.
+Unmatched instructions appear as insertions/deletions only when the other capture
+is complete. Otherwise rows retain their raw evidence with `status="unknown"` and
+`unobserved="source"` or `"reference"`; these do not count as observed differences.
+
+Undefined body bytes, partial decoding, capture limits, unavailable instructions,
+truncated C or incomplete types set `complete=false`; no differences then does
+**not** establish equality. Different languages are `not_comparable` for
+instruction alignment; compiler and pointer-size differences still warn.
+This is bounded alignment of native listings, **not** the UI's CodeDiffPlugin
+correlator or proof of semantic equivalence. Relocations can remain differences.
+
+`bsim_diff_versions` remains a bounded function-matching summary: `same` means a
+matched function at the same address, not identical code. `bsim_apply_names`
+still re-queries the best qualifying match and changes a name only; it does not
+consume a selected-match preview. Unsolicited changes, comment transfer,
+native CodeDiffPlugin correlation and bulk acceptance remain outside this workflow.
+
+### Explicit signature and type application
+
+Preparation exports the selected reference signature and its dependency types in
+a native Ghidra archive; it does not reconstruct them from the bounded comparison
+graph. Recursive types, typedef chains, structures, unions, bitfields, enums and
+function definitions retain their native definitions. Dynamic hidden parameters,
+class namespaces and explicit register/stack storage retain their native ABI
+shape. The reference stays read-only.
+
+The target checks the selection identity, source modification stamp, ABI and
+existing type conflicts before issuing a worker-local apply token. Incompatible
+existing types are refused, not silently overwritten. Review the returned preview:
+similarity is still only a lead, and a prepared operation is not approval to apply.
+
+The bridge/CLI is a **trusted coordinator**: it must fetch the export directly
+from the approved reference worker over the configured protected transport.
+The target's `selection_identity_checked` confirms that the forwarded payload
+matches its selected row; it is not an attestation of the archive's origin.
+The raw HTTP preparation endpoint does not authenticate caller-authored exports.
+Do not use the archive digest or apply token as proof of remote provenance.
+
+Prepared tokens expire after five minutes; only the newest 32 previews are
+retained. Native archives are bounded at 512 KiB and fail explicitly if too large,
+never truncate dependency definitions. Archive bytes stay inside the coordinator.
+
+Explicit application imports dependency types and updates the selected target's
+name/namespace and signature in one transaction. Failures roll back the complete
+transaction. Stale, unknown or already-used tokens cannot apply a different match.
+Target edits require a new query and preparation. Application does not change
+binary bytes or local variables, copy comments, save the program, check out a
+repository file, or check in a version. Native read-only and write guards still
+apply; the operator must separately authorize any repository checkout/publication.
 
 ---
 
@@ -254,8 +479,13 @@ database, every function answered `not_found` rather than an invented pair.
 | `GET /bsim/status` | `bsim_status` | `ghydra bsim status` |
 | `POST /bsim/ingest` | `bsim_ingest` | `ghydra bsim ingest` |
 | `GET /bsim/query` | `bsim_query` | `ghydra bsim query` |
+| `GET /bsim/overview` | `bsim_overview` | `ghydra bsim overview` |
+| `GET /bsim/batch-query` | `bsim_batch_query` | `ghydra bsim batch-query` |
 | `POST /bsim/apply-names` | `bsim_apply_names` | `ghydra bsim apply-names` |
 | `GET /bsim/diff` | `bsim_diff_versions` | `ghydra bsim diff` |
+| composed selected-match/reference inspection | `bsim_compare_match` | `ghydra bsim compare-match` |
+| reference export + target preparation | `bsim_prepare_apply` | `ghydra bsim prepare-apply` |
+| `POST /bsim/matches/{match_id}/apply` | `bsim_apply_match` | `ghydra bsim apply-match` |
 
 The HTTP shapes and the error codes are in `GHIDRA_HTTP_API.md` § 13.
 
@@ -281,3 +511,26 @@ curl -s "http://127.0.0.1:8192/bsim/diff?other_executable=where.exe&max_function
   | python -m json.tool
 ghydra headless stop
 ```
+
+### Live MCP regression
+
+With a worker serving an analyzed program and an existing **query-only** remote
+profile, run this from the source checkout with the project's Python dependencies:
+
+```bash
+GHYDRAMCP_TEST_PORT=8192 \
+GHYDRAMCP_BSIM_PROFILE=corpus-reader \
+GHYDRAMCP_BSIM_FUNCTION=main \
+python -m unittest tests.test_bsim_remote.BSimMcpRemoteTests
+```
+
+This uses real MCP stdio, HTTP and native BSim: similarity search, naming dry run
+and denied ingestion. It never enables remote writes. Without these settings the
+live test skips; that skip is not a successful integration test.
+
+To exercise selected-match comparison too, set `GHYDRAMCP_REFERENCE_PROFILE` and
+`GHYDRAMCP_REFERENCE_PORT` for a separately provisioned read-only repository worker.
+The query must return a resolvable positive match. Optionally set
+`GHYDRAMCP_REFERENCE_MD5` to choose its indexed executable identity. The test compares
+real decompiled code through MCP and checks that the target function and the
+reference worker's active program remain unchanged. It never applies the preview.

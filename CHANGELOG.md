@@ -6,6 +6,77 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Remote BSim PostgreSQL/Elasticsearch connections through worker-owned profiles,
+  with separate query/ingest grants and local H2 support.
+- Native Ghidra Server repository status, bounded listings, program opening,
+  explicit checkout/check-in, and repository-backed headless sessions.
+- Out-of-band credential provisioning, private POSIX storage, verified worker
+  TLS, credential-free MCP discovery, and enforced script restrictions.
+- Explicit BSim match selection with identity-verified, temporary read-only
+  repository inspection, textual C/signature/type comparison, and non-mutating
+  change previews through MCP and CLI without switching active programs.
+- Explicit prepared BSim signature/type application for an LLM-selected match,
+  with native dependency-type transfer, stale-token and conflict checks, and
+  transactional rollback; comparisons never apply changes on their own.
+- Server-side BSim executable, architecture, compiler and category filters in
+  MCP and CLI, applied before the match limit with explicit search-scope evidence
+  and fail-closed validation.
+- Address-paired native instruction comparison for selected BSim matches, with
+  raw bytes/operands, insertion/deletion/change evidence, bounded capture and
+  explicit incomplete or cross-language results through MCP and CLI.
+- Bounded BSim program overview and explicit multi-function batch queries,
+  with reusable selected-match IDs, page-local ranking, source-stamp checks,
+  metadata filters and explicit partial/skip/error reporting; no automatic apply.
+
+### Changed
+
+- Credential workers bind to loopback by default and suppress native exception
+  details. Remote headless sessions use scoped worker APIs; credentials never
+  enter launcher argv or stdin.
+- Normal headless stop timeouts retain live analysis and report a refusal instead
+  of killing a worker with unsaved repository edits.
+- Native connection regressions run against the Ghidra build matrix.
+- Fresh workers use Ghidra's native dotted-version extension directory. The CLI,
+  bridge and native stop script honor the same `GHYDRA_STATE_DIR`.
+
+### Fixed
+
+- Make standalone MCP session/headless close honor CLI repository state: save the
+  workspace, confirm explicit check-in, and retain the worker and running session
+  on refusal or timeout instead of force-killing it or reporting a false close.
+- Support Ghidra 11 TLS initializer, socket-factory and PKI keystore APIs without
+  weakening certificate/hostname checks; verify native client-certificate use.
+- Preserve the selected native PKI identity across headless SSL-context resets.
+- Keep quoted executable-name filters exact on Ghidra 11 SQL backends rather
+  than treating quote/OR-like text as SQL; preserve Ghidra 12 literal handling.
+- Restore Ghidra 11 repository support by resolving the native link predicate
+  across Ghidra 11/12 while continuing to reject linked repository targets.
+- Remove obsolete fixed-count tool/formatter tests that rejected valid catalogue
+  additions in CI; retain the per-tool failure-handling and formatter checks.
+- Bounded BSim batch/filter queries now fit the HTTP parser after URL encoding,
+  including maximum-length JSON and Unicode filters; query limits are unchanged.
+- Partial native instruction captures retain unmatched rows as unknown/unobserved
+  instead of claiming insertions/deletions or observed differences.
+- BSim overview continuation validates an opaque Program-instance ID as well as
+  its modification stamp; MCP/CLI Next preserves both guards.
+- Missing native BSim result groups report an unverified search, not a successful
+  no-match; candidate and overview ranking use full scores before display rounding.
+- Deeply nested batch-address JSON is refused as `BSIM_BATCH_INVALID` before HTTP.
+- BSim MCP ingestion and naming now send an explicit POST payload instead of
+  failing before the request reaches the worker.
+- Explicitly empty MCP BSim filters are refused before HTTP instead of silently
+  running a broader query; omitted filters still search the configured corpus.
+- Repository reference lookup now disambiguates overlapping address spaces
+  instead of selecting an unrelated default-space function.
+- Unchanged writable workers stop without publishing, default BSim profiles
+  cannot change kind in place, and repository browsing releases clean inactive
+  views while refusing stale or nonexclusive writable checkouts.
+- Repository read-only opening now supports native minor-language compatibility
+  updates without changing stored versions. Mutation and analysis guards preserve
+  read-only policy for these views throughout their native lifetime.
+
 ## [3.2.0] - 2026-11-11
 
 Changes since **3.1.1**.

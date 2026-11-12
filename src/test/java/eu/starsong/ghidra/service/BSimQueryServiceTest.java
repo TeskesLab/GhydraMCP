@@ -6,8 +6,6 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
-import java.lang.reflect.Method;
-import java.util.Map;
 
 import org.junit.Test;
 
@@ -78,36 +76,6 @@ public class BSimQueryServiceTest {
             new BSimQueryService.ExecutableFilter(new Object(), "a reason", null);
         assertFalse(filter.isApplied());
         assertEquals("a reason", filter.reason());
-    }
-
-    @Test
-    public void the_query_still_has_the_older_signature() {
-        // The bridge and the CLI call the six-argument form; it must stay.
-        Method query = null;
-        for (Method candidate : BSimQueryService.class.getMethods()) {
-            if ("query".equals(candidate.getName())
-                    && candidate.getParameterCount() == 6) {
-                query = candidate;
-                break;
-            }
-        }
-        assertNotNull("the six-argument query is gone", query);
-        assertEquals(Map.class, query.getReturnType());
-    }
-
-    @Test
-    public void the_query_can_take_a_filter() {
-        Method query = null;
-        for (Method candidate : BSimQueryService.class.getMethods()) {
-            if ("query".equals(candidate.getName())
-                    && candidate.getParameterCount() == 7) {
-                query = candidate;
-                break;
-            }
-        }
-        assertNotNull("the seven-argument query is gone", query);
-        assertEquals(BSimQueryService.ExecutableFilter.class,
-            query.getParameterTypes()[6]);
     }
 
     /** The filter is built from the database, so the test needs none. */

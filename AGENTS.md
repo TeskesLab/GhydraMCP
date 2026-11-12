@@ -15,15 +15,24 @@ decompilation, annotation, and data manipulation.
   subsequent instances walk up to `MAX_PORT_ATTEMPTS` = 256 ports (8192–8447).
 - The bridge auto-discovers instances on startup and on a daemon timer, but `QUICK_DISCOVERY_RANGE`
   only scans **8192–8201**. Instances above 8202 need `instances_register` / the CLI.
-- 134 MCP tools in 36 namespaces: `analysis_*`, `bsim_*`, `classes_*`, `comments_*`, `data_*`, `cache_*`, `datatypes_*`,
+- 145 MCP tools in 38 namespaces: `analysis_*`, `bsim_*`, `classes_*`, `comments_*`, `connections_*`, `data_*`, `cache_*`, `datatypes_*`,
   `doctor_*`, `evidence_*`, `fleet_*`, `functions_*`, `headless_*`, `inspect_*`, `instances_*`, `kuna_*`,
-  `memory_*`, `mission_*`, `namespaces_*`, `programs_*`, `project_*`, `projects_*`, `raw_image_*`, `scalars_*`,
+  `memory_*`, `mission_*`, `namespaces_*`, `programs_*`, `project_*`, `projects_*`, `repositories_*`, `raw_image_*`, `scalars_*`,
   `scripts_*`, `segments_*`, `session_*`, `structs_*`, `symbols_*`, `tasks_*`, `telemetry_*`, `tools_*`, `ui_*`,
   `variables_*`, `x64dbg_*`, `runbook_*`, `xrefs_*`.
 - v3.0.0 migrated `HttpServer` → **Javalin** with service/DTO/resource layering. `API_VERSION` is
   **3000** (breaking: fully-qualified names everywhere).
 - The `kuna_*` namespace is **local**: it drives the Kuna decompiler CLI as a subprocess, so it
   touches neither the REST API nor `API_VERSION`, and it works with any Ghidra version.
+- Remote backend credentials belong only to a separately privileged POSIX worker,
+  provisioned out of band with `ghydra connections --directory ...`. Agent tools
+  accept profile IDs, never secrets or alternate endpoints. Profile-enabled workers
+  enforce verified TLS and prohibit scripts even when script opt-in is set.
+  See `docs/GHYDRA_CONNECTIONS.md` and `docs/GHYDRA_REPOSITORIES.md`.
+- Repository headless sessions start an empty local project and use the scoped
+  repository API; the launcher never reads credentials or sends native login
+  arguments/stdin. Selected repository saves are API-owned, unlike the initial
+  analyzer program. Normal stop timeouts retain the worker instead of killing it.
 
 ## Layout
 
@@ -644,12 +653,12 @@ answers for that analysis, with nobody watching. `ghydra headless start|status|s
   program, and the launcher had to kill it - the polite stop turned into the blunt one, and the
   analysis of a program that was being saved was lost. The script stops the server before it
   returns.
-- **The save of a headless run is the analyzer's, not the API's.** The program is inside the
-  transaction of the script that serves the API, so `POST /program/save` is refused with "Unable to
-  lock due to active transaction"; the analyzer saves the program when the script returns. The
-  answer is built from the project instead: Ghidra writes the content of the program under
-  `<project>.rep/idata/` in a file whose name starts with `db.`, and that is the witness of the
-  save.
+- **The serving script ends only its own transaction before starting the API.**
+  `FlatProgramAPI.end(true)` clears its tracked transaction, so the framework's
+  later `end(true)` is a no-op. This lets signature/type application own an atomic
+  transaction; unrelated active transactions are refused, never ended by the API.
+  The analyzer still saves on script exit. The database under
+  `<project>.rep/idata/` remains the launcher's on-disk save witness.
 - **A program that is already in the project is processed again; one that is not is imported.**
   Importing a program that is already there fails, and the run never reaches the script that
   starts the server. The index of the project (`<project>.rep/idata/~index.dat`) is plain text and

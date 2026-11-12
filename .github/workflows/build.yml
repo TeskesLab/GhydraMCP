@@ -163,6 +163,9 @@ jobs:
       - name: Build with Maven
         run: mvn -B package -Dghidra.version=${{ steps.ghidra.outputs.version }}
 
+      - name: Test native connection and credential boundaries
+        run: python3 scripts/test_remote_connections.py --ghidra-home "$GHIDRA_HOME"
+
       - name: Tag artifacts with Ghidra version
         # extension.properties carries ghidraVersion and Ghidra refuses to load
         # an extension whose ghidraVersion does not match the running install.

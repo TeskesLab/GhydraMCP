@@ -5,6 +5,7 @@ import eu.starsong.ghidra.service.DecompilerService;
 import eu.starsong.ghidra.service.FunctionService;
 import eu.starsong.ghidra.service.ScalarService;
 import eu.starsong.ghidra.service.VariableService;
+import eu.starsong.ghidra.service.RepositoryService;
 import ghidra.framework.model.Project;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.listing.Program;
@@ -29,7 +30,8 @@ public final class GhydraServerFactory {
     }
 
     /** A started server, with everything it owns. */
-    public record Handle(GhydraServer server, DecompilerService decompilerService) {
+    public record Handle(GhydraServer server, DecompilerService decompilerService,
+            RepositoryService repositories) {
 
         public int port() {
             return server.port();
@@ -42,9 +44,18 @@ public final class GhydraServerFactory {
          * a listener on the program, so it has to be disposed with the server.
          */
         public void stop() {
-            server.stop();
-            if (decompilerService != null) {
-                decompilerService.dispose();
+            if (javax.swing.SwingUtilities.isEventDispatchThread()) {
+                Thread.ofPlatform().name("ghydra-server-close").start(this::stop);
+                return;
+            }
+            boolean interrupted = server.stopChecked(() -> repositories.prepareClose(server.isHeadless()));
+            try {
+                if (decompilerService != null) decompilerService.dispose();
+                server.releaseActiveProgram();
+                if (server.isHeadless()) repositories.close();
+                else repositories.closeAfterGuiDisposal();
+            } finally {
+                if (interrupted) Thread.currentThread().interrupt();
             }
         }
     }
@@ -79,10 +90,13 @@ public final class GhydraServerFactory {
         // process + one program listener, disposed with the server.
         var functionService = new FunctionService();
         var decompilerService = new DecompilerService(functionService);
+        var repositories = new RepositoryService(port);
 
         server.register(
             new RootResource(isBaseInstance),
             new BSimResource(),
+            new ConnectionResource(),
+            new RepositoryResource(repositories),
             new FunctionResource(functionService, decompilerService),
             new SymbolResource(),
             new DataResource(),
@@ -107,6 +121,6 @@ public final class GhydraServerFactory {
         );
 
         server.start();
-        return new Handle(server, decompilerService);
+        return new Handle(server, decompilerService, repositories);
     }
 }

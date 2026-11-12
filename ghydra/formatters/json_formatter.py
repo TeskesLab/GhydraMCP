@@ -185,3 +185,31 @@ class JSONFormatter(BaseFormatter):
         if hasattr(error, 'code'):
             error_dict["error"]["code"] = error.code
         return self._format_json(error_dict)
+
+    def format_connections(self, data: Dict[str, Any]) -> str:
+        """Return the safe catalog envelope as JSON."""
+        return self._format_json(data)
+
+    def format_repository(self, data: Dict[str, Any]) -> str:
+        """Return native repository state and outcomes as JSON."""
+        return self._format_json(data)
+
+    def format_bsim_overview(self, data: Dict[str, Any]) -> str:
+        """Return the complete bounded overview envelope."""
+        return self._format_json(data)
+
+    def format_bsim_batch_query(self, data: Dict[str, Any]) -> str:
+        """Return the complete explicit-source query envelope."""
+        return self._format_json(data)
+
+    def format_bsim_comparison(self, data: Dict[str, Any]) -> str:
+        """Return the complete identity-bound comparison envelope."""
+        return self._format_json(data)
+
+    def format_bsim_prepare_apply(self, data: Dict[str, Any]) -> str:
+        """Return all native preparation evidence and the opaque apply token."""
+        return self._format_json(data)
+
+    def format_bsim_apply_match(self, data: Dict[str, Any]) -> str:
+        """Return the complete native application outcome."""
+        return self._format_json(data)

@@ -36,7 +36,7 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 
 ## Every command
 
-`155` commands in `40` groups.
+`172` commands in `42` groups.
 
 | Command | What it does |
 | --- | --- |
@@ -54,9 +54,14 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 | `ghydra analysis trace-call-path` | Trace how one function reaches another. |
 | `ghydra assert` | Assert facts about the binary and exit non-zero when one fails. |
 | `ghydra audit` | Show the mutations the plugin allowed, newest last. |
+| `ghydra bsim apply-match` | Apply the exact prepared signature/types in one native transaction. |
 | `ghydra bsim apply-names` | Name a function after the stored function it most resembles (R1). |
+| `ghydra bsim batch-query` | Search only the explicitly selected source entries; never bulk apply. |
+| `ghydra bsim compare-match` | Compare one selected match without applying names, signatures or types. |
 | `ghydra bsim diff` | What changed between two versions, paired by signature (R1). |
 | `ghydra bsim ingest` | Generate signatures for the open program and insert them (R1). |
+| `ghydra bsim overview` | Rank BSim matches within one address-ordered page, never globally. |
+| `ghydra bsim prepare-apply` | Preview one selected match's native signature/types without applying them. |
 | `ghydra bsim query` | Which stored functions look like this one (R1). |
 | `ghydra bsim status` | Is a BSim signature query possible, and against which database. |
 | `ghydra cache clear` | Remove every cached answer. |
@@ -65,6 +70,12 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 | `ghydra classes list` | List classes and namespaces. |
 | `ghydra comments get` | Get a comment at specified address. |
 | `ghydra comments set` | Set a comment at specified address. |
+| `ghydra connections create` | Create an approved endpoint and prompt for credentials without echo. |
+| `ghydra connections inspect` | Inspect approved metadata; never print credential references or values. |
+| `ghydra connections list` | List approved worker IDs remotely, or inspect an operator's explicit store. |
+| `ghydra connections remove` | Remove an endpoint and its credentials without contacting its server. |
+| `ghydra connections rotate` | Replace only credentials, preserving approved endpoint and grants. |
+| `ghydra connections update` | Replace all metadata AND credentials (no old secret fields are retained). |
 | `ghydra data create` | Define a new data item at specified address. |
 | `ghydra data delete` | Delete data at specified address. |
 | `ghydra data list` | List defined data items with optional filtering. |
@@ -150,6 +161,11 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 | `ghydra raw-image cleanup` | Remove RawImage data items created by 'raw-image define'. |
 | `ghydra raw-image define` | Define a raw image at the specified address. |
 | `ghydra report build` | Build the report on BINARY. |
+| `ghydra repositories checkin` | Publish saved changes from an exclusive checkout; save alone does not publish. |
+| `ghydra repositories checkout` | Create an explicit native local checkout; never force an existing checkout. |
+| `ghydra repositories list-files` | List one folder; response explicitly reports truncation. |
+| `ghydra repositories open` | Activate a native repository program without discarding unsaved changes. |
+| `ghydra repositories status` | Connect and report safe repository status and grants. |
 | `ghydra runbook record` | Call each step once and write a replayable runbook. |
 | `ghydra runbook replay` | Re-run a runbook and report which answers moved. |
 | `ghydra runbook show` | Show what a runbook records, without running anything. |
@@ -160,6 +176,7 @@ them, and [GHYDRA_RECIPES.md](GHYDRA_RECIPES.md) for the jobs that combine them.
 | `ghydra session close` | Close a session, saving the analysis on its way out. |
 | `ghydra session list` | The sessions, and what state they are in. |
 | `ghydra session open` | Analyse BINARY and keep it available. |
+| `ghydra session reopen` | Restart a stopped session using current approved worker credentials. |
 | `ghydra stats` | Summarize what this bridge has actually done, from the local log. |
 | `ghydra structs add-field` | Add a field to an existing struct. |
 | `ghydra structs create` | Create a new struct data type. |

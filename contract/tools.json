@@ -11,9 +11,9 @@
     "takes_instance": "the tool names a Ghidra instance through its port"
   },
   "counts": {
-    "tools": 134,
-    "namespaces": 36,
-    "with_formatter": 134,
+    "tools": 145,
+    "namespaces": 38,
+    "with_formatter": 145,
     "with_reserved_parameter": 0
   },
   "tools": [
@@ -165,6 +165,20 @@
       "has_formatter": true
     },
     {
+      "name": "bsim_apply_match",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "apply_token",
+        "match_id",
+        "port",
+        "profile"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
       "name": "bsim_apply_names",
       "namespace": "bsim",
       "group": "functions",
@@ -173,7 +187,46 @@
         "dry_run",
         "min_similarity",
         "name",
-        "port"
+        "port",
+        "profile"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "bsim_batch_query",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "addresses",
+        "architecture",
+        "categories",
+        "compiler",
+        "executable",
+        "expected_modification",
+        "expected_program",
+        "max_matches",
+        "min_significance",
+        "min_similarity",
+        "port",
+        "profile"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "bsim_compare_match",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "match_id",
+        "max_code_lines",
+        "port",
+        "profile",
+        "reference_port",
+        "reference_profile"
       ],
       "reserved_parameters": [],
       "takes_instance": true,
@@ -187,7 +240,8 @@
         "max_functions",
         "min_similarity",
         "other_executable",
-        "port"
+        "port",
+        "profile"
       ],
       "reserved_parameters": [],
       "takes_instance": true,
@@ -200,7 +254,46 @@
       "parameters": [
         "max_functions",
         "port",
+        "profile",
         "track_call_graph"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "bsim_overview",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "architecture",
+        "categories",
+        "compiler",
+        "executable",
+        "expected_modification",
+        "expected_program",
+        "max_functions",
+        "max_matches",
+        "min_significance",
+        "min_similarity",
+        "offset",
+        "port",
+        "profile"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "bsim_prepare_apply",
+      "namespace": "bsim",
+      "group": "functions",
+      "parameters": [
+        "match_id",
+        "port",
+        "profile",
+        "reference_port",
+        "reference_profile"
       ],
       "reserved_parameters": [],
       "takes_instance": true,
@@ -212,11 +305,16 @@
       "group": "functions",
       "parameters": [
         "address",
+        "architecture",
+        "categories",
+        "compiler",
+        "executable",
         "max_matches",
         "min_significance",
         "min_similarity",
         "name",
-        "port"
+        "port",
+        "profile"
       ],
       "reserved_parameters": [],
       "takes_instance": true,
@@ -227,7 +325,8 @@
       "namespace": "bsim",
       "group": "functions",
       "parameters": [
-        "port"
+        "port",
+        "profile"
       ],
       "reserved_parameters": [],
       "takes_instance": true,
@@ -289,6 +388,17 @@
         "address",
         "comment",
         "comment_type",
+        "port"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "connections_list",
+      "namespace": "connections",
+      "group": "core",
+      "parameters": [
         "port"
       ],
       "reserved_parameters": [],
@@ -1301,6 +1411,76 @@
         "height",
         "port",
         "width"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "repositories_checkin",
+      "namespace": "repositories",
+      "group": "core",
+      "parameters": [
+        "comment",
+        "keep_checked_out",
+        "path",
+        "port",
+        "profile"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "repositories_checkout",
+      "namespace": "repositories",
+      "group": "core",
+      "parameters": [
+        "exclusive",
+        "path",
+        "port",
+        "profile"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "repositories_list_files",
+      "namespace": "repositories",
+      "group": "core",
+      "parameters": [
+        "limit",
+        "offset",
+        "path",
+        "port",
+        "profile"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "repositories_open",
+      "namespace": "repositories",
+      "group": "core",
+      "parameters": [
+        "path",
+        "port",
+        "profile",
+        "version"
+      ],
+      "reserved_parameters": [],
+      "takes_instance": true,
+      "has_formatter": true
+    },
+    {
+      "name": "repositories_status",
+      "namespace": "repositories",
+      "group": "core",
+      "parameters": [
+        "port",
+        "profile"
       ],
       "reserved_parameters": [],
       "takes_instance": true,
