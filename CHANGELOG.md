@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-11-27
+
 ### Added
 
 - Explicit raw-binary import through CLI and MCP headless/session startup, with
