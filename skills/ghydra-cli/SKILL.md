@@ -37,6 +37,28 @@ When you need to parse or process output programmatically, use `--json`:
 ghydra --json functions list | jq '.result[0]'
 ```
 
+## Raw firmware import
+
+For unstructured bytes, force raw import and supply a verified mapping:
+
+```bash
+ghydra headless start firmware.bin --raw \
+  --language-id ARM:LE:32:Cortex --image-base 0x08000000
+```
+
+Use the full installed Ghidra language ID, not a guessed architecture. It defines
+processor, endianness, address size and variant; quote IDs that contain spaces.
+The Cortex-M example is not a universal firmware mapping. `--compiler-spec` is
+optional; omitted values use the language's default. Prefix hexadecimal bases
+with `0x`; unsigned decimal is also accepted, including explicit zero.
+
+These options also apply to `session open`; reopening retains the mapping.
+MCP `headless_start` / `session_open` use `raw`, `language_id`, `image_base` and
+`compiler_spec`. Without raw mode, normal format autodetection is unchanged.
+Do not pass raw options to repository workers or arbitrary analyzer arguments.
+Verify the served language, base and bytes before interpreting addresses; do not
+reuse another mapping's analysis. See [raw import](../../docs/GHYDRA_HEADLESS.md#raw-firmware-and-unstructured-images).
+
 ## Remote BSim and repository workflow
 
 - Human operators provision credentials outside the agent session. Agents use

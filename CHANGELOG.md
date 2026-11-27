@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Explicit raw-binary import through CLI and MCP headless/session startup, with
+  a required Ghidra language ID and image base, optional compiler specification,
+  and retained mappings for reopened sessions. Raw mode forces BinaryLoader;
+  automatic structured-format import remains the default.
+  Imports reject address truncation and incomplete native loads rather than
+  claiming a successful mapping.
+
+### Fixed
+
+- Reap owned MCP headless child processes when checking exit, so a finished
+  worker is not reported as still running during shutdown.
+
 ## [3.3.0] - 2026-11-12
 
 ### Added

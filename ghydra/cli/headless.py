@@ -14,6 +14,7 @@ from ..headless import (
     status,
 )
 from ..utils import rich_echo
+from ..core.raw_import import normalize_raw_import
 
 
 @click.group('headless')
@@ -53,9 +54,14 @@ def headless():
 @click.option('--connections-dir', default=None, help="Private worker profile directory (or GHYDRA_CONNECTIONS_DIR)")
 @click.option('--writable', is_flag=True, help="Explicitly allow repository writes; requires --commit")
 @click.option('--commit', default=None, help="Explicit repository check-in comment")
+@click.option('--raw', is_flag=True, help="Force raw BinaryLoader import (requires language ID and image base)")
+@click.option('--language-id', default=None, help="Full native Ghidra language ID")
+@click.option('--image-base', default=None, help="Unsigned decimal or 0x-prefixed raw image base")
+@click.option('--compiler-spec', default=None, help="Native compiler spec ID (default: language default)")
 @click.pass_context
 def start(ctx, binary, port, project_dir, project_name, ghidra_home, java_home, timeout,
-          repository_profile, program, connections_dir, writable, commit):
+          repository_profile, program, connections_dir, writable, commit,
+          raw, language_id, image_base, compiler_spec):
     """Analyse BINARY and serve the API from it.
 
     The run outlives this command: it keeps serving until it is stopped with
@@ -77,6 +83,7 @@ def start(ctx, binary, port, project_dir, project_name, ghidra_home, java_home, 
             java_home=java_home,
             repository_profile=repository_profile, program=program,
             connections_dir=connections_dir, writable=writable, commit=commit,
+            raw=raw, language_id=language_id, image_base=image_base, compiler_spec=compiler_spec,
         )
         instance = runner.start(timeout=timeout)
     except HeadlessError as exc:
@@ -95,6 +102,7 @@ def start(ctx, binary, port, project_dir, project_name, ghidra_home, java_home, 
             "repository_profile": instance.repository_profile,
             "read_only": bool(instance.repository_profile and not instance.writable),
             "log": instance.log,
+            **normalize_raw_import(raw, language_id, image_base, compiler_spec),
         },
     }
     click.echo(formatter.format_simple_result(payload))

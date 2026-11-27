@@ -50,7 +50,7 @@ route at all.
 | `repositories_status` | `GET /repositories` | Connect to a provisioned native Ghidra Server repository and report its state. | `profile`* text | ghydra repositories status |
 | `session_close` | local | Close a session, saving the analysis on its way out. | `session_id`* text | ghydra session close |
 | `session_list` | local | The sessions that are open, and the ones that were closed. | — | ghydra session list |
-| `session_open` | local | Open a session on a binary: analyse it and keep it available. | `binary`* text, `name` text, `timeout` int | ghydra session open |
+| `session_open` | local | Open a session on a binary: analyse it and keep it available. | `binary`* text, `name` text, `timeout` int, `raw` StrictBool, `language_id` text, `image_base` text, `compiler_spec` text | ghydra session open |
 | `tasks_cancel` | local | Stop waiting for a background task | `task_id`* text | — |
 | `tasks_get` | local | Get the status and outcome of a background task | `task_id`* text | — |
 | `tasks_list` | local | List the background tasks started with async_mode=True | — | — |
@@ -173,7 +173,7 @@ route at all.
 
 | Tool | REST | What it answers | Parameters | CLI |
 | --- | --- | --- | --- | --- |
-| `headless_start` | local | Analyse a binary and serve the API from it, with no window. | `binary`* text, `timeout` int, `ghidra_home` text, `java_home` text, `async_mode` flag | ghydra headless start |
+| `headless_start` | local | Analyse a binary and serve the API from it, with no window. | `binary`* text, `timeout` int, `ghidra_home` text, `java_home` text, `async_mode` flag, `raw` StrictBool, `language_id` text, `image_base` text, `compiler_spec` text | ghydra headless start |
 | `headless_status` | local | What is known about the headless run on a port. | — | ghydra headless status |
 | `headless_stop` | local | Stop a headless run, saving the analysis on its way out. | `timeout` int | ghydra headless stop |
 

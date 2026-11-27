@@ -41,6 +41,8 @@ import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
+from .core.raw_import import normalize_raw_import, raw_import_arguments
+
 # Where Ghidra keeps its per-user state. The extension lives in the
 # "Extensions" directory of this tree, and that is where it has to be for
 # Ghidra to load it.
@@ -441,7 +443,10 @@ def headless_command(ghidra_home: str, java_home: str, project_dir: str,
                      script_args: Optional[List[str]] = None,
                      empty: bool = False,
                      connections_dir: Optional[str] = None,
-                     repository_profile: Optional[str] = None) -> List[str]:
+                     repository_profile: Optional[str] = None,
+                     raw: bool = False, language_id: Optional[str] = None,
+                     image_base: Optional[str] = None,
+                     compiler_spec: Optional[str] = None) -> List[str]:
     """The command that starts a headless run.
 
     It is the JVM invocation the launcher makes, with the same arguments:
@@ -457,6 +462,13 @@ def headless_command(ghidra_home: str, java_home: str, project_dir: str,
     ``script_args`` supplies the script arguments. The script keeps the run
     alive while it serves the API.
     """
+    try:
+        raw_options = normalize_raw_import(raw, language_id, image_base, compiler_spec)
+    except ValueError as exc:
+        raise LauncherError(str(exc), code="LAUNCHER_INVALID_ARGUMENT") from None
+    if raw_options and (empty or repository_profile):
+        raise LauncherError("Raw import cannot be used for an empty or repository project.",
+                            code="LAUNCHER_INVALID_ARGUMENT")
     if empty and (not script or binary or process or overwrite):
         raise LauncherError("Empty project runs require a script and no binary operation.",
                             code="LAUNCHER_INVALID_ARGUMENT")
@@ -494,6 +506,7 @@ def headless_command(ghidra_home: str, java_home: str, project_dir: str,
         command += ["-process", binary_name(binary)]
     elif not empty:
         command += ["-import", binary]
+        command += raw_import_arguments(raw_options)
         if overwrite:
             # Replace an existing program with the rebuilt binary.
             command += ["-overwrite"]

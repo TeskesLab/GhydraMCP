@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 
 from . import state as state_paths
 from .launcher import binary_name
+from .core.raw_import import normalize_raw_import
 
 # The port the first instance binds.
 DEFAULT_PORT = 8192
@@ -68,9 +69,17 @@ class Session:
     program: str = ""
     writable: bool = False
     commit: Optional[str] = None
+    raw: bool = False
+    language_id: Optional[str] = None
+    image_base: Optional[str] = None
+    compiler_spec: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        if not self.raw:
+            for key in ("raw", "language_id", "image_base", "compiler_spec"):
+                data.pop(key, None)
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Session":
@@ -168,7 +177,12 @@ def _build_runner(binary: str,
                   repository_profile: Optional[str] = None,
                   program: Optional[str] = None,
                   connections_dir: Optional[str] = None,
-                  writable: bool = False, commit: Optional[str] = None):
+                  writable: bool = False, commit: Optional[str] = None,
+                  raw: bool = False, language_id: Optional[str] = None,
+                  image_base: Optional[str] = None,
+                  compiler_spec: Optional[str] = None,
+                  project_dir: Optional[str] = None,
+                  project_name: Optional[str] = None):
     """The headless runner that serves a session.
 
     The runner is built here and nowhere else, so a caller that wants a
@@ -184,6 +198,8 @@ def _build_runner(binary: str,
         host=host,
         repository_profile=repository_profile, program=program,
         connections_dir=connections_dir, writable=writable, commit=commit,
+        project_dir=project_dir, project_name=project_name,
+        **normalize_raw_import(raw, language_id, image_base, compiler_spec),
     )
 
 
@@ -247,17 +263,29 @@ def open_session(binary: str = "",
                  program: Optional[str] = None,
                  connections_dir: Optional[str] = None,
                  writable: bool = False,
-                 commit: Optional[str] = None) -> Session:
+                 commit: Optional[str] = None,
+                 raw: bool = False, language_id: Optional[str] = None,
+                 image_base: Optional[str] = None,
+                 compiler_spec: Optional[str] = None) -> Session:
     """Open a session: start the run, and remember it.
 
     The name is the name of the binary, unless the caller gives one. A
     name that is already taken is refused: two sessions with one name are
     two answers to one question.
     """
+    try:
+        raw_options = normalize_raw_import(raw, language_id, image_base, compiler_spec)
+    except ValueError as exc:
+        raise SessionError(str(exc), code="HEADLESS_INVALID_ARGUMENT") from None
+    if repository_profile and raw_options:
+        raise SessionError("Raw import cannot be used in repository mode.",
+                           code="HEADLESS_INVALID_ARGUMENT")
     if not binary and not repository_profile:
         raise SessionError("no binary or repository profile to open", code="SESSION_BAD_NAME")
     if not repository_profile:
         binary = os.path.abspath(os.path.expanduser(binary))
+        if raw_options:
+            binary = os.path.realpath(binary)
     if not name:
         name = os.path.splitext(binary_name((program or "") if repository_profile else binary))[0] or "program"
     name = _check_name(name)
@@ -278,7 +306,7 @@ def open_session(binary: str = "",
     # building the runner is where the installation is looked for, so on a
     # machine without Ghidra the failure comes from the constructor and not
     # from the run.
-    runner_options = {}
+    runner_options = dict(raw_options)
     if repository_profile:
         runner_options = dict(repository_profile=repository_profile, program=program,
                               connections_dir=connections_dir, writable=writable, commit=commit)
@@ -314,12 +342,15 @@ def open_session(binary: str = "",
         program=str(getattr(instance, "program", "") or ""),
         writable=writable,
         commit=commit,
+        **raw_options,
         extra={
             "ghidra_home": ghidra_home,
             "java_home": java_home,
             "host": str(getattr(instance, "host", "127.0.0.1") or "127.0.0.1"),
         },
     )
+    if raw_options:
+        session.extra.update(project_dir=project_dir, project_name=project_name)
     sessions.append(session)
     _save_store(sessions)
     return session
@@ -345,11 +376,18 @@ def close_session(session_id: str, timeout: int = 20) -> Session:
                                code="SESSION_NOT_RUNNING")
         runner = HeadlessRunner.from_instance(remembered)
     else:
+        options = normalize_raw_import(session.raw, session.language_id,
+                                       session.image_base, session.compiler_spec)
+        if options:
+            options.update(project_dir=extra.get("project_dir") or None,
+                           project_name=extra.get("project_name") or None,
+                           host=extra.get("host") or "127.0.0.1")
         runner = _build_runner(
             session.binary,
             port=session.port,
             ghidra_home=str(extra.get("ghidra_home") or ""),
             java_home=str(extra.get("java_home") or ""),
+            **options,
         )
     instance = getattr(runner, "instance", None)
     if instance is not None:
@@ -393,6 +431,12 @@ def reopen_session(session_id: str, connections_dir: Optional[str] = None,
         options = dict(repository_profile=session.repository_profile, program=session.program,
                        connections_dir=connections_dir, writable=session.writable,
                        commit=session.commit)
+    if session.raw:
+        options.update(normalize_raw_import(session.raw, session.language_id,
+                                            session.image_base, session.compiler_spec))
+        options.update(project_dir=extra.get("project_dir") or None,
+                       project_name=extra.get("project_name") or None,
+                       host=extra.get("host") or "127.0.0.1")
     try:
         runner = _build_runner(session.binary, port=session.port,
                                ghidra_home=extra.get("ghidra_home", ""),

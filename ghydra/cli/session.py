@@ -47,9 +47,14 @@ def session():
 @click.option('--connections-dir', default=None, help="Private worker profile directory (or GHYDRA_CONNECTIONS_DIR)")
 @click.option('--writable', is_flag=True, help="Allow repository writes; requires --commit")
 @click.option('--commit', default=None, help="Explicit repository check-in comment")
+@click.option('--raw', is_flag=True, help="Force raw BinaryLoader import (requires language ID and image base)")
+@click.option('--language-id', default=None, help="Full native Ghidra language ID")
+@click.option('--image-base', default=None, help="Unsigned decimal or 0x-prefixed raw image base")
+@click.option('--compiler-spec', default=None, help="Native compiler spec ID (default: language default)")
 @click.pass_context
 def open_cmd(ctx, binary, name, port, timeout, ghidra_home, java_home,
-             repository_profile, program, connections_dir, writable, commit):
+             repository_profile, program, connections_dir, writable, commit,
+             raw, language_id, image_base, compiler_spec):
     """Analyse BINARY and keep it available.
 
     The analysis of a big binary takes minutes, so the call waits for the
@@ -61,7 +66,8 @@ def open_cmd(ctx, binary, name, port, timeout, ghidra_home, java_home,
             binary=binary, name=name, port=port, timeout=timeout,
             ghidra_home=ghidra_home or "", java_home=java_home or "",
             repository_profile=repository_profile, program=program,
-            connections_dir=connections_dir, writable=writable, commit=commit)
+            connections_dir=connections_dir, writable=writable, commit=commit,
+            raw=raw, language_id=language_id, image_base=image_base, compiler_spec=compiler_spec)
     except SessionError as exc:
         rich_echo(formatter.format_error(exc), err=True)
         ctx.exit(1)

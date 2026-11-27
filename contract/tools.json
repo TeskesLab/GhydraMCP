@@ -888,9 +888,13 @@
       "parameters": [
         "async_mode",
         "binary",
+        "compiler_spec",
         "ghidra_home",
+        "image_base",
         "java_home",
+        "language_id",
         "port",
+        "raw",
         "timeout"
       ],
       "reserved_parameters": [],
@@ -1594,8 +1598,12 @@
       "group": "core",
       "parameters": [
         "binary",
+        "compiler_spec",
+        "image_base",
+        "language_id",
         "name",
         "port",
+        "raw",
         "timeout"
       ],
       "reserved_parameters": [],

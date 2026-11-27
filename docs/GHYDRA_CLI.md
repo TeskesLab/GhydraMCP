@@ -664,9 +664,19 @@ ghydra headless stop
 | `--ghidra-home` | the Ghidra installation (default: `GHIDRA_HOME`) |
 | `--java-home` | the JDK (default: `JAVA_HOME`) |
 | `--timeout` | how long to wait for the API, in seconds (default: 900) |
+| `--raw` | force BinaryLoader instead of format autodetection |
+| `--language-id` | full native language ID; required with `--raw` |
+| `--image-base` | unsigned decimal or `0x` hexadecimal load address; required with `--raw` |
+| `--compiler-spec` | optional compiler-spec ID for raw import |
 
 The project goes to `ghidra_projects` in your home directory: Ghidra refuses a project path with an
 element that starts with a dot, so `~/.ghidra` is not a place a project can live.
+
+For raw firmware, use `ghydra headless start firmware.bin --raw --language-id
+ARM:LE:32:Cortex --image-base 0x08000000`. The same options apply to
+`session open`, and `session reopen` retains them. Do not guess a mapping from
+the filename. See [raw import](GHYDRA_HEADLESS.md#raw-firmware-and-unstructured-images)
+for CLI/MCP examples and reuse safeguards.
 
 ### Report Commands
 

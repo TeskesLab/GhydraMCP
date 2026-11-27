@@ -40,6 +40,7 @@ from typing import Any, Dict, List, Optional
 from . import launcher as ghidra_launcher
 from .launcher import LauncherError, binary_name
 from . import state as state_paths
+from .core.raw_import import normalize_raw_import, raw_import_arguments
 
 # The port the first instance binds. The bridge scans 8192-8201 on its own.
 DEFAULT_PORT = 8192
@@ -99,9 +100,17 @@ class HeadlessInstance:
     commit: Optional[str] = None
     repository_saved: Optional[bool] = None
     checked_in: Optional[bool] = None
+    raw: bool = False
+    language_id: Optional[str] = None
+    image_base: Optional[str] = None
+    compiler_spec: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        if not self.raw:
+            for key in ("raw", "language_id", "image_base", "compiler_spec"):
+                data.pop(key, None)
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "HeadlessInstance":
@@ -201,7 +210,10 @@ def slug_for(binary: str) -> str:
     return cleaned
 
 
-def default_project_name(binary: str) -> str:
+def default_project_name(binary: str, raw: bool = False,
+                         language_id: Optional[str] = None,
+                         image_base: Optional[str] = None,
+                         compiler_spec: Optional[str] = None) -> str:
     """The project of a binary: its name, and a mark of where it came from.
 
     Ghidra identifies a program by its file name, so two binaries with the
@@ -211,9 +223,16 @@ def default_project_name(binary: str) -> str:
     the absolute path: it tells the two apart, and it keeps the name of the
     binary readable.
     """
+    options = normalize_raw_import(raw, language_id, image_base, compiler_spec)
     absolute = os.path.abspath(os.path.expanduser(binary))
+    if options:
+        absolute = os.path.realpath(absolute)
     digest = hashlib.sha256(os.path.normcase(absolute).encode("utf-8")).hexdigest()[:8]
-    return f"{slug_for(absolute)}-{digest}"
+    name = f"{slug_for(absolute)}-{digest}"
+    if options:
+        identity = json.dumps(options, sort_keys=True, separators=(",", ":"))
+        name += "-raw-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
+    return name
 
 
 def default_project_dir() -> str:
@@ -324,17 +343,28 @@ def binary_provenance(binary: str) -> Dict[str, Any]:
     }
 
 
-def write_provenance(project_dir: str, project_name: str, binary: str) -> None:
+def write_provenance(project_dir: str, project_name: str, binary: str,
+                     raw: bool = False, language_id: Optional[str] = None,
+                     image_base: Optional[str] = None,
+                     compiler_spec: Optional[str] = None,
+                     source_identity: Optional[Dict[str, Any]] = None) -> None:
     """Remember the binary the project is being built from."""
+    options = normalize_raw_import(raw, language_id, image_base, compiler_spec)
+    identity = binary_provenance(binary) if source_identity is None else source_identity
     try:
         with open(provenance_path(project_dir, project_name), "w",
                   encoding="utf-8") as handle:
-            json.dump(binary_provenance(binary), handle, indent=2)
-    except OSError:
-        pass
+            json.dump({**identity, **options}, handle, indent=2)
+    except OSError as exc:
+        if options:
+            raise HeadlessError("Could not persist raw import provenance.",
+                                code="HEADLESS_RAW_PROJECT_MISMATCH") from exc
 
 
-def project_is_current(project_dir: str, project_name: str, binary: str) -> bool:
+def project_is_current(project_dir: str, project_name: str, binary: str,
+                       raw: bool = False, language_id: Optional[str] = None,
+                       image_base: Optional[str] = None,
+                       compiler_spec: Optional[str] = None) -> bool:
     """Whether the program in the project is the binary that is on disk now.
 
     A binary that was rebuilt has the same name and the same path, and the
@@ -349,6 +379,15 @@ def project_is_current(project_dir: str, project_name: str, binary: str) -> bool
     except (OSError, ValueError):
         # Nothing was recorded, so nothing is known: the binary is imported
         # again, and the project holds the bytes that are there now.
+        return False
+    if not isinstance(recorded, dict):
+        return False
+    options = normalize_raw_import(raw, language_id, image_base, compiler_spec)
+    recorded_options = {key: recorded[key] for key in
+                        ("raw", "language_id", "image_base", "compiler_spec") if key in recorded}
+    if recorded_options != options:
+        return False
+    if options and recorded.get("binary") != os.path.abspath(binary):
         return False
     now = binary_provenance(binary)
     if not now:
@@ -373,6 +412,10 @@ def build_command(
     overwrite: bool = False,
     extra: Optional[List[str]] = None,
     empty: bool = False,
+    raw: bool = False,
+    language_id: Optional[str] = None,
+    image_base: Optional[str] = None,
+    compiler_spec: Optional[str] = None,
 ) -> List[str]:
     """The command that starts the headless run.
 
@@ -383,11 +426,19 @@ def build_command(
     ``-overwrite`` replaces the program that is in the project with the file
     that is on disk now - which is what a rebuilt binary needs.
     """
+    try:
+        raw_options = normalize_raw_import(raw, language_id, image_base, compiler_spec)
+    except ValueError as exc:
+        raise HeadlessError(str(exc), code="HEADLESS_INVALID_ARGUMENT") from None
+    if empty and raw_options:
+        raise HeadlessError("Raw import requires a local binary.",
+                            code="HEADLESS_INVALID_ARGUMENT")
     command = [launcher, project_dir, project_name]
     if process:
         command += ["-process", binary_name(binary)]
     elif not empty:
         command += ["-import", binary]
+        command += raw_import_arguments(raw_options)
         if overwrite:
             command += ["-overwrite"]
     command += ["-postScript", SCRIPT_NAME, f"port={int(port)}"]
@@ -642,7 +693,18 @@ class HeadlessRunner:
         connections_dir: Optional[str] = None,
         writable: bool = False,
         commit: Optional[str] = None,
+        raw: bool = False,
+        language_id: Optional[str] = None,
+        image_base: Optional[str] = None,
+        compiler_spec: Optional[str] = None,
     ) -> None:
+        try:
+            self.raw_options = normalize_raw_import(raw, language_id, image_base, compiler_spec)
+        except ValueError as exc:
+            raise HeadlessError(str(exc), code="HEADLESS_INVALID_ARGUMENT") from None
+        if repository_profile and self.raw_options:
+            raise HeadlessError("Raw import cannot be used in repository mode.",
+                                code="HEADLESS_INVALID_ARGUMENT")
         self.repository_profile = repository_profile or ""
         self.program = _repository_program(program) if self.repository_profile else ""
         if self.repository_profile and (binary or project_dir or project_name):
@@ -662,6 +724,8 @@ class HeadlessRunner:
         self.writable = bool(writable)
         self.commit = commit
         self.binary = "" if self.repository_profile else os.path.abspath(os.path.expanduser(binary))
+        if self.raw_options:
+            self.binary = os.path.realpath(self.binary)
         self.port = int(port)
         if not 1 <= self.port <= 65535:
             # The port is refused here, before anything is started: the
@@ -690,7 +754,7 @@ class HeadlessRunner:
         else:
             self.project_dir = default_project_dir()
         if not self.repository_profile:
-            self.project_name = project_name or default_project_name(self.binary)
+            self.project_name = project_name or default_project_name(self.binary, **self.raw_options)
         self.process: Optional[subprocess.Popen] = None
         self.instance = HeadlessInstance(
             port=self.port,
@@ -706,6 +770,7 @@ class HeadlessRunner:
             program=self.program,
             writable=self.writable,
             commit=self.commit,
+            **self.raw_options,
         )
 
     # -- the command ---------------------------------------------------
@@ -772,10 +837,14 @@ class HeadlessRunner:
         reason for a failure is.
         """
         empty = bool(self.repository_profile)
+        if not empty:
+            self._check_import_mapping()
         process = not empty and self.program_in_project()
         current = process and project_is_current(
-            self.project_dir, self.project_name, self.binary)
+            self.project_dir, self.project_name, self.binary, **self.raw_options)
         overwrite = process and not current
+        if not empty:
+            self._check_import_mapping()
         utility = os.path.join(
             self.ghidra_home, "Ghidra", "Framework", "Utility", "lib", "Utility.jar")
         if empty or os.path.isfile(utility):
@@ -795,6 +864,7 @@ class HeadlessRunner:
                     empty=empty,
                     connections_dir=self.connections_dir or None,
                     repository_profile=self.repository_profile or None,
+                    **self.raw_options,
                 )
             except LauncherError as exc:
                 raise HeadlessError(str(exc), code=exc.code) from None
@@ -807,7 +877,49 @@ class HeadlessRunner:
             process=current,
             overwrite=overwrite,
             empty=empty,
+            **self.raw_options,
         )
+
+    def _check_import_mapping(self, require_claim: bool = False) -> None:
+        """Never reuse or overwrite a project with a different raw mapping."""
+        try:
+            with open(provenance_path(self.project_dir, self.project_name),
+                      encoding="utf-8") as handle:
+                recorded = json.load(handle)
+        except (OSError, ValueError):
+            recorded = {}
+        if not isinstance(recorded, dict):
+            recorded = {}
+        mapping = {key: recorded[key] for key in
+                   ("raw", "language_id", "image_base", "compiler_spec") if key in recorded}
+        exists = (os.path.lexists(provenance_path(self.project_dir, self.project_name))
+                  or self.project_exists() or self.program_in_project() or os.path.isdir(
+                      os.path.join(self.project_dir, f"{self.project_name}.rep")))
+        if not exists and not require_claim:
+            return
+        if ((self.raw_options or mapping) and
+                (mapping != self.raw_options or
+                 recorded.get("binary") != os.path.abspath(self.binary))):
+            raise HeadlessError(
+                "The existing project has no matching raw import provenance; use a different project.",
+                code="HEADLESS_RAW_PROJECT_MISMATCH")
+
+    def _claim_raw_import_mapping(self) -> None:
+        """Own or validate the mapping before choosing any native operation."""
+        if not self.raw_options:
+            return
+        self._check_import_mapping()
+        try:
+            # A failed native import may leave an empty project. Retain mapping
+            # ownership without claiming that any bytes have been imported.
+            with open(provenance_path(self.project_dir, self.project_name),
+                      "x", encoding="utf-8") as marker:
+                json.dump({"binary": self.binary, **self.raw_options}, marker, indent=2)
+        except FileExistsError:
+            self._check_import_mapping(require_claim=True)
+        except OSError as exc:
+            raise HeadlessError("Could not persist raw project ownership.",
+                                code="HEADLESS_RAW_PROJECT_MISMATCH") from exc
 
     def _repository_request(self, method: str, path: str, **kwargs) -> Dict[str, Any]:
         """Call the worker using only opaque selection data; never echo native errors."""
@@ -948,7 +1060,9 @@ class HeadlessRunner:
                      ghidra_home=instance.ghidra_home, java_home=instance.java_home,
                      host=instance.host, repository_profile=instance.repository_profile or None,
                      program=instance.program or None, writable=instance.writable,
-                     commit=instance.commit)
+                     commit=instance.commit,
+                     **normalize_raw_import(instance.raw, instance.language_id,
+                                            instance.image_base, instance.compiler_spec))
         runner.project_dir = instance.project_dir or runner.project_dir
         runner.project_name = instance.project_name or runner.project_name
         runner.instance = instance
@@ -1019,10 +1133,9 @@ class HeadlessRunner:
 
         check_project_dir(self.project_dir)
         os.makedirs(self.project_dir, exist_ok=True)
-        command = self.command()
-        # A stop flag that a killed run left behind would stop this one as
-        # soon as it starts.
-        clear_stop_flag(self.port)
+        source_identity = {} if self.repository_profile else binary_provenance(self.binary)
+        if not self.repository_profile and not source_identity:
+            raise HeadlessError("The binary disappeared before launch.", code="HEADLESS_NO_FILE")
 
         # The port is claimed before the child is launched. Two starts that
         # arrive together would both find the port free, and both would
@@ -1033,6 +1146,14 @@ class HeadlessRunner:
         self.instance.token = uuid.uuid4().hex
         self.instance.reserved = True
         save_state(self.instance)
+        try:
+            self._claim_raw_import_mapping()
+            command = self.command()
+            # Remove stale stop requests only after ownership is established.
+            clear_stop_flag(self.port)
+        except HeadlessError:
+            self._release_claim()
+            raise
 
         handle = open(self.instance.log, "a", encoding="utf-8", errors="replace")
         handle.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} "
@@ -1053,7 +1174,12 @@ class HeadlessRunner:
             kwargs["start_new_session"] = True
 
         try:
+            if not self.repository_profile:
+                self._check_import_mapping(require_claim=bool(self.raw_options))
             self.process = subprocess.Popen(command, **kwargs)
+        except HeadlessError:
+            self._release_claim()
+            raise
         except OSError as exc:
             self._release_claim()
             raise HeadlessError(
@@ -1070,6 +1196,24 @@ class HeadlessRunner:
             self.wait_ready(timeout)
             if self.repository_profile:
                 self._open_repository()
+            else:
+                if binary_provenance(self.binary) != source_identity:
+                    try:
+                        # Keep mapping ownership, but no byte identity: a retry
+                        # may reimport only the same source and raw mapping.
+                        with open(provenance_path(self.project_dir, self.project_name),
+                                  "w", encoding="utf-8") as handle:
+                            json.dump({"binary": source_identity["binary"], **self.raw_options},
+                                      handle, indent=2)
+                    except OSError as exc:
+                        raise HeadlessError(
+                            "The binary changed during startup and its provenance could not be invalidated.",
+                            code="HEADLESS_BINARY_CHANGED") from exc
+                    raise HeadlessError("The binary changed during startup; import it again.",
+                                        code="HEADLESS_BINARY_CHANGED")
+                # Only an API-ready import can claim its mapping in the project.
+                write_provenance(self.project_dir, self.project_name, self.binary,
+                                 source_identity=source_identity, **self.raw_options)
         except HeadlessError:
             self._abort_start = True
             try:
@@ -1077,13 +1221,6 @@ class HeadlessRunner:
             finally:
                 self._abort_start = False
             raise
-        # The provenance is written when the run is serving: the binary is
-        # only in the project when the import reached that point. A run that
-        # failed before it - an unexecutable launcher, a project that would
-        # not open - must not leave the sidecar of a binary that is not in
-        # the project, or the next run would analyse the old bytes again.
-        if not self.repository_profile:
-            write_provenance(self.project_dir, self.project_name, self.binary)
         return self.instance
 
     def wait_ready(self, timeout: int = DEFAULT_TIMEOUT) -> None:
@@ -1379,5 +1516,7 @@ def status(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> Dict[str, Any]:
         "read_only": bool(instance.repository_profile and not instance.writable),
         "saved": instance.repository_saved,
         "checked_in": instance.checked_in,
+        **normalize_raw_import(instance.raw, instance.language_id,
+                               instance.image_base, instance.compiler_spec),
     }
 

@@ -37,7 +37,7 @@ import requests
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.resources import FunctionResource
 from mcp.server.fastmcp.utilities.func_metadata import FuncMetadata
-from pydantic import AnyUrl, BeforeValidator
+from pydantic import AnyUrl, BeforeValidator, StrictBool
 
 # ================= Core Infrastructure =================
 
@@ -2315,6 +2315,60 @@ def _core_bsim_render_comparison(result):
         lines.append('  No textual differences observed' + ('' if comparison['code'].get('complete') else ' in incomplete code evidence'))
     return '\n'.join(lines) + '\n'
 # <<< end generated from ghydra/core/bsim_compare.py
+
+
+# >>> generated from ghydra/core/raw_import.py (46d90ffad7031f0c) — edit the core, then run scripts/gen_core.py
+def _core_normalize_raw_import(raw=False, language_id=None, image_base=None, compiler_spec=None):
+    """Return canonical raw options, or an empty mapping for automatic import.
+
+    Image bases accept unsigned decimal or explicitly prefixed hexadecimal.
+    IDs are native Ghidra IDs, not command fragments; internal spaces are valid.
+    """
+    if type(raw) is not bool:
+        raise ValueError('raw must be a boolean')
+    if not raw:
+        if any((value is not None for value in (language_id, image_base, compiler_spec))):
+            raise ValueError('language_id, image_base and compiler_spec require raw=True')
+        return {}
+    for name, value in (('language_id', language_id), ('compiler_spec', compiler_spec)):
+        if name == 'compiler_spec' and value in (None, ''):
+            continue
+        if not isinstance(value, str) or not value.strip() or value != value.strip() or value.startswith('-') or any((ord(char) < 32 or 127 <= ord(char) <= 159 or (char.isspace() and char != ' ') for char in value)):
+            raise ValueError(f'{name} must be a nonblank native ID without controls or leading options')
+    if not isinstance(language_id, str):
+        raise ValueError('language_id must be a full native language ID')
+    parts = language_id.split(':')
+    if len(parts) != 4 or not all((part.strip() for part in parts)) or (not parts[2].isascii()) or (not parts[2].isdigit()) or (int(parts[2]) < 1):
+        raise ValueError('language_id must be a full native processor:endian:bits:variant ID')
+    if not isinstance(image_base, str) or not image_base:
+        raise ValueError('raw import requires an unsigned image_base')
+    hexadecimal = image_base.startswith(('0x', '0X'))
+    digits = image_base[2:] if hexadecimal else image_base
+    allowed = '0123456789abcdefABCDEF' if hexadecimal else '0123456789'
+    if not digits or any((char not in allowed for char in digits)):
+        raise ValueError('image_base must be unsigned decimal or 0x-prefixed hexadecimal')
+    base = int(digits, 16 if hexadecimal else 10)
+    if base > 18446744073709551615:
+        raise ValueError('image_base must fit in an unsigned 64-bit address')
+    return {'raw': True, 'language_id': language_id, 'image_base': hex(base), 'compiler_spec': compiler_spec or ''}
+
+def _core_raw_import_arguments(options):
+    """Build native BinaryLoader arguments and the fixed mapping validator.
+
+    Ghidra 12.1.2 support/analyzeHeadlessREADME.md, example 18 documents
+    BinaryLoader and -loader-baseAddr; -processor and -cspec use native IDs.
+    The trusted pre-analysis script validates native address width and mapping
+    without changing memory or the program image base.
+    """
+    options = _core_normalize_raw_import(**options)
+    if not options:
+        return []
+    arguments = ['-loader', 'BinaryLoader', '-processor', options['language_id'], '-loader-baseAddr', options['image_base']]
+    if options['compiler_spec']:
+        arguments += ['-cspec', options['compiler_spec']]
+    arguments += ['-preScript', 'GhydraRawImport.java', options['image_base']]
+    return arguments
+# <<< end generated from ghydra/core/raw_import.py
 
 
 def safe_get(port: int, endpoint: str, params: dict | None = None) -> dict:
@@ -11379,6 +11433,10 @@ HEADLESS_POLL = 0.25
 HEADLESS_MAXMEM = "2G"
 HEADLESS_VMARGS = ["-XX:ParallelGCThreads=2", "-XX:CICompilerCount=2"]
 
+# Retain our children so poll() can reap them instead of treating zombies as live.
+_headless_children: Dict[int, subprocess.Popen] = {}
+_headless_children_lock = Lock()
+
 
 def _headless_state_dir() -> str:
     """Where the state of the runs lives."""
@@ -11562,7 +11620,10 @@ def _headless_program_in_project(project_dir: str, project_name: str, program: s
 
 def _headless_command(ghidra_home: str, java_home: str, project_dir: str,
                       project_name: str, binary: str, port: int,
-                      process: bool = False) -> list:
+                      process: bool = False, overwrite: bool = False,
+                      raw: bool = False, language_id: str | None = None,
+                      image_base: str | None = None,
+                      compiler_spec: str | None = None) -> list:
     """The command that starts a headless run.
 
     It is the JVM invocation the launcher makes, not the launcher itself:
@@ -11570,6 +11631,7 @@ def _headless_command(ghidra_home: str, java_home: str, project_dir: str,
     because it cannot tell a double-click from a shell - and a launcher
     that was started by another program is exactly that case.
     """
+    options = _core_normalize_raw_import(raw, language_id, image_base, compiler_spec)
     utility = os.path.join(ghidra_home, "Ghidra", "Framework", "Utility", "lib", "Utility.jar")
     if not os.path.isfile(utility):
         raise FileNotFoundError(f"no Utility.jar in {utility}")
@@ -11589,6 +11651,9 @@ def _headless_command(ghidra_home: str, java_home: str, project_dir: str,
         command += ["-process", os.path.basename(binary)]
     else:
         command += ["-import", binary]
+        if overwrite:
+            command.append("-overwrite")
+        command += _core_raw_import_arguments(options)
     command += ["-postScript", HEADLESS_SCRIPT, f"port={int(port)}"]
     return command
 
@@ -11616,6 +11681,13 @@ def _headless_process_alive(pid: int) -> bool:
     """Whether the process of a run is still there."""
     if not pid:
         return False
+    with _headless_children_lock:
+        child = _headless_children.get(int(pid))
+        if child is not None:
+            alive = child.poll() is None
+            if not alive:
+                _headless_children.pop(int(pid), None)
+            return alive
     if os.name == "nt":
         try:
             output = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
@@ -11693,11 +11765,96 @@ def _headless_slug(binary: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("_") or "binary"
 
 
+def _headless_raw_project_name(binary: str, options: dict) -> str:
+    """Use the CLI's path and mapping identity for a raw project."""
+    absolute = os.path.realpath(os.path.abspath(os.path.expanduser(binary)))
+    path_digest = hashlib.sha256(os.path.normcase(absolute).encode("utf-8")).hexdigest()[:8]
+    mapping = json.dumps(options, sort_keys=True, separators=(",", ":"))
+    mapping_digest = hashlib.sha256(mapping.encode("utf-8")).hexdigest()[:12]
+    return f"{_headless_slug(absolute)}-{path_digest}-raw-{mapping_digest}"
+
+
+def _headless_binary_provenance(binary: str, options: dict) -> dict:
+    binary = os.path.realpath(binary) if options else os.path.abspath(binary)
+    info = os.stat(binary)
+    return {"binary": os.path.abspath(binary), "size": int(info.st_size),
+            "mtime": int(info.st_mtime), "mtime_ns": int(info.st_mtime_ns), **options}
+
+
+def _headless_import_plan(project_dir: str, project_name: str,
+                          binary: str, options: dict, *, require_claim: bool = False) -> tuple:
+    """Never process or overwrite a project with a different raw mapping."""
+    present = _headless_program_in_project(project_dir, project_name, binary)
+    sidecar = os.path.join(project_dir, f"{project_name}.ghydra.json")
+    try:
+        with open(sidecar, "r", encoding="utf-8") as handle:
+            recorded = json.load(handle)
+    except (OSError, ValueError):
+        recorded = None
+    existing = present or any(os.path.exists(os.path.join(project_dir, project_name + suffix))
+                              for suffix in (".gpr", ".rep"))
+    raw_keys = ("raw", "language_id", "image_base", "compiler_spec")
+    recorded_raw = isinstance(recorded, dict) and any(key in recorded for key in raw_keys)
+    if (options and (require_claim or existing or os.path.exists(sidecar))) or recorded_raw:
+        if not isinstance(recorded, dict):
+            raise ValueError("existing raw project has no trustworthy import provenance")
+        try:
+            previous = _core_normalize_raw_import(
+                recorded.get("raw", False), recorded.get("language_id"),
+                recorded.get("image_base"), recorded.get("compiler_spec"))
+        except ValueError as exc:
+            raise ValueError("existing project has invalid raw import provenance") from exc
+        if previous != options or (options and recorded.get("binary") != os.path.realpath(binary)):
+            raise ValueError("existing project uses a different raw import mapping or source")
+    if not options:
+        return present, False
+    current = _headless_binary_provenance(binary, options)
+    unchanged = (isinstance(recorded, dict)
+                 and all(recorded.get(key) == current[key]
+                         for key in ("binary", "size", "mtime_ns")))
+    return present and unchanged, present and not unchanged
+
+
+def _headless_write_raw_provenance(project_dir: str, project_name: str,
+                                   source_identity: dict, *, exclusive: bool = False) -> None:
+    sidecar = os.path.join(project_dir, f"{project_name}.ghydra.json")
+    with open(sidecar, "x" if exclusive else "w", encoding="utf-8") as handle:
+        json.dump(source_identity, handle, indent=2)
+
+
+def _headless_claim_raw_import_mapping(project_dir: str, project_name: str,
+                                       binary: str, options: dict) -> None:
+    """Claim a fresh project or verify the existing claim before choosing import mode."""
+    _headless_import_plan(project_dir, project_name, binary, options)
+    try:
+        _headless_write_raw_provenance(
+            project_dir, project_name, {"binary": binary, **options}, exclusive=True)
+    except FileExistsError:
+        pass
+    _headless_import_plan(project_dir, project_name, binary, options, require_claim=True)
+
+
+def _headless_abort_raw_start(process, port: int) -> str:
+    """Clean up only the child this failed startup created."""
+    try:
+        process.terminate()
+        process.wait(timeout=20)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"; stopping the started worker failed: {exc}"
+    with _headless_children_lock:
+        _headless_children.pop(process.pid, None)
+    _headless_clear_state(port)
+    return ""
+
+
 @mcp.tool()
 @text_output
 def headless_start(binary: str, port: int = HEADLESS_DEFAULT_PORT,
                    timeout: int = 900, ghidra_home: str = "",
-                   java_home: str = "", async_mode: bool = False) -> dict:
+                   java_home: str = "", async_mode: bool = False,
+                   raw: StrictBool = False, language_id: str | None = None,
+                   image_base: str | None = None,
+                   compiler_spec: str | None = None) -> dict:
     """Analyse a binary and serve the API from it, with no window.
 
     The run imports the binary, analyses it, and then answers the ordinary
@@ -11720,29 +11877,49 @@ def headless_start(binary: str, port: int = HEADLESS_DEFAULT_PORT,
         java_home: Path of the JDK (default: the one Ghidra supports)
         async_mode: Return a task handle immediately; the wait for the API
                     runs in the background (poll tasks_get).
+        raw: Force BinaryLoader import, even for recognized executable formats.
+        language_id: Full native Ghidra language ID; required with raw.
+        image_base: Unsigned image address, decimal or 0x hex; required with raw.
+        compiler_spec: Native compiler spec ID; omitted uses the language default.
 
     Returns:
         dict: The port, the url, the pid, the project and the log
     """
-    raw = lambda: _headless_start_raw(binary, port, timeout, ghidra_home, java_home)
+    try:
+        options = _core_normalize_raw_import(raw, language_id, image_base, compiler_spec)
+    except ValueError as exc:
+        return {"success": False,
+                "error": {"code": "HEADLESS_INVALID_ARGUMENT", "message": str(exc)}}
+    run = lambda: _headless_start_raw(binary, port, timeout, ghidra_home, java_home,
+                                      **options)
     if async_mode:
         return _task_spawn(
             "headless_start",
             f"{os.path.basename(binary)} on port {port}",
-            body=raw,
+            body=run,
             result_of=lambda outcome: outcome)
-    return raw()
+    return run()
 
 
 def _headless_start_raw(binary: str, port: int = HEADLESS_DEFAULT_PORT,
                         timeout: int = 900, ghidra_home: str = "",
-                        java_home: str = "") -> dict:
+                        java_home: str = "", raw: bool = False,
+                        language_id: str | None = None,
+                        image_base: str | None = None,
+                        compiler_spec: str | None = None) -> dict:
     """The run itself, without the tool around it.
 
     The session tools need the same thing the headless tools do, so the
     work is here and the tool is the wrapper around it.
     """
+    try:
+        options = _core_normalize_raw_import(raw, language_id, image_base, compiler_spec)
+    except ValueError as exc:
+        return {"success": False,
+                "error": {"code": "HEADLESS_INVALID_ARGUMENT", "message": str(exc)}}
     path = os.path.abspath(os.path.expanduser(binary))
+    if options:
+        path = os.path.realpath(path)
     if not os.path.isfile(path):
         return {"success": False,
                 "error": {"code": "HEADLESS_NO_FILE",
@@ -11767,7 +11944,8 @@ def _headless_start_raw(binary: str, port: int = HEADLESS_DEFAULT_PORT,
                                      f"{ghidra_host}:{port}"}}
 
     project_dir = _headless_project_dir()
-    project_name = _headless_slug(path)
+    project_name = (_headless_raw_project_name(path, options) if options
+                    else _headless_slug(path))
     try:
         os.makedirs(project_dir, exist_ok=True)
     except OSError as exc:
@@ -11775,12 +11953,31 @@ def _headless_start_raw(binary: str, port: int = HEADLESS_DEFAULT_PORT,
                 "error": {"code": "HEADLESS_BAD_PROJECT_DIR", "message": str(exc)}}
 
     try:
+        source_identity = _headless_binary_provenance(path, options) if options else {}
+        if options:
+            try:
+                _headless_claim_raw_import_mapping(project_dir, project_name, path, options)
+            except OSError as exc:
+                return {"success": False,
+                        "error": {"code": "HEADLESS_PROVENANCE", "message": str(exc)}}
+        process_existing, overwrite = _headless_import_plan(
+            project_dir, project_name, path, options, require_claim=bool(options))
+        command_options = dict(options)
+        if overwrite:
+            command_options["overwrite"] = True
         command = _headless_command(
             home, java, project_dir, project_name, path, port,
-            process=_headless_program_in_project(project_dir, project_name, path))
+            process=process_existing, **command_options)
     except FileNotFoundError as exc:
         return {"success": False,
                 "error": {"code": "HEADLESS_LAUNCH", "message": str(exc)}}
+    except ValueError as exc:
+        return {"success": False,
+                "error": {"code": "HEADLESS_RAW_PROJECT_MISMATCH", "message": str(exc)}}
+    except OSError as exc:
+        return {"success": False,
+                "error": {"code": "HEADLESS_LAUNCH", "message": str(exc)}}
+
 
     log = _headless_log_path(port)
     try:
@@ -11798,35 +11995,64 @@ def _headless_start_raw(binary: str, port: int = HEADLESS_DEFAULT_PORT,
         kwargs["start_new_session"] = True
 
     try:
+        if options:
+            _headless_import_plan(project_dir, project_name, path, options, require_claim=True)
         process = subprocess.Popen(command, **kwargs)
+    except ValueError as exc:
+        return {"success": False,
+                "error": {"code": "HEADLESS_RAW_PROJECT_MISMATCH", "message": str(exc)}}
     except OSError as exc:
         handle.close()
         return {"success": False,
                 "error": {"code": "HEADLESS_LAUNCH", "message": str(exc)}}
     finally:
         handle.close()
+    with _headless_children_lock:
+        _headless_children[process.pid] = process
 
     _headless_save_state(port, {
         "port": int(port), "pid": process.pid, "binary": path,
         "project_dir": project_dir, "project_name": project_name,
         "ghidra_home": home, "java_home": java, "log": log,
-        "started_at": time.time(),
+        "started_at": time.time(), **options,
     })
 
     deadline = time.time() + max(1, int(timeout))
     while time.time() < deadline:
-        if process.poll() is not None:
+        if not _headless_process_alive(process.pid):
             return {"success": False,
                     "error": {"code": "HEADLESS_DIED",
                               "message": f"the headless run ended before the API came "
                                          f"up. See {log}"}}
         if _headless_api_answers(ghidra_host, port):
+            if options:
+                try:
+                    current_identity = _headless_binary_provenance(path, options)
+                except OSError:
+                    current_identity = {}
+                if current_identity != source_identity:
+                    message = "the binary changed during raw import; no import provenance was trusted"
+                    try:
+                        _headless_write_raw_provenance(
+                            project_dir, project_name, {"binary": path, **options})
+                    except OSError as exc:
+                        message += f"; invalidating stale provenance failed: {exc}"
+                    message += _headless_abort_raw_start(process, port)
+                    return {"success": False,
+                            "error": {"code": "HEADLESS_BINARY_CHANGED", "message": message}}
+                try:
+                    _headless_write_raw_provenance(project_dir, project_name, source_identity)
+                except OSError as exc:
+                    message = str(exc) + _headless_abort_raw_start(process, port)
+                    return {"success": False,
+                            "error": {"code": "HEADLESS_PROVENANCE", "message": message}}
             register_instance(int(port), f"http://{ghidra_host}:{int(port)}")
             return {"success": True,
                     "result": {
                         "message": f"The API is serving on http://{ghidra_host}:{int(port)}",
                         "port": int(port), "pid": process.pid, "binary": path,
-                        "project": f"{project_dir}/{project_name}", "log": log}}
+                        "project": f"{project_dir}/{project_name}", "log": log,
+                        "project_dir": project_dir, "project_name": project_name, **options}}
         time.sleep(HEADLESS_POLL)
 
     return {"success": False,
@@ -12442,7 +12668,9 @@ def _session_id(name: str, created_at: float) -> str:
 @mcp.tool()
 @text_output
 def session_open(binary: str, name: str = "", port: int = HEADLESS_DEFAULT_PORT,
-                 timeout: int = 900) -> dict:
+                 timeout: int = 900, raw: StrictBool = False,
+                 language_id: str | None = None, image_base: str | None = None,
+                 compiler_spec: str | None = None) -> dict:
     """Open a session on a binary: analyse it and keep it available.
 
     A session is a named working context - the binary, the port that
@@ -12454,11 +12682,22 @@ def session_open(binary: str, name: str = "", port: int = HEADLESS_DEFAULT_PORT,
         name: What to call the session (default: the name of the binary)
         port: The port to serve on (default: 8192)
         timeout: Seconds to wait for the API (default: 900)
+        raw: Force BinaryLoader import; requires language_id and image_base.
+        language_id: Full native Ghidra language ID.
+        image_base: Unsigned image address, decimal or 0x hex.
+        compiler_spec: Native compiler spec ID; omitted uses the language default.
 
     Returns:
         dict: The session, with its ID and the port it serves on
     """
+    try:
+        options = _core_normalize_raw_import(raw, language_id, image_base, compiler_spec)
+    except ValueError as exc:
+        return {"success": False,
+                "error": {"code": "HEADLESS_INVALID_ARGUMENT", "message": str(exc)}}
     path = os.path.abspath(os.path.expanduser(binary))
+    if options:
+        path = os.path.realpath(path)
     label = name or _headless_slug(path)
     sessions = _sessions_load()
     for session in sessions:
@@ -12467,7 +12706,7 @@ def session_open(binary: str, name: str = "", port: int = HEADLESS_DEFAULT_PORT,
                     "error": {"code": "SESSION_ALREADY",
                               "message": f"there is already a session named '{label}'"}}
 
-    started = _headless_start_raw(path, port, timeout)
+    started = _headless_start_raw(path, port, timeout, **options)
     if not started.get("success"):
         return started
 
@@ -12484,7 +12723,15 @@ def session_open(binary: str, name: str = "", port: int = HEADLESS_DEFAULT_PORT,
         "created_at": created,
         "updated_at": created,
         "extra": {},
+        **options,
     }
+    if options:
+        result = started.get("result", {})
+        project = result.get("project", "")
+        session["extra"] = {
+            "project_dir": result.get("project_dir", os.path.dirname(project)),
+            "project_name": result.get("project_name", os.path.basename(project)),
+        }
     sessions.append(session)
     _sessions_save(sessions)
     return {"success": True, "result": {"message": f"the session '{label}' is open",

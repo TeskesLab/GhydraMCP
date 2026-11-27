@@ -45,6 +45,7 @@ CORE_MODULES = (
     "ghydra/core/taint.py",
     "ghydra/core/mission.py",
     "ghydra/core/bsim_compare.py",
+    "ghydra/core/raw_import.py",
 )
 
 #: Per module, the public name -> the private name the bridge uses.
@@ -154,6 +155,10 @@ CORE_RENAMES = {
         "BSimComparisonError": "_CoreBSimComparisonError",
         "compare_match": "_core_bsim_compare_match",
         "render_comparison": "_core_bsim_render_comparison",
+    },
+    "ghydra/core/raw_import.py": {
+        "normalize_raw_import": "_core_normalize_raw_import",
+        "raw_import_arguments": "_core_raw_import_arguments",
     },
 }
 

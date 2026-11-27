@@ -64,9 +64,59 @@ ghydra inspect C:\bin\cmd.exe
 | `--ghidra-home` | the Ghidra installation (default: `GHIDRA_HOME`) |
 | `--java-home` | the JDK (default: `JAVA_HOME`) |
 | `--timeout` | how long to wait for the API, in seconds (default: 900) |
+| `--raw` | force raw byte import with Ghidra's BinaryLoader, regardless of extension or file magic |
+| `--language-id` | full Ghidra language ID; required with `--raw` |
+| `--image-base` | unsigned load address (decimal or `0x` hexadecimal); required with `--raw`, including explicit `0x0` |
+| `--compiler-spec` | optional native compiler-spec ID; otherwise use the language's default |
 
 The command waits for the API to answer before it returns, so a script can use it as a gate: the
 next command talks to an instance that is up.
+
+### Raw firmware and unstructured images
+
+Raw bytes do not describe their architecture or load address. Supply both explicitly:
+
+```sh
+ghydra headless start firmware.bin --raw \
+  --language-id ARM:LE:32:Cortex --image-base 0x08000000
+```
+
+The language ID specifies processor, endianness, address size and variant. Select
+one supported by the installed Ghidra; an architecture name such as `arm` is not
+a full language ID. The example is for a known Cortex-M image, not a default for
+all firmware. Quote language IDs that contain spaces.
+
+Raw mode forces `BinaryLoader`, even if the bytes resemble an ELF or PE header.
+Without `--raw`, existing format autodetection is unchanged. Raw-specific options
+without raw mode, incomplete mappings and raw options in repository mode are
+rejected. These are named import controls, not arbitrary analyzer arguments.
+Here `image_base` means the native raw loader's load address: file offset zero
+maps there. Ghidra's separate program-image-base metadata can remain zero for a
+raw import. No implicit program rebase moves processor-defined memory regions.
+
+The same settings are accepted by `ghydra session open` and are retained for
+`session reopen`. A different mapping must not silently reuse an earlier analysis.
+Choose a new project for a different architecture, base or compiler specification.
+
+MCP `headless_start` and `session_open` expose the equivalent scalar parameters:
+
+```json
+{
+  "binary": "/path/to/firmware.bin",
+  "raw": true,
+  "language_id": "ARM:LE:32:Cortex",
+  "image_base": "0x08000000",
+  "compiler_spec": "default"
+}
+```
+
+Raw import requires a matching extension build with the bundled
+`GhydraRawImport.java` verifier. It checks the native address-space bounds and
+actual file-backed mapping before analysis or API startup; it does not rebase
+memory or enable the scripting API.
+
+After startup, check the served language, raw memory-block start and bytes.
+A running API alone does not prove that the supplied mapping is correct.
 
 ### Native Ghidra Server repository workers
 
